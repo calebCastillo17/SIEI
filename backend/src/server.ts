@@ -3,6 +3,8 @@ import cors from 'cors';
 
 import { env } from './config/env.js';
 import { getDbPool } from './db/sql.js';
+import { meRouter } from './routes/me.js';
+import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
 
@@ -47,6 +49,31 @@ app.get('/health/db', async (_req, res) => {
 });
 
 
+app.use('/api/me', meRouter);
+
+if (env.auth.mode === 'dev') {
+  app.use('/api/dev/authz', devAuthzRouter);
+}
+
+
+/*
+ * Error handler final.
+ */
+app.use((
+  error: unknown,
+  _req: express.Request,
+  res: express.Response,
+  _next: express.NextFunction
+) => {
+  console.error(error);
+
+  res.status(500).json({
+    error: 'internal_server_error'
+  });
+});
+
+
 app.listen(env.port, '0.0.0.0', () => {
   console.log(`SIEI API listening on port ${env.port}`);
+  console.log(`Authentication mode: ${env.auth.mode}`);
 });

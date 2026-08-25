@@ -417,3 +417,383 @@ instrumentsRouter.post(
     }
   }
 );
+
+
+/*
+ * PATCH /api/projects/:projectId/instruments/:instrumentId
+ *
+ * Modifica parcialmente un instrumento.
+ * Requiere permiso WRITE.
+ */
+instrumentsRouter.patch(
+  '/:instrumentId',
+  requireProjectPermission('write'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const projectId = req.projectAccess!.projectId;
+      const userId = req.authUser!.id;
+
+      const instrumentId = normalizeParam(req.params.instrumentId);
+
+      if (!instrumentId || !/^\d+$/.test(instrumentId)) {
+        res.status(400).json({
+          error: 'invalid_instrument_id',
+          message: 'instrumentId must be a positive integer.'
+        });
+        return;
+      }
+
+      const allowedFields = {
+        tagInstrumento: {
+          column: 'tag_instrumento',
+          sqlType: sql.NVarChar(50),
+          max: 50
+        },
+        pnpid: {
+          column: 'pnpid',
+          sqlType: sql.NVarChar(50),
+          max: 50
+        },
+        fuentePnpid: {
+          column: 'fuente_pnpid',
+          sqlType: sql.NVarChar(50),
+          max: 50
+        },
+        descripcion: {
+          column: 'descripcion',
+          sqlType: sql.NVarChar(300),
+          max: 300
+        },
+        tipoInstrumento: {
+          column: 'tipo_instrumento',
+          sqlType: sql.NVarChar(50),
+          max: 50
+        },
+        servicio: {
+          column: 'servicio',
+          sqlType: sql.NVarChar(200),
+          max: 200
+        },
+        sistema: {
+          column: 'sistema',
+          sqlType: sql.NVarChar(50),
+          max: 50
+        },
+        ubicacion: {
+          column: 'ubicacion',
+          sqlType: sql.NVarChar(100),
+          max: 100
+        },
+        nodo: {
+          column: 'nodo',
+          sqlType: sql.NVarChar(50),
+          max: 50
+        }
+      } as const;
+
+      const body = req.body ?? {};
+
+      const keys = Object.keys(body).filter(
+        (key) => key in allowedFields
+      ) as Array<keyof typeof allowedFields>;
+
+      if (keys.length === 0) {
+        res.status(400).json({
+          error: 'validation_error',
+          message: 'No editable fields were provided.'
+        });
+        return;
+      }
+
+      /*
+       * tagInstrumento no puede ser null ni vacío.
+       */
+      if ('tagInstrumento' in body) {
+        if (
+          typeof body.tagInstrumento !== 'string' ||
+          body.tagInstrumento.trim().length === 0
+        ) {
+          res.status(400).json({
+            error: 'validation_error',
+            message: 'tagInstrumento cannot be empty.'
+          });
+          return;
+        }
+
+        body.tagInstrumento = body.tagInstrumento.trim();
+      }
+
+      /*
+       * Validar tipos y tamaños.
+       */
+      for (const key of keys) {
+        const value = body[key];
+        const config = allowedFields[key];
+
+        if (
+          value !== null &&
+          typeof value !== 'string'
+        ) {
+          res.status(400).json({
+            error: 'validation_error',
+            message: `${key} must be a string or null.`
+          });
+          return;
+        }
+
+        if (
+          typeof value === 'string' &&
+          value.length > config.max
+        ) {
+          res.status(400).json({
+            error: 'validation_error',
+            message: `${key} cannot exceed ${config.max} characters.`
+          });
+          return;
+        }
+      }
+
+      const pool = await getDbPool();
+      const request = pool.request();
+
+      request
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('instrumento_id', sql.NVarChar(30), instrumentId)
+        .input('updated_by', sql.NVarChar(30), userId);
+
+      const assignments: string[] = [];
+
+      keys.forEach((key, index) => {
+        const config = allowedFields[key];
+        const parameter = `field_${index}`;
+
+        request.input(
+          parameter,
+          config.sqlType,
+          body[key]
+        );
+
+        assignments.push(
+          `${config.column} = @${parameter}`
+        );
+      });
+
+      /*
+       * Si cambia el TAG, validar que no exista otro activo
+       * con el mismo TAG dentro del proyecto.
+       */
+      if ('tagInstrumento' in body) {
+        request.input(
+          'nuevo_tag',
+          sql.NVarChar(50),
+          body.tagInstrumento
+        );
+      }
+
+      const tagCheck = 'tagInstrumento' in body
+        ? `
+          IF EXISTS (
+            SELECT 1
+            FROM nucleo.instrumento
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND tag_instrumento = @nuevo_tag
+              AND activo = 1
+              AND id <> TRY_CONVERT(BIGINT, @instrumento_id)
+          )
+          BEGIN
+            THROW 53010,
+              'Ya existe un instrumento activo con ese TAG en el proyecto.',
+              1;
+          END;
+        `
+        : '';
+
+      const result = await request.query(`
+        IF NOT EXISTS (
+          SELECT 1
+          FROM nucleo.instrumento
+          WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
+            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND activo = 1
+        )
+        BEGIN
+          THROW 53011,
+            'El instrumento no existe en este proyecto o está inactivo.',
+            1;
+        END;
+
+        ${tagCheck}
+
+        UPDATE nucleo.instrumento
+        SET
+          ${assignments.join(',\n          ')},
+          updated_at = SYSUTCDATETIME(),
+          updated_by = TRY_CONVERT(BIGINT, @updated_by)
+        OUTPUT
+          INSERTED.id,
+          INSERTED.proyecto_id,
+          INSERTED.tag_instrumento,
+          INSERTED.pnpid,
+          INSERTED.descripcion,
+          INSERTED.tipo_instrumento,
+          INSERTED.servicio,
+          INSERTED.sistema,
+          INSERTED.ubicacion,
+          INSERTED.nodo,
+          INSERTED.activo,
+          INSERTED.created_at,
+          INSERTED.updated_at,
+          INSERTED.created_by,
+          INSERTED.updated_by
+        WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
+          AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+          AND activo = 1;
+      `);
+
+      const row = result.recordset[0];
+
+      res.status(200).json({
+        instrument: {
+          id: String(row.id),
+          projectId: String(row.proyecto_id),
+
+          tagInstrumento: row.tag_instrumento,
+          pnpid: row.pnpid,
+          descripcion: row.descripcion,
+          tipoInstrumento: row.tipo_instrumento,
+          servicio: row.servicio,
+          sistema: row.sistema,
+          ubicacion: row.ubicacion,
+          nodo: row.nodo,
+
+          active: Boolean(row.activo),
+
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+
+          createdBy:
+            row.created_by === null
+              ? null
+              : String(row.created_by),
+
+          updatedBy:
+            row.updated_by === null
+              ? null
+              : String(row.updated_by)
+        }
+      });
+
+    } catch (error) {
+      const number = sqlErrorNumber(error);
+
+      if (
+        number === 53010 ||
+        number === 2601 ||
+        number === 2627
+      ) {
+        res.status(409).json({
+          error: 'instrument_tag_conflict',
+          message:
+            'An active instrument with this TAG already exists in the project.'
+        });
+        return;
+      }
+
+      if (number === 53011) {
+        res.status(404).json({
+          error: 'instrument_not_found',
+          message:
+            'Instrument does not exist in this project or is inactive.'
+        });
+        return;
+      }
+
+      next(error);
+    }
+  }
+);
+
+
+/*
+ * DELETE /api/projects/:projectId/instruments/:instrumentId
+ *
+ * Desactivación lógica.
+ * No elimina físicamente el instrumento.
+ *
+ * Requiere permiso DEACTIVATE.
+ */
+instrumentsRouter.delete(
+  '/:instrumentId',
+  requireProjectPermission('deactivate'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const projectId = req.projectAccess!.projectId;
+      const userId = req.authUser!.id;
+
+      const instrumentId = normalizeParam(req.params.instrumentId);
+
+      if (!instrumentId || !/^\d+$/.test(instrumentId)) {
+        res.status(400).json({
+          error: 'invalid_instrument_id',
+          message: 'instrumentId must be a positive integer.'
+        });
+        return;
+      }
+
+      const pool = await getDbPool();
+
+      const result = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('instrumento_id', sql.NVarChar(30), instrumentId)
+        .input('updated_by', sql.NVarChar(30), userId)
+        .query(`
+          UPDATE nucleo.instrumento
+          SET
+            activo = 0,
+            updated_at = SYSUTCDATETIME(),
+            updated_by = TRY_CONVERT(BIGINT, @updated_by)
+          OUTPUT
+            INSERTED.id,
+            INSERTED.proyecto_id,
+            INSERTED.tag_instrumento,
+            INSERTED.activo,
+            INSERTED.updated_at,
+            INSERTED.updated_by
+          WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
+            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND activo = 1;
+        `);
+
+      const row = result.recordset[0];
+
+      if (!row) {
+        res.status(404).json({
+          error: 'instrument_not_found',
+          message:
+            'Instrument does not exist in this project or is already inactive.'
+        });
+        return;
+      }
+
+      res.status(200).json({
+        instrument: {
+          id: String(row.id),
+          projectId: String(row.proyecto_id),
+          tagInstrumento: row.tag_instrumento,
+          active: Boolean(row.activo),
+
+          updatedAt: row.updated_at,
+
+          updatedBy:
+            row.updated_by === null
+              ? null
+              : String(row.updated_by)
+        }
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);

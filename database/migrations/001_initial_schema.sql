@@ -26,9 +26,31 @@
 ============================================================================= */
 
 -- =============================================================================
+-- 0. OPCIONES DE SESIÓN — OBLIGATORIAS PARA ÍNDICES FILTRADOS
+-- =============================================================================
+-- SQL Server exige estas 7 opciones con estos valores exactos para poder
+-- CREAR (y luego para poder modificar datos de tablas con) índices filtrados,
+-- índices sobre vistas indexadas y columnas calculadas persistidas.
+-- Si alguna difiere, cada CREATE UNIQUE INDEX ... WHERE ... falla con el
+-- error 1934 ("CREATE INDEX failed because the following SET options have
+-- incorrect settings"). Como cada índice vive en su propio batch GO, ese
+-- error NO detiene el resto del script: las tablas y los triggers se crean
+-- igual y los índices filtrados quedan silenciosamente sin crear — que es
+-- exactamente el síntoma observado (sys.indexes WHERE has_filter = 1 => 0 filas).
+-- Estas opciones son de SESIÓN y persisten a través de los GO siguientes.
+-- =============================================================================
+SET ANSI_NULLS ON;
+SET ANSI_PADDING ON;
+SET ANSI_WARNINGS ON;
+SET ARITHABORT ON;
+SET CONCAT_NULL_YIELDS_NULL ON;
+SET QUOTED_IDENTIFIER ON;
+SET NUMERIC_ROUNDABORT OFF;
+GO
+
+-- =============================================================================
 -- 1. ESQUEMAS
 -- =============================================================================
-GO
 CREATE SCHEMA cat;
 GO
 CREATE SCHEMA nucleo;

@@ -4,6 +4,8 @@ import cors from 'cors';
 import { env } from './config/env.js';
 import { getDbPool } from './db/sql.js';
 import { meRouter } from './routes/me.js';
+import { projectsRouter } from './routes/projects.js';
+import { instrumentsRouter } from './routes/instruments.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
@@ -50,6 +52,12 @@ app.get('/health/db', async (_req, res) => {
 
 
 app.use('/api/me', meRouter);
+app.use(
+  '/api/projects/:projectId/instruments',
+  instrumentsRouter
+);
+
+app.use('/api/projects', projectsRouter);
 
 if (env.auth.mode === 'dev') {
   app.use('/api/dev/authz', devAuthzRouter);

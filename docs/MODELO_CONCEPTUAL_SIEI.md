@@ -2,6 +2,8 @@
 
 Etapa: **modelo conceptual** (entidades, propósito y cardinalidades). **No** es un modelo físico: no incluye tablas, columnas, tipos de dato, índices ni claves técnicas. Se basa en las reglas de negocio confirmadas durante la etapa de descubrimiento, documentadas en `ANALISIS_EXCEL_SIEI.md` (entregado por chat durante la conversación de análisis de los Excel de referencia; no versionado todavía en este repositorio — pregunta pendiente si conviene incorporarlo también a `docs/`).
 
+**Nota de sincronización**: este documento se corrigió para no contradecir `MODELO_FISICO_SIEI.md` (referencia vigente ante cualquier contradicción). Correcciones aplicadas: SWITCH ya no se modela como una hipótesis de EQUIPO — es una entidad propia (2.11c); las señales de comunicaciones ya no se conectan directo a PUERTO — lo hacen a través de `EQUIPO`/`INSTRUMENTO → ENLACE_COM → PUERTO → SWITCH` (2.11d); `CONEXIONADO` ya no está limitado a 0..2 tramos (2.15); se agregó `PUNTO_CONEXION` como el punto real donde termina cada tramo, perteneciente por XOR a `INSTRUMENTO`/`CAJA`/`RIO`/`MÓDULO` (2.14b); se agregó `CLASE_SEÑAL` como clasificación explícita CONTROL/COM (2.6b). No se rediseñó nada más — el resto del modelo conceptual permanece igual.
+
 **Leyenda de confianza** (igual que en el análisis funcional):
 - 🔵 **Regla confirmada** por el usuario — prevalece sobre cualquier otra consideración.
 - 🟢 **Evidencia** estructural de los Excel analizados, no contradicha por ninguna regla confirmada.
@@ -13,7 +15,7 @@ Etapa: **modelo conceptual** (entidades, propósito y cardinalidades). **No** es
 
 Concepto raíz: **PROYECTO** (todo el núcleo cuelga, directa o transitivamente, de un proyecto — 🔵 datos de ingeniería exclusivos por proyecto).
 
-Entidades cubiertas: `CLIENTE, PROYECTO, INSTRUMENTO, EQUIPO, SEÑAL, TIPO/CLASIFICACIÓN DE SEÑAL, RIO, RACK, SLOT, MÓDULO, CANAL, PUERTO, CAJA, CABLE, PAR/CONDUCTOR, CONEXIONADO, LAZO` (`PUERTO` se agregó sobre la lista mínima pedida, como extensión necesaria para señales de comunicaciones — ver 2.11b).
+Entidades cubiertas: `CLIENTE, PROYECTO, INSTRUMENTO, EQUIPO, SEÑAL, TIPO/CLASIFICACIÓN DE SEÑAL, RIO, RACK, SLOT, MÓDULO, CANAL, PUERTO, CAJA, CABLE, PAR/CONDUCTOR, CONEXIONADO, LAZO` sobre la lista mínima pedida, más las extensiones agregadas durante el diseño físico y ahora sincronizadas aquí: `SWITCH` (2.11c), `ENLACE_COM` (2.11d), `PUNTO_CONEXION` (2.14b), `CLASE_SEÑAL` (2.6b).
 
 Explícitamente **fuera de alcance** en este documento (se modelarán en sus propios módulos más adelante): Matriz Causa-Efecto, Trazabilidad/Ingeniería previa, Documentos/Entregables/Revisiones, atributos definitivos de Cliente/Proyecto (etapas, alcance contractual, disciplinas, convenciones de nomenclatura).
 
@@ -79,7 +81,7 @@ Explícitamente **fuera de alcance** en este documento (se modelarán en sus pro
 
 ### 2.4 EQUIPO
 
-**Propósito**: activo de planta/tablero que no es un instrumento de campo en sentido ISA (ej. variador de velocidad, relé de protección de motor, UPS, switch de red), pero que puede originar señales — típicamente de estado eléctrico o de comunicaciones.
+**Propósito**: activo de planta/tablero que no es un instrumento de campo en sentido ISA (ej. variador de velocidad, relé de protección de motor, UPS), pero que puede originar señales — típicamente de estado eléctrico o de comunicaciones. 🔵 **No incluye infraestructura de comunicaciones** (switches de red) — esa es `SWITCH`, una entidad propia, ver 2.11c.
 
 **Relaciones**:
 | Con | Cardinalidad | Rol | Estado |
@@ -102,9 +104,10 @@ Explícitamente **fuera de alcance** en este documento (se modelarán en sus pro
 |---|---|---|---|
 | INSTRUMENTO **o** EQUIPO | N : 1 | "dueño directo" — **mutuamente excluyente (XOR)** | 🔵 confirmada |
 | INSTRUMENTO | N : 0..1 | "conjunto funcional / agrupador de lazo" | 🔵 confirmada (exclusivo de INSTRUMENTO, nunca EQUIPO) |
-| TIPO/CLASIFICACIÓN DE SEÑAL | N : 1 (×2 catálogos) | ver 2.6 | 🔵 confirmada la distinción; 🟡 hipótesis el detalle |
-| CANAL | 1 : 0..1 | — | 🔵 confirmada (relación 1:1 cuando el canal está ocupado; ver 2.10) |
-| CONEXIONADO | 1 : 0..2 | — | 🔵 confirmada (0, 1 o 2 tramos según exista caja intermedia) |
+| CLASE_SEÑAL | N : 1 | clasificación explícita CONTROL/COM — ver 2.6b | 🔵 confirmada — no se infiere de otros atributos |
+| TIPO/CLASIFICACIÓN DE SEÑAL | N : 1 (×2 o ×3 catálogos según clase) | ver 2.6 | 🔵 confirmada la distinción |
+| CANAL | 1 : 0..1 | — (exclusivo de señales CONTROL) | 🔵 confirmada (relación 1:1 cuando el canal está ocupado; ver 2.10) |
+| CONEXIONADO | 1 : 0..N | — (exclusivo de señales CONTROL) | 🔵 confirmada — cantidad de tramos sin tope estructural (corregido; antes se documentaba un tope de 2, ver 2.15) |
 | LAZO | N : 0..1 | — | 🔵 confirmada (una señal pertenece a lo sumo a un lazo, a través de su instrumento agrupador) |
 
 🔵 **Confirmado**: una señal puede originarse en un INSTRUMENTO **o** en un EQUIPO, nunca en ambos a la vez.
@@ -115,20 +118,33 @@ Explícitamente **fuera de alcance** en este documento (se modelarán en sus pro
 
 ### 2.6 TIPO / CLASIFICACIÓN DE SEÑAL
 
-**Propósito**: en el Excel actual, dos conceptos distintos se mezclaban bajo el nombre `TIPO_SENAL`. El modelo conceptual de SIEI debe separarlos explícitamente como (al menos) dos catálogos de clasificación relacionados con SEÑAL:
+**Propósito**: en el Excel actual, varios conceptos distintos se mezclaban bajo el nombre `TIPO_SENAL`. El modelo de SIEI los separa explícitamente en catálogos de clasificación relacionados con SEÑAL:
 
-1. **Tipo de I/O físico**: `DI / DO / AI / AO / RTD` (más `IN / OUT` para señales de comunicaciones).
-2. **Tipo/característica de la señal o interfaz**: `4-20 mA`, `4-20 mA + HART`, `120 VAC`, `COMUNICADA`, y otros según el proyecto.
+1. **Tipo de I/O físico** (`TIPO_IO`): `DI / DO / AI / AO / RTD` — 🔵 **corregido**: exclusivamente para señales `CONTROL`, ya no incluye `IN`/`OUT`.
+2. **Tipo/característica de la señal o interfaz** (`TIPO_INTERFAZ`): `4-20 mA`, `4-20 mA + HART`, `120 VAC`, `COMUNICADA`, y otros según el proyecto.
+3. **Dirección de comunicación** (`DIRECCION_COM`) — 🔵 **nuevo catálogo**: `IN`/`OUT`, exclusivo de señales `COM`. Se separó de `TIPO_IO` porque son conceptos de negocio distintos (uno describe hardware físico, el otro dirección de un dato en red) — evidencia real: el propio Excel llegó a clasificar por error una señal COM como `AI`, mezclando ambos.
 
 **Relaciones**:
 | Con | Cardinalidad | Estado |
 |---|---|---|
-| SEÑAL (catálogo 1: tipo I/O) | 1 : N | 🔵 confirmada la existencia como concepto separado de (2) |
+| SEÑAL (catálogo 1: tipo I/O) | 1 : 0..N | 🔵 opcional — solo señales CONTROL |
 | SEÑAL (catálogo 2: tipo de interfaz) | 1 : N | 🔵 confirmada (aclaración: `TIPO_SENAL` no es AI/AO/DI/DO) |
+| SEÑAL (catálogo 3: dirección de comunicación) | 1 : 0..N | 🔵 opcional — solo señales COM |
 
-🔵 **Decisión diferida (confirmado por el usuario que no es una restricción de negocio)**: si el catálogo de tipo I/O se subdivide en "tipo de módulo físico" (DI/DO/AI/AO/RTD, señales de control) vs. "dirección de comunicación" (IN/OUT, señales COM), o se mantiene como uno solo, **es una decisión de diseño a tomar más adelante**, no una regla de negocio pendiente — no bloquea nada.
+🔵 **Confirmado**: todos son catálogos universales de SIEI (no configurables por proyecto/cliente) — ver `MODELO_FISICO_SIEI.md` sección 2.7, que cierra la pregunta que aquí quedaba abierta.
 
-🟡 **Hipótesis**: si estos catálogos son globales de SIEI o configurables por proyecto/cliente — pendiente de la pregunta general (aún abierta) sobre qué elementos son catálogo compartido entre proyectos.
+---
+
+### 2.6b CLASE_SEÑAL (extensión: clasificación explícita CONTROL / COM)
+
+**Propósito**: 🔵 **confirmado**: SIEI no debe inferir si una señal es de control o de comunicaciones a partir de `TIPO_IO`/`DIRECCION_COM`/`CANAL`/`TIPO_INTERFAZ` — debe existir una clasificación explícita, independiente y obligatoria en toda señal.
+
+**Relaciones**:
+| Con | Cardinalidad | Estado |
+|---|---|---|
+| SEÑAL | 1 : N (obligatoria) | 🔵 confirmada |
+
+Valores iniciales: `CONTROL` (señales cableadas/hardwired — usan `TIPO_IO`, `CANAL`, `CONEXIONADO`) y `COM` (señales comunicadas — usan `DIRECCION_COM`, `ENLACE_COM`/`PUERTO`/`SWITCH`, nunca `CANAL` ni `CONEXIONADO`). Catálogo universal, mismo tratamiento que el resto de `CAT_*`.
 
 ---
 
@@ -199,19 +215,45 @@ Explícitamente **fuera de alcance** en este documento (se modelarán en sus pro
 
 ### 2.11b PUERTO (extensión: conectividad de señales de comunicaciones)
 
-🔵 **Regla confirmada**: las señales de comunicaciones (COM) **no** se conectan a un `CANAL` como las señales de control — usan un medio distinto y con una cardinalidad distinta. El cable de una señal COM suele ser un **patch/cable de red que concentra varias señales** sobre una misma conexión física (ej. Ethernet/IP, Modbus TCP transportando múltiples puntos de datos lógicos por un mismo puerto) — a diferencia de `CANAL`, que es siempre dedicado 1:1.
+🔵 **Regla confirmada**: las señales de comunicaciones (COM) **no** se conectan a un `CANAL` como las señales de control, y **no** usan el dominio de `CONEXIONADO`/`CABLE`/`PAR-CONDUCTOR` — usan una infraestructura de comunicaciones separada (ver 2.11c/2.11d). El cable de una señal COM suele ser un **patch/cable de red que concentra varias señales** sobre una misma conexión física.
 
 **Propósito de `PUERTO`**: punto de conexión de red (ej. puerto de un switch industrial) — el equivalente funcional de `CANAL` para señales de comunicaciones, pero con una diferencia clave: **puede concentrar varias señales a la vez**, no una sola.
 
 **Relaciones**:
 | Con | Cardinalidad | Estado |
 |---|---|---|
-| EQUIPO (rol "switch de red") | N : 1 | 🟡 hipótesis de modelado razonable — la evidencia del Excel muestra el `SWITCH` identificado con un tag del mismo formato que otros equipos (ej. `620-LSW-5041`), consistente con tratarlo como una instancia de `EQUIPO` y no como una entidad nueva; no confirmado explícitamente por el usuario |
-| SEÑAL | 1 : 0..N | 🔵 confirmada — **un puerto puede concentrar varias señales** (a diferencia de `CANAL`, que es 1:1) |
+| SWITCH | N : 1 | 🔵 **corregido** — ver 2.11c: `SWITCH` es una entidad propia, no una instancia de `EQUIPO` |
+| ENLACE_COM | 1 : 0..1 | 🔵 un puerto está en uso por, a lo sumo, un enlace activo a la vez — ver 2.11d |
 
-`SEÑAL` se conecta entonces a **`CANAL` (control) o a `PUERTO` (comunicaciones)** — un tercer caso de exclusión mutua en el modelo (además del origen INSTRUMENTO/EQUIPO): el "medio de conexión física/lógica" de una señal es uno u otro, nunca ambos.
+🔵 **Corregido**: `SEÑAL` **ya no se conecta directo a `PUERTO`** — se conecta a través de su dueño (`EQUIPO`/`INSTRUMENTO`), que a su vez tiene un `ENLACE_COM` hacia el `PUERTO`. Varias señales del mismo equipo comparten así el mismo puerto sin repetir la relación por cada una — ver 2.11d.
 
-🟡 **Hipótesis abierta**: si el tramo de `CONEXIONADO` que llega a un puerto sigue usando `CABLE`/`PAR-CONDUCTOR` de la misma forma que el conexionado de control (un par dedicado por señal), o si para cables de red multi-señal el concepto `PAR/CONDUCTOR` no aplica de la misma manera (todas las señales comparten el mismo medio físico sin división por conductor). Requiere más detalle — diferido al diseño del módulo de comunicaciones.
+---
+
+### 2.11c SWITCH (extensión: infraestructura de comunicaciones)
+
+🔵 **Regla confirmada**: un switch de red es **infraestructura de comunicaciones**, no un `EQUIPO` de proceso/control ni un subtipo de `EQUIPO` — queda como entidad propia, sin relación con `INSTRUMENTO` ni `LAZO`.
+
+**Propósito**: dispositivo de red que expone puertos usados por señales comunicadas.
+
+**Relaciones**:
+| Con | Cardinalidad | Estado |
+|---|---|---|
+| PROYECTO | N : 1 | 🔵 confirmada |
+| PUERTO | 1 : N | 🔵 confirmada |
+
+---
+
+### 2.11d ENLACE_COM (extensión: conexión física entre EQUIPO/INSTRUMENTO y PUERTO)
+
+**Propósito**: 🔵 confirmado con evidencia real (varias señales COM de un mismo equipo comparten idéntico medio físico) — el enlace de comunicaciones pertenece al **equipo o instrumento**, no a cada señal individual. Es el punto donde se concentra qué puerto/switch usa un equipo, y todas sus señales COM lo heredan.
+
+**Relaciones**:
+| Con | Cardinalidad | Estado |
+|---|---|---|
+| EQUIPO **o** INSTRUMENTO | 0..1 : 1 | mutuamente excluyente (XOR), mismo patrón que el origen de SEÑAL | 🔵 confirmada — el caso INSTRUMENTO es minoritario (instrumento con red nativa, sin equipo intermedio) |
+| PUERTO | N : 1 | 🔵 confirmada |
+
+Conceptualmente: `SEÑAL (COM) ── EQUIPO/INSTRUMENTO (mismo dueño del origen) ── ENLACE_COM ── PUERTO ── SWITCH`.
 
 ---
 
@@ -223,9 +265,9 @@ Explícitamente **fuera de alcance** en este documento (se modelarán en sus pro
 | Con | Cardinalidad | Estado |
 |---|---|---|
 | PROYECTO | N : 1 | 🔵 confirmada |
-| CONEXIONADO | 1 : 0..N | 🔵 confirmada (una caja puede ser punto intermedio de varios tramos, de distintas señales) |
+| PUNTO_CONEXION | 1 : 0..N | 🔵 **corregido** — la caja ya no se relaciona directo con `CONEXIONADO`; sus puntos de terminación existen como `PUNTO_CONEXION` propios (ver 2.14b), y `CONEXIONADO` los referencia a través de ellos |
 
-🔵 **Confirmado**: no existe relación directa `CAJA ── INSTRUMENTO` ni `CAJA ── RIO` — la caja participa siempre a través de `CONEXIONADO`.
+🔵 **Confirmado**: no existe relación directa `CAJA ── INSTRUMENTO` ni `CAJA ── RIO` — la caja participa siempre a través de sus `PUNTO_CONEXION`.
 
 ---
 
@@ -256,20 +298,34 @@ Explícitamente **fuera de alcance** en este documento (se modelarán en sus pro
 
 ---
 
-### 2.15 CONEXIONADO
+### 2.14b PUNTO_CONEXION (extensión: terminación física real)
 
-**Propósito**: entidad "puente" que materializa **un tramo** de la ruta física de una señal. Es el mecanismo por el cual se reconstruye la ruta completa de una señal (instrumento/equipo → [caja opcional] → RIO) **sin** que la señal, el instrumento o el equipo tengan campos redundantes de caja/RIO — la ruta se obtiene siempre recorriendo el conexionado, nunca leyendo un atajo almacenado en otra entidad.
+**Propósito**: 🔵 confirmado — extremo físico real de una conexión (una regleta/bornera/borne concreto), necesario para representar conexionados de RIO/caja y diagramas de lazo con el detalle real de dónde termina cada tramo, sin depender solo de "qué cable/par" usa.
 
 **Relaciones**:
 | Con | Cardinalidad | Estado |
 |---|---|---|
-| SEÑAL | N : 1 | 🔵 confirmada — cada tramo pertenece a una señal; una señal tiene 0, 1 o 2 tramos |
+| INSTRUMENTO **o** EQUIPO **o** CAJA **o** RIO **o** MÓDULO | 0..N : 1 | pertenencia mutuamente excluyente (XOR) | 🔵 confirmada — ✅ **`EQUIPO` corregido en esta ronda**: una señal `CONTROL` cuyo dueño directo es un `EQUIPO` también participa del conexionado físico (ya confirmado en 2.4), así que necesita su propio punto de origen — excluirlo era una contradicción con esa regla ya aprobada. 🔵 **RIO y MÓDULO son pertenencias independientes**: una bornera puede ser del gabinete RIO sin ser de un módulo de I/O específico |
+| CONEXIONADO | 1 : 0..N | 🔵 confirmada — un punto puede ser origen o destino de varios tramos a lo largo del tiempo. El punto de origen del primer tramo de una ruta debe ser, exactamente, el dueño real de la señal (el mismo `INSTRUMENTO`/`EQUIPO`, no cualquiera) |
+
+---
+
+### 2.15 CONEXIONADO
+
+**Propósito**: entidad "puente" que materializa **un tramo** de la ruta física de una señal, entre dos `PUNTO_CONEXION`. Es el mecanismo por el cual se reconstruye la ruta completa de una señal (instrumento → [caja opcional] → RIO/módulo) **sin** que la señal, el instrumento o la caja tengan campos redundantes — la ruta se obtiene siempre recorriendo el conexionado, nunca leyendo un atajo almacenado en otra entidad.
+
+**Relaciones**:
+| Con | Cardinalidad | Estado |
+|---|---|---|
+| SEÑAL | N : 1 | 🔵 confirmada — cada tramo pertenece a una señal; una señal tiene 0..N tramos |
 | CABLE | N : 1 | 🔵 confirmada — cada tramo recorre un cable físico |
 | PAR/CONDUCTOR | N : 1 | 🔵 confirmada — el tramo usa específicamente ese par/conductor dentro del cable |
-| CAJA | N : 0..1 | 🔵 confirmada — el tramo puede tener una caja en un extremo (opcional) |
-| CANAL | N : 0..1 | 🟢/🔵 — el tramo final (el que llega al RIO) se conecta a un canal específico; el tramo instrumento/equipo→caja no llega directamente a un canal |
+| PUNTO_CONEXION (origen) | N : 1 | 🔵 **corregido** — reemplaza la relación directa a `CAJA` |
+| PUNTO_CONEXION (destino) | N : 1 | 🔵 **corregido** — reemplaza la relación directa a `CANAL`; si el punto de destino pertenece a una `CAJA`, el tramo es intermedio; si pertenece a `RIO`/`MÓDULO`, es el tramo final |
 
-**Cardinalidad clave que resume toda la ruta**: `SEÑAL (1) ── (0..2) CONEXIONADO` 🔵 — 0 tramos (señal sin conexionado registrado aún), 1 tramo (`Caso A`: instrumento/equipo → RIO directo), o 2 tramos (`Caso B`: instrumento/equipo → caja → RIO).
+**Cardinalidad clave que resume toda la ruta**: `SEÑAL (1) ── (0..N) CONEXIONADO` 🔵 **corregido** — sin tope estructural de tramos (antes se documentaba un máximo de 2; el máximo observado hoy es un hecho de negocio actual, no una restricción de diseño). El caso hoy más común sigue siendo `Caso A` (instrumento → RIO directo, 1 tramo) o `Caso B` (instrumento → caja → RIO, 2 tramos).
+
+🔵 **Nota de implementación** (sin afectar el nivel conceptual): en el modelo lógico/físico, `CONEXIONADO` se materializa como el par `RUTA_CONEXION` (cabecera por señal) + `TRAMO_CONEXION` (un tramo ordenado por fila) — ambos con soporte de historial (`activo`), de forma que una ruta que deja de estar vigente puede desactivarse conservando su registro, y el par/conductor que usaba queda libre para una ruta nueva.
 
 ---
 
@@ -331,8 +387,10 @@ erDiagram
     INSTRUMENTO |o..o{ SEÑAL : "🔵 conjunto funcional / agrupador de lazo"
     INSTRUMENTO |o--o| LAZO : "🔵 1 lazo = 1 instrumento, opcional (no todo instrumento tiene lazo)"
 
-    SEÑAL }o--|| TIPO_IO : "🔵"
+    SEÑAL }o--|| CLASE_SEÑAL : "🔵 CONTROL o COM, obligatoria"
+    SEÑAL }o--o| TIPO_IO : "🔵 opcional, solo CONTROL"
     SEÑAL }o--|| TIPO_INTERFAZ : "🔵"
+    SEÑAL }o--o| DIRECCION_COM : "🔵 opcional, solo COM"
 
     SEÑAL |o--o| CANAL : "🔵 control, 1:1 estricto si ocupado"
     CANAL }o--|| MODULO : "🟢"
@@ -340,14 +398,21 @@ erDiagram
     SLOT }o--|| RACK : "🟢"
     RACK }o--|| RIO : "🟢"
 
-    SEÑAL |o--o{ PUERTO : "🔵 comunicaciones, N señales por puerto"
-    EQUIPO ||--o{ PUERTO : "🟡 switch como EQUIPO"
+    INSTRUMENTO |o--o| ENLACE_COM : "🔵 XOR con EQUIPO, minoritario"
+    EQUIPO |o--o| ENLACE_COM : "🔵 XOR con INSTRUMENTO"
+    ENLACE_COM }o--|| PUERTO : "🔵"
+    PUERTO }o--|| SWITCH : "🔵 SWITCH ≠ EQUIPO"
 
-    SEÑAL |o..o{ CONEXIONADO : "🔵 0, 1 o 2 tramos"
+    SEÑAL |o..o{ CONEXIONADO : "🔵 0..N tramos, sin tope"
     CONEXIONADO }o--|| CABLE : "🔵"
     CONEXIONADO }o--|| PAR_CONDUCTOR : "🔵"
-    CONEXIONADO }o..o| CAJA : "🔵 opcional"
-    CONEXIONADO }o..o| CANAL : "🟢 tramo final"
+    CONEXIONADO }o--|| PUNTO_CONEXION : "🔵 origen"
+    CONEXIONADO }o--|| PUNTO_CONEXION : "🔵 destino"
+    INSTRUMENTO |o--o{ PUNTO_CONEXION : "🔵 XOR pertenencia"
+    EQUIPO |o--o{ PUNTO_CONEXION : "🔵 XOR pertenencia"
+    CAJA |o--o{ PUNTO_CONEXION : "🔵 XOR pertenencia"
+    RIO |o--o{ PUNTO_CONEXION : "🔵 XOR pertenencia"
+    MODULO |o--o{ PUNTO_CONEXION : "🔵 XOR pertenencia"
     CABLE ||--o{ PAR_CONDUCTOR : "🔵 multiconductor"
 
     LAZO ||--o{ SEÑAL : "🔵 agrupa varias señales"
@@ -371,27 +436,32 @@ erDiagram
 | EQUIPO ── LAZO | *(sin relación)* | 🔵 |
 | INSTRUMENTO ── LAZO | 0..1 : 1, **opcional** (no todo instrumento tiene lazo: instrumentos por COM o de equipo *vendor* no lo tienen) | 🔵 |
 | LAZO ── SEÑAL | 1 : N | 🔵 |
-| SEÑAL ── TIPO_IO / TIPO_INTERFAZ | N : 1 (cada catálogo) | 🔵 (subdivisión interna de TIPO_IO: decisión de diseño diferida, no de negocio) |
-| SEÑAL ── CANAL (señales de control) | 0..1 : 0..1 (1:1 si ocupado) | 🔵 |
-| SEÑAL ── PUERTO (señales de comunicaciones) | 0..1 : 0..N (un puerto concentra varias señales) | 🔵 |
+| SEÑAL ── CLASE_SEÑAL | N : 1, obligatoria | 🔵 explícita, no inferida |
+| SEÑAL ── TIPO_IO | N : 0..1 | 🔵 opcional, solo señales CONTROL |
+| SEÑAL ── TIPO_INTERFAZ | N : 1 | 🔵 |
+| SEÑAL ── DIRECCION_COM | N : 0..1 | 🔵 opcional, solo señales COM |
+| SEÑAL ── CANAL (señales CONTROL) | 0..1 : 0..1 (1:1 si ocupado) | 🔵 |
 | CANAL ── MÓDULO ── SLOT ── RACK ── RIO | N : 1 en cada nivel | 🟢 |
 | MÓDULO ── CANAL | 1 : N (capacidad según catálogo hardware) | 🔵 |
-| EQUIPO (switch) ── PUERTO | 1 : N | 🟡 (switch como EQUIPO: hipótesis de modelado razonable) |
-| SEÑAL ── CONEXIONADO | 1 : 0..2 | 🔵 |
+| INSTRUMENTO/EQUIPO ── ENLACE_COM | 0..1 : 1, XOR | 🔵 (el enlace es del dueño de la señal COM, no de cada señal) |
+| ENLACE_COM ── PUERTO | N : 1 | 🔵 |
+| PUERTO ── SWITCH | N : 1 | 🔵 (SWITCH es entidad propia, no EQUIPO) |
+| SEÑAL ── CONEXIONADO | 1 : 0..N, sin tope | 🔵 |
 | CONEXIONADO ── CABLE | N : 1 | 🔵 |
-| CONEXIONADO ── PAR/CONDUCTOR | N : 1 | 🔵 (🟡 si aplica igual a cables de red/patch multi-señal) |
-| CONEXIONADO ── CAJA | N : 0..1 | 🔵 |
-| CONEXIONADO ── CANAL | N : 0..1 | 🟢 |
+| CONEXIONADO ── PAR/CONDUCTOR | N : 1 | 🔵 (dominio exclusivo de señales CONTROL — no aplica a cables de red/patch, resuelto) |
+| CONEXIONADO ── PUNTO_CONEXION (origen/destino) | N : 1 (×2 roles) | 🔵 |
+| INSTRUMENTO/EQUIPO/CAJA/RIO/MÓDULO ── PUNTO_CONEXION | 1 : 0..N, XOR | 🔵 |
 | CABLE ── PAR/CONDUCTOR | 1 : N | 🔵 |
 | CABLE ── CONEXIONADO | 1 : N | 🔵 |
-| CAJA ── CONEXIONADO | 1 : 0..N | 🔵 |
 
 ---
 
-## 6. Hipótesis abiertas (no bloqueantes) que podrían afectar cardinalidades
+## 6. Hipótesis — estado final
 
-Resueltas en la ronda de validación de este modelo: obligatoriedad CLIENTE↔PROYECTO, opcionalidad INSTRUMENTO↔LAZO, y la conectividad de señales COM (resuelta con la nueva entidad `PUERTO`, ver 2.11b). La subdivisión de `TIPO_IO` se aclaró como decisión de diseño diferida, no como pregunta de negocio. Quedan abiertas:
+Todas las hipótesis que quedaban abiertas en este documento ya se resolvieron durante el diseño lógico/físico:
 
-1. **`EQUIPO` (rol "switch de red") ── `PUERTO`**: ¿un switch de comunicaciones se modela realmente como una instancia de `EQUIPO` (hipótesis razonable por el formato de tag observado en la evidencia), o merece su propio concepto separado?
-2. **`CONEXIONADO`/`PAR-CONDUCTOR` para cables de red multi-señal (patch)**: ¿el tramo hacia un `PUERTO` sigue usando un `PAR/CONDUCTOR` dedicado por señal (como el conexionado de control), o el concepto de "par" no aplica igual cuando varias señales comparten el mismo medio físico sin división por conductor? Esta es la pregunta más relevante que dejó abierta tu explicación sobre los patch cords — necesita más detalle del módulo de comunicaciones para resolverse.
-3. **Catálogos compartidos**: si `TIPO_IO`, `TIPO_INTERFAZ` o el catálogo de módulos de hardware son globales de SIEI o configurables por cliente/proyecto — pregunta general aún diferida.
+1. ✅ **Resuelta**: un switch de comunicaciones **no** se modela como `EQUIPO` — es la entidad propia `SWITCH` (2.11c), y la conexión pasa por `ENLACE_COM` (2.11d), no directo desde `SEÑAL`.
+2. ✅ **Resuelta**: `PAR/CONDUCTOR` y `CONEXIONADO` **no** aplican a señales de comunicaciones — es un dominio exclusivo de señales `CONTROL` (2.6b). Las señales COM usan `ENLACE_COM`/`PUERTO`/`SWITCH`, sin conductor dedicado.
+3. ✅ **Resuelta**: los catálogos (`TIPO_IO`, `TIPO_INTERFAZ`, `DIRECCION_COM`, `CLASE_SEÑAL`, catálogo de módulos de hardware) son **universales** para todo SIEI, no configurables por cliente/proyecto — confirmado en `MODELO_FISICO_SIEI.md` sección 2.7.
+
+No quedan hipótesis abiertas pendientes en el modelo conceptual del núcleo. Las brechas de terminaciones detalladas (regleta/bornera/borne) y el dominio de alimentación eléctrica del instrumento, detectados en una auditoría posterior de cobertura de datos, se documentan en `MATRIZ_COBERTURA_DATOS_SIEI.md` — la primera ya está resuelta conceptualmente con `PUNTO_CONEXION` (2.14b); la segunda queda diferida a un módulo futuro.

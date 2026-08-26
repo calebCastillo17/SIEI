@@ -11,6 +11,7 @@
     "test:comm-links": "tsx tests/comm-links.api.test.ts",
     "test:connections": "tsx tests/physical-connections.api.test.ts",
     "test:loops": "tsx tests/loops.api.test.ts",
+    "test:projects-admin": "tsx tests/projects-admin.api.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"

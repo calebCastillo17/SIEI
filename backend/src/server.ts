@@ -23,6 +23,7 @@ import { conductorPairsRouter } from './routes/conductorPairs.js';
 import { connectionPointsRouter } from './routes/connectionPoints.js';
 import { connectionRoutesRouter } from './routes/connectionRoutes.js';
 import { loopsRouter } from './routes/loops.js';
+import { clientsRouter } from './routes/clients.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
@@ -141,10 +142,11 @@ app.use(
 app.use('/api/projects', projectsRouter);
 
 /*
- * Catálogos globales (schema `cat`, sin proyecto_id) — no cuelgan de
- * /api/projects, no usan requireProjectPermission.
+ * Recursos globales (sin proyecto_id) — no cuelgan de /api/projects, no
+ * usan requireProjectPermission.
  */
 app.use('/api/catalogs/module-types', moduleTypesRouter);
+app.use('/api/clients', clientsRouter);
 
 if (env.auth.mode === 'dev') {
   app.use('/api/dev/authz', devAuthzRouter);

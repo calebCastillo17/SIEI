@@ -11,6 +11,8 @@ import { SignalDetailPage } from './pages/SignalDetailPage';
 import { EquipmentListPage } from './pages/EquipmentListPage';
 import { EquipmentFormPage } from './pages/EquipmentFormPage';
 import { EquipmentDetailPage } from './pages/EquipmentDetailPage';
+import { RiosListPage } from './pages/RiosListPage';
+import { RioDetailPage } from './pages/RioDetailPage';
 
 function App() {
   return (
@@ -42,6 +44,8 @@ function App() {
           path="/projects/:projectId/equipment/:equipmentId"
           element={<EquipmentDetailPage />}
         />
+        <Route path="/projects/:projectId/rios" element={<RiosListPage />} />
+        <Route path="/projects/:projectId/rios/:rioId" element={<RioDetailPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Route>
     </Routes>

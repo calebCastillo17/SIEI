@@ -264,3 +264,121 @@ export interface SignalInput {
   enclavamiento: string | null;
   observacion: string | null;
 }
+
+/* ---- Jerarquía física de E/S: RIO -> Rack -> Slot -> Módulo -> Canal --- */
+
+export interface Rio {
+  id: string;
+  projectId: string;
+  tagRio: string;
+  descripcion: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface RiosListResponse {
+  projectId: string;
+  rios: Rio[];
+}
+
+export interface RioResponse {
+  rio: Rio;
+}
+
+export interface RioInput {
+  tagRio: string;
+  descripcion: string | null;
+}
+
+export interface Rack {
+  id: string;
+  projectId: string;
+  rioId: string;
+  numeroRack: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface RacksListResponse {
+  projectId: string;
+  racks: Rack[];
+}
+
+export interface Slot {
+  id: string;
+  projectId: string;
+  rackId: string;
+  numeroSlot: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface SlotsListResponse {
+  projectId: string;
+  slots: Slot[];
+}
+
+/** Módulo instalado en un slot — trae fabricante/modelo/canalesMax ya
+ * resueltos desde cat.cat_modulo_io (ver modules.ts). */
+export interface PhysicalModule {
+  id: string;
+  projectId: string;
+  slotId: string;
+  catalogoModuloId: string;
+  fabricante: string;
+  modelo: string;
+  canalesMax: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface ModulesListResponse {
+  projectId: string;
+  modules: PhysicalModule[];
+}
+
+/** Canal — SOLO LECTURA, lo administra el trigger del módulo (ver channels.ts). */
+export interface Channel {
+  id: string;
+  projectId: string;
+  moduloId: string;
+  numeroCanal: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface ChannelsListResponse {
+  projectId: string;
+  channels: Channel[];
+}
+
+/** Fila del catálogo global cat.cat_modulo_io (ver moduleTypes.ts). */
+export interface ModuleType {
+  id: string;
+  fabricante: string;
+  modelo: string;
+  tipoIoId: string;
+  tipoIoCodigo: string;
+  canalesMax: number;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface ModuleTypesListResponse {
+  moduleTypes: ModuleType[];
+}

@@ -84,6 +84,9 @@ export function AppLayout() {
               >
                 Señales
               </NavLink>
+              <NavLink to={`/projects/${currentProject.id}/rios`} className="app-nav__link">
+                RIOs
+              </NavLink>
             </>
           )}
         </nav>

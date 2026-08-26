@@ -22,6 +22,7 @@ import { cablesRouter } from './routes/cables.js';
 import { conductorPairsRouter } from './routes/conductorPairs.js';
 import { connectionPointsRouter } from './routes/connectionPoints.js';
 import { connectionRoutesRouter } from './routes/connectionRoutes.js';
+import { loopsRouter } from './routes/loops.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
@@ -131,6 +132,10 @@ app.use(
 app.use(
   '/api/projects/:projectId/routes',
   connectionRoutesRouter
+);
+app.use(
+  '/api/projects/:projectId/loops',
+  loopsRouter
 );
 
 app.use('/api/projects', projectsRouter);

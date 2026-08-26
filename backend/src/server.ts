@@ -187,6 +187,25 @@ app.use(
   '/api/catalogs/pnid-states',
   createSimpleCatalogRouter('cat.cat_estado_pnid', false)
 );
+/*
+ * Estos 3 los usa directamente nucleo.senal (clase CONTROL/COM, tipo de
+ * E/S, dirección de comunicación) — son parte del modelo de validación de
+ * TR_senal_validar_clase, no un dominio abierto: agregar un tercer código
+ * a clase_senal, por ejemplo, no tendría sentido semántico para esa
+ * lógica. Igual que los tres de arriba, solo lectura.
+ */
+app.use(
+  '/api/catalogs/signal-classes',
+  createSimpleCatalogRouter('cat.cat_clase_senal', false)
+);
+app.use(
+  '/api/catalogs/io-types',
+  createSimpleCatalogRouter('cat.cat_tipo_io', false)
+);
+app.use(
+  '/api/catalogs/com-directions',
+  createSimpleCatalogRouter('cat.cat_direccion_com', false)
+);
 
 app.use('/api/clients', clientsRouter);
 app.use('/api/users', usersRouter);

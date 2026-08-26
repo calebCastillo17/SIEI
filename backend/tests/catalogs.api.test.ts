@@ -89,7 +89,10 @@ const WRITABLE_CATALOGS = [
 const READONLY_CATALOGS = [
   { path: '/api/catalogs/revision-states', label: 'revision-states', expectedCode: 'PENDIENTE' },
   { path: '/api/catalogs/alarm-priorities', label: 'alarm-priorities', expectedCode: 'BAJA' },
-  { path: '/api/catalogs/pnid-states', label: 'pnid-states', expectedCode: 'OK' }
+  { path: '/api/catalogs/pnid-states', label: 'pnid-states', expectedCode: 'OK' },
+  { path: '/api/catalogs/signal-classes', label: 'signal-classes', expectedCode: 'CONTROL' },
+  { path: '/api/catalogs/io-types', label: 'io-types', expectedCode: 'AI' },
+  { path: '/api/catalogs/com-directions', label: 'com-directions', expectedCode: 'IN' }
 ];
 
 

@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Config local (URL del backend en este entorno, etc.) — .env.example es la plantilla.
+.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

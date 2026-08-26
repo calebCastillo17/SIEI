@@ -112,3 +112,130 @@ export interface InstrumentInput {
   ubicacion: string | null;
   nodo: string | null;
 }
+
+/** Equipo tal como lo devuelve GET (ver equipment.ts). */
+export interface Equipment {
+  id: string;
+  projectId: string;
+  tagEquipo: string;
+  descripcion: string | null;
+  sistema: string | null;
+  nodo: string | null;
+  panel: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface EquipmentListResponse {
+  projectId: string;
+  equipment: Equipment[];
+}
+
+/** Fila de cualquiera de los catálogos simples (ver lib/simpleCatalogRouter.ts). */
+export interface CatalogItem {
+  id: string;
+  codigo: string;
+  descripcion: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface CatalogListResponse {
+  items: CatalogItem[];
+}
+
+export type SignalClassCode = 'CONTROL' | 'COM';
+
+/** Señal tal como la devuelve GET (ver signals.ts serializeSignal). */
+export interface Signal {
+  id: string;
+  projectId: string;
+  instrumentoId: string | null;
+  equipoId: string | null;
+  instrumentoAgrupadorId: string | null;
+  claseSenalId: string;
+  claseSenalCodigo: SignalClassCode;
+  tipoIoId: string | null;
+  tipoIoCodigo: string | null;
+  direccionComId: string | null;
+  direccionComCodigo: string | null;
+  tipoInterfazId: string | null;
+  canalId: string | null;
+  estadoRevisionId: string | null;
+  prioridadAlarmaId: string | null;
+  tagSenal: string;
+  nombreCorto: string | null;
+  descripcion: string | null;
+  rangoMin: number | null;
+  rangoMax: number | null;
+  alarmaHh: number | null;
+  alarmaH: number | null;
+  alarmaL: number | null;
+  alarmaLl: number | null;
+  valorNormal: string | null;
+  unidadIngenieria: string | null;
+  retardo: string | null;
+  enclavamiento: string | null;
+  observacion: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface SignalsListResponse {
+  projectId: string;
+  signals: Signal[];
+}
+
+export interface SignalResponse {
+  signal: Signal;
+}
+
+/**
+ * POST/PATCH/DELETE de señales devuelven formas más chicas que GET en
+ * algunos casos (ver signals.ts) — igual que con instrumentos, solo se usa
+ * `id` de la respuesta para navegar y se vuelve a pedir el detalle con GET.
+ */
+export interface SignalMutationResponse {
+  signal: {
+    id: string;
+    projectId: string;
+  };
+}
+
+/**
+ * Campos que POST/PATCH de señales aceptan (ver SIGNAL_FIELDS en
+ * signals.ts). instrumentoId/equipoId son XOR: exactamente uno de los dos
+ * al crear (lo exige CK_senal_origen_xor en la base).
+ */
+export interface SignalInput {
+  tagSenal: string;
+  claseSenalId: string;
+  instrumentoId: string | null;
+  equipoId: string | null;
+  instrumentoAgrupadorId: string | null;
+  tipoIoId: string | null;
+  direccionComId: string | null;
+  tipoInterfazId: string | null;
+  canalId: string | null;
+  estadoRevisionId: string | null;
+  prioridadAlarmaId: string | null;
+  nombreCorto: string | null;
+  descripcion: string | null;
+  rangoMin: number | null;
+  rangoMax: number | null;
+  alarmaHh: number | null;
+  alarmaH: number | null;
+  alarmaL: number | null;
+  alarmaLl: number | null;
+  valorNormal: string | null;
+  unidadIngenieria: string | null;
+  retardo: string | null;
+  enclavamiento: string | null;
+  observacion: string | null;
+}

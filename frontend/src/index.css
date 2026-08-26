@@ -2,21 +2,18 @@
   --text: #6b6375;
   --text-h: #08060d;
   --bg: #fff;
+  --bg-alt: #f8f7fb;
   --border: #e5e4e7;
-  --code-bg: #f4f3ec;
   --accent: #aa3bff;
   --accent-bg: rgba(170, 59, 255, 0.1);
   --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --danger: #d1345b;
+  --danger-bg: rgba(209, 52, 91, 0.1);
 
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
+  font: 15px/145% var(--sans);
   color-scheme: light dark;
   color: var(--text);
   background: var(--bg);
@@ -24,10 +21,6 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -35,30 +28,17 @@
     --text: #9ca3af;
     --text-h: #f3f4f6;
     --bg: #16171d;
+    --bg-alt: #1c1d24;
     --border: #2e303a;
-    --code-bg: #1f2028;
     --accent: #c084fc;
     --accent-bg: rgba(192, 132, 252, 0.15);
     --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
+    --danger: #f27a97;
+    --danger-bg: rgba(242, 122, 151, 0.12);
   }
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
+* {
   box-sizing: border-box;
 }
 
@@ -66,46 +46,336 @@ body {
   margin: 0;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
 h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-h);
   margin: 0;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
+a {
+  color: var(--accent);
+}
+
+/* ---- Shell ------------------------------------------------------- */
+
+.app-shell {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.app-header__title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-h);
+  letter-spacing: 0.5px;
+}
+
+.app-header__subtitle {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.app-header__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-header__user {
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-shell__banner {
+  padding: 8px 24px 0;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+}
+
+.app-nav {
+  width: 200px;
+  flex-shrink: 0;
+  padding: 20px 12px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-nav__link {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--text-h);
+  font-size: 14px;
+}
+
+.app-nav__link:hover,
+.app-nav__link.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.app-nav__current-project {
+  margin: 16px 0 4px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-alt);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-nav__project-code {
+  font-weight: 600;
   color: var(--text-h);
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
+.app-nav__project-role {
+  color: var(--text);
+}
+
+.app-content {
+  flex: 1;
+  padding: 24px 32px;
+  min-width: 0;
+}
+
+/* ---- DEV user switcher --------------------------------------------- */
+
+.dev-user-switcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px dashed var(--danger);
+  border-radius: 6px;
   padding: 4px 8px;
-  background: var(--code-bg);
+}
+
+.dev-user-switcher__badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: 4px;
+  padding: 2px 5px;
+  letter-spacing: 0.5px;
+}
+
+.dev-user-switcher select {
+  border: none;
+  background: transparent;
+  color: var(--text-h);
+  font: inherit;
+}
+
+/* ---- Layout helpers -------------------------------------------------- */
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.page-header__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.page-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* ---- Buttons ----------------------------------------------------- */
+
+.button {
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button--secondary {
+  background: transparent;
+  color: var(--text-h);
+  border-color: var(--border);
+}
+
+.button--danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.button--small {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+/* ---- Table --------------------------------------------------------- */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table th {
+  color: var(--text);
+  font-weight: 500;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.table__row--clickable {
+  cursor: pointer;
+}
+
+.table__row--clickable:hover {
+  background: var(--bg-alt);
+}
+
+.table__row-actions {
+  text-align: right;
+}
+
+.table__permissions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ---- Badges / errors ------------------------------------------------ */
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.badge--admin {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.error-message {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+/* ---- Forms --------------------------------------------------------- */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 480px;
+}
+
+.form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.form__field input {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.form__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.form__hint {
+  font-size: 13px;
+  color: var(--danger);
+  margin: -8px 0 16px;
+}
+
+/* ---- Detail list ----------------------------------------------------- */
+
+.detail-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px 24px;
+  margin: 0;
+  max-width: 900px;
+}
+
+.detail-list dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.detail-list dd {
+  margin: 0;
+  color: var(--text-h);
+  font-size: 14px;
 }

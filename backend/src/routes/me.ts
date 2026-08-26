@@ -31,7 +31,7 @@ meRouter.get('/', authenticate, async (req, res, next) => {
     res.status(200).json({
       user,
       projects: result.recordset.map((row) => ({
-        id: row.proyecto_id,
+        id: String(row.proyecto_id),
         codigo: row.codigo_proyecto,
         role: row.rol_codigo,
         permissions: {

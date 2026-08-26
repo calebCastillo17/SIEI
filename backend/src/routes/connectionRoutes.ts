@@ -165,12 +165,14 @@ function serializeSegment(row: Record<string, any>) {
     puntoDestinoId: String(row.punto_destino_id),
     active: Boolean(row.activo),
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    createdBy: row.created_by === null ? null : String(row.created_by),
+    updatedBy: row.updated_by === null ? null : String(row.updated_by)
   };
 }
 
 const ROUTE_COLUMNS = 'id, proyecto_id, senal_id, activo, created_at, updated_at, created_by, updated_by';
-const SEGMENT_COLUMNS = 'id, ruta_conexion_id, numero_orden, par_conductor_id, punto_origen_id, punto_destino_id, activo, created_at, updated_at';
+const SEGMENT_COLUMNS = 'id, ruta_conexion_id, numero_orden, par_conductor_id, punto_origen_id, punto_destino_id, activo, created_at, updated_at, created_by, updated_by';
 
 
 /*

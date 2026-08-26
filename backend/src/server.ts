@@ -24,6 +24,8 @@ import { connectionPointsRouter } from './routes/connectionPoints.js';
 import { connectionRoutesRouter } from './routes/connectionRoutes.js';
 import { loopsRouter } from './routes/loops.js';
 import { clientsRouter } from './routes/clients.js';
+import { usersRouter } from './routes/users.js';
+import { membersRouter } from './routes/members.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
@@ -138,6 +140,10 @@ app.use(
   '/api/projects/:projectId/loops',
   loopsRouter
 );
+app.use(
+  '/api/projects/:projectId/members',
+  membersRouter
+);
 
 app.use('/api/projects', projectsRouter);
 
@@ -147,6 +153,7 @@ app.use('/api/projects', projectsRouter);
  */
 app.use('/api/catalogs/module-types', moduleTypesRouter);
 app.use('/api/clients', clientsRouter);
+app.use('/api/users', usersRouter);
 
 if (env.auth.mode === 'dev') {
   app.use('/api/dev/authz', devAuthzRouter);

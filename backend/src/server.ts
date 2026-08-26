@@ -6,6 +6,7 @@ import { getDbPool } from './db/sql.js';
 import { meRouter } from './routes/me.js';
 import { projectsRouter } from './routes/projects.js';
 import { instrumentsRouter } from './routes/instruments.js';
+import { signalsRouter } from './routes/signals.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
@@ -55,6 +56,10 @@ app.use('/api/me', meRouter);
 app.use(
   '/api/projects/:projectId/instruments',
   instrumentsRouter
+);
+app.use(
+  '/api/projects/:projectId/signals',
+  signalsRouter
 );
 
 app.use('/api/projects', projectsRouter);

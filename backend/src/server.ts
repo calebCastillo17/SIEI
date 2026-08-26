@@ -8,6 +8,12 @@ import { projectsRouter } from './routes/projects.js';
 import { instrumentsRouter } from './routes/instruments.js';
 import { equipmentRouter } from './routes/equipment.js';
 import { signalsRouter } from './routes/signals.js';
+import { riosRouter } from './routes/rios.js';
+import { racksRouter } from './routes/racks.js';
+import { slotsRouter } from './routes/slots.js';
+import { modulesRouter } from './routes/modules.js';
+import { channelsRouter } from './routes/channels.js';
+import { moduleTypesRouter } from './routes/moduleTypes.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
@@ -66,8 +72,34 @@ app.use(
   '/api/projects/:projectId/signals',
   signalsRouter
 );
+app.use(
+  '/api/projects/:projectId/rios',
+  riosRouter
+);
+app.use(
+  '/api/projects/:projectId/racks',
+  racksRouter
+);
+app.use(
+  '/api/projects/:projectId/slots',
+  slotsRouter
+);
+app.use(
+  '/api/projects/:projectId/modules',
+  modulesRouter
+);
+app.use(
+  '/api/projects/:projectId/channels',
+  channelsRouter
+);
 
 app.use('/api/projects', projectsRouter);
+
+/*
+ * Catálogos globales (schema `cat`, sin proyecto_id) — no cuelgan de
+ * /api/projects, no usan requireProjectPermission.
+ */
+app.use('/api/catalogs/module-types', moduleTypesRouter);
 
 if (env.auth.mode === 'dev') {
   app.use('/api/dev/authz', devAuthzRouter);

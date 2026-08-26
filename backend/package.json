@@ -8,6 +8,7 @@
     "test:signals": "tsx tests/signals.api.test.ts",
     "test:equipment": "tsx tests/equipment.api.test.ts",
     "test:hierarchy": "tsx tests/physical-hierarchy.api.test.ts",
+    "test:comm-links": "tsx tests/comm-links.api.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"

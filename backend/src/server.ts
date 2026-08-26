@@ -14,6 +14,9 @@ import { slotsRouter } from './routes/slots.js';
 import { modulesRouter } from './routes/modules.js';
 import { channelsRouter } from './routes/channels.js';
 import { moduleTypesRouter } from './routes/moduleTypes.js';
+import { switchesRouter } from './routes/switches.js';
+import { portsRouter } from './routes/ports.js';
+import { commLinksRouter } from './routes/commLinks.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
@@ -91,6 +94,18 @@ app.use(
 app.use(
   '/api/projects/:projectId/channels',
   channelsRouter
+);
+app.use(
+  '/api/projects/:projectId/switches',
+  switchesRouter
+);
+app.use(
+  '/api/projects/:projectId/ports',
+  portsRouter
+);
+app.use(
+  '/api/projects/:projectId/comm-links',
+  commLinksRouter
 );
 
 app.use('/api/projects', projectsRouter);

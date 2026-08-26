@@ -1,11 +1,7 @@
-import { useCallback } from 'react';
 import { NavLink, Outlet, useParams } from 'react-router-dom';
 
-import { useDevUser } from '../auth/DevUserContext';
+import { useMe } from '../auth/MeContext';
 import { useProjects } from '../projects/ProjectsContext';
-import { getMe } from '../api/me';
-import { useAsyncData } from '../lib/useAsyncData';
-import type { MeResponse } from '../api/types';
 import { DevUserSwitcher } from './DevUserSwitcher';
 import { ErrorMessage } from './ErrorMessage';
 
@@ -16,14 +12,12 @@ import { ErrorMessage } from './ErrorMessage';
  * página o usar "atrás" del navegador funciona sin lógica extra.
  */
 export function AppLayout() {
-  const { devUser } = useDevUser();
   const { projectId } = useParams<{ projectId: string }>();
   const { findProject } = useProjects();
-
-  const fetchMe = useCallback(() => getMe(devUser.email), [devUser.email]);
-  const { data: me, error: meError } = useAsyncData<MeResponse>(fetchMe);
+  const { me, error: meError } = useMe();
 
   const currentProject = findProject(projectId);
+  const isSystemAdmin = me?.user.esAdminSistema ?? false;
 
   return (
     <div className="app-shell">
@@ -104,6 +98,27 @@ export function AppLayout() {
               </NavLink>
               <NavLink to={`/projects/${currentProject.id}/routes`} className="app-nav__link">
                 Rutas
+              </NavLink>
+              <NavLink to={`/projects/${currentProject.id}/loops`} className="app-nav__link">
+                Lazos
+              </NavLink>
+              <NavLink to={`/projects/${currentProject.id}/members`} className="app-nav__link">
+                Miembros
+              </NavLink>
+            </>
+          )}
+
+          {isSystemAdmin && (
+            <>
+              <div className="app-nav__current-project">
+                <span className="app-nav__project-code">Administración</span>
+                <span className="app-nav__project-role">admin de sistema</span>
+              </div>
+              <NavLink to="/admin/clients" className="app-nav__link">
+                Clientes
+              </NavLink>
+              <NavLink to="/admin/users" className="app-nav__link">
+                Usuarios
               </NavLink>
             </>
           )}

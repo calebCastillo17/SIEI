@@ -5,15 +5,18 @@ import { BrowserRouter } from 'react-router-dom';
 import './index.css';
 import App from './App.tsx';
 import { DevUserProvider } from './auth/DevUserProvider';
+import { MeProvider } from './auth/MeProvider';
 import { ProjectsProvider } from './projects/ProjectsProvider';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <DevUserProvider>
-        <ProjectsProvider>
-          <App />
-        </ProjectsProvider>
+        <MeProvider>
+          <ProjectsProvider>
+            <App />
+          </ProjectsProvider>
+        </MeProvider>
       </DevUserProvider>
     </BrowserRouter>
   </StrictMode>

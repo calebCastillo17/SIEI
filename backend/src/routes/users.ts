@@ -189,7 +189,7 @@ usersRouter.post(
         .query(`
           INSERT INTO seguridad.usuario (email, nombre, es_admin_sistema, activo, created_at)
           OUTPUT INSERTED.id, INSERTED.email, INSERTED.nombre, INSERTED.es_admin_sistema,
-                 INSERTED.auth_subject, INSERTED.activo, INSERTED.created_at
+                 INSERTED.auth_subject, INSERTED.activo, INSERTED.created_at, INSERTED.updated_at
           VALUES (@email, @nombre, 0, 1, SYSUTCDATETIME());
         `);
 

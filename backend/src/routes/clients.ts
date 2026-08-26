@@ -169,7 +169,8 @@ clientsRouter.post(
         .query(`
           INSERT INTO nucleo.cliente (nombre, codigo_interno, activo, created_at, created_by)
           OUTPUT INSERTED.id, INSERTED.nombre, INSERTED.codigo_interno, INSERTED.activo,
-                 INSERTED.created_at, INSERTED.created_by
+                 INSERTED.created_at, INSERTED.created_by,
+                 INSERTED.updated_at, INSERTED.updated_by
           VALUES (@nombre, @codigo_interno, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 

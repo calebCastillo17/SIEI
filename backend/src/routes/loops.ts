@@ -207,7 +207,8 @@ loopsRouter.post(
         .query(`
           INSERT INTO nucleo.lazo (proyecto_id, instrumento_id, codigo_documento, activo, created_at, created_by)
           OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.instrumento_id, INSERTED.codigo_documento,
-                 INSERTED.activo, INSERTED.created_at, INSERTED.created_by
+                 INSERTED.activo, INSERTED.created_at, INSERTED.created_by,
+                 INSERTED.updated_at, INSERTED.updated_by
           VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @instrumento_id), @codigo_documento, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 

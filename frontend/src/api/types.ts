@@ -634,3 +634,135 @@ export interface RouteInput {
   senalId: string;
   segments: RouteSegmentInput[];
 }
+
+/* ---- Lazo (documento de lazo de un instrumento) ------------------------ */
+
+export interface Loop {
+  id: string;
+  projectId: string;
+  instrumentoId: string;
+  codigoDocumento: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface LoopsListResponse {
+  projectId: string;
+  loops: Loop[];
+}
+
+export interface LoopResponse {
+  loop: Loop;
+}
+
+export interface LoopInput {
+  instrumentoId: string;
+  codigoDocumento: string | null;
+}
+
+/* ---- Administración: Clientes + Proyectos ------------------------------ */
+
+/** Fila de nucleo.cliente (ver clients.ts). Solo es_admin_sistema puede
+ * crear/editar/desactivar; GET es abierto a cualquier usuario autenticado. */
+export interface Client {
+  id: string;
+  nombre: string;
+  codigoInterno: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface ClientsListResponse {
+  clients: Client[];
+}
+
+export interface ClientResponse {
+  client: Client;
+}
+
+export interface ClientInput {
+  nombre: string;
+  codigoInterno: string | null;
+}
+
+/** Body de POST /api/projects (ver projects.ts) — distinto de PATCH, que
+ * solo admite code/name (no se puede mover un proyecto de cliente). */
+export interface ProjectCreateInput {
+  clientId: string;
+  code: string;
+  name: string;
+}
+
+export interface ProjectUpdateInput {
+  code: string;
+  name: string;
+}
+
+/* ---- Administración: Usuarios (registro global) ------------------------ */
+
+/** Fila de seguridad.usuario tal como la expone /api/users — todo el
+ * router requiere es_admin_sistema, incluso GET (ver users.ts). Nunca
+ * incluye esAdminSistema/authIssuer/authSubject: ese privilegio no se
+ * expone ni se administra por acá (CLAUDE.md, "Security model"). */
+export interface AppUser {
+  id: string;
+  email: string;
+  nombre: string;
+  esAdminSistema: boolean;
+  hasSignedIn: boolean;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface UsersListResponse {
+  users: AppUser[];
+}
+
+export interface UserResponse {
+  user: AppUser;
+}
+
+export interface UserInput {
+  email: string;
+  nombre: string;
+}
+
+/* ---- Administración: Miembros de un proyecto ---------------------------- */
+
+/** Fila de seguridad.usuario_proyecto_rol vista desde un proyecto (ver
+ * members.ts). GET requiere solo 'read'; POST/PATCH/DELETE requieren
+ * 'administer' (ADMIN de ESE proyecto, o es_admin_sistema). */
+export interface Member {
+  usuarioId: string;
+  email: string;
+  nombre: string;
+  projectId: string;
+  role: ProjectRole;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface MembersListResponse {
+  projectId: string;
+  members: Member[];
+}
+
+export interface MemberResponse {
+  member: Member;
+}
+
+/** `nombre` solo hace falta si el email todavía no existe como usuario —
+ * el backend pre-registra uno nuevo en el mismo paso (ver members.ts). */
+export interface MemberInput {
+  email: string;
+  nombre: string | null;
+  rol: ProjectRole;
+}

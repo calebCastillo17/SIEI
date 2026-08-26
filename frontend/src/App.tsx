@@ -23,6 +23,10 @@ import { ConnectionPointsListPage } from './pages/ConnectionPointsListPage';
 import { RoutesListPage } from './pages/RoutesListPage';
 import { RouteFormPage } from './pages/RouteFormPage';
 import { RouteDetailPage } from './pages/RouteDetailPage';
+import { LoopsListPage } from './pages/LoopsListPage';
+import { ProjectMembersPage } from './pages/ProjectMembersPage';
+import { ClientsPage } from './pages/ClientsPage';
+import { UsersPage } from './pages/UsersPage';
 
 function App() {
   return (
@@ -69,6 +73,10 @@ function App() {
         <Route path="/projects/:projectId/routes" element={<RoutesListPage />} />
         <Route path="/projects/:projectId/routes/new" element={<RouteFormPage />} />
         <Route path="/projects/:projectId/routes/:routeId" element={<RouteDetailPage />} />
+        <Route path="/projects/:projectId/loops" element={<LoopsListPage />} />
+        <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
+        <Route path="/admin/clients" element={<ClientsPage />} />
+        <Route path="/admin/users" element={<UsersPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Route>
     </Routes>

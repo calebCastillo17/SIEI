@@ -197,7 +197,8 @@ cablesRouter.post(
 
           INSERT INTO nucleo.cable (proyecto_id, tag_cable, tipo_cable, capacidad_conductores, activo, created_at, created_by)
           OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_cable, INSERTED.tipo_cable,
-                 INSERTED.capacidad_conductores, INSERTED.activo, INSERTED.created_at, INSERTED.created_by
+                 INSERTED.capacidad_conductores, INSERTED.activo, INSERTED.created_at, INSERTED.created_by,
+                 INSERTED.updated_at, INSERTED.updated_by
           VALUES (TRY_CONVERT(BIGINT, @proyecto_id), @tag_cable, @tipo_cable, @capacidad_conductores, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 

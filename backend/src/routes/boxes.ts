@@ -187,7 +187,8 @@ boxesRouter.post(
 
           INSERT INTO nucleo.caja (proyecto_id, tag_caja, descripcion, activo, created_at, created_by)
           OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_caja, INSERTED.descripcion,
-                 INSERTED.activo, INSERTED.created_at, INSERTED.created_by
+                 INSERTED.activo, INSERTED.created_at, INSERTED.created_by,
+                 INSERTED.updated_at, INSERTED.updated_by
           VALUES (TRY_CONVERT(BIGINT, @proyecto_id), @tag_caja, @descripcion, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 

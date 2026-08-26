@@ -476,7 +476,16 @@ connectionRoutesRouter.delete(
         return;
       }
 
-      res.status(200).json({ route: serializeRoute(row) });
+      res.status(200).json({
+        route: {
+          id: String(row.id),
+          projectId: String(row.proyecto_id),
+          senalId: String(row.senal_id),
+          active: Boolean(row.activo),
+          updatedAt: row.updated_at,
+          updatedBy: row.updated_by === null ? null : String(row.updated_by)
+        }
+      });
 
     } catch (error) {
       const mapped = mapRouteSqlError(error);

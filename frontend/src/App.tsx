@@ -13,6 +13,16 @@ import { EquipmentFormPage } from './pages/EquipmentFormPage';
 import { EquipmentDetailPage } from './pages/EquipmentDetailPage';
 import { RiosListPage } from './pages/RiosListPage';
 import { RioDetailPage } from './pages/RioDetailPage';
+import { SwitchesListPage } from './pages/SwitchesListPage';
+import { SwitchDetailPage } from './pages/SwitchDetailPage';
+import { BoxesListPage } from './pages/BoxesListPage';
+import { BoxDetailPage } from './pages/BoxDetailPage';
+import { CablesListPage } from './pages/CablesListPage';
+import { CableDetailPage } from './pages/CableDetailPage';
+import { ConnectionPointsListPage } from './pages/ConnectionPointsListPage';
+import { RoutesListPage } from './pages/RoutesListPage';
+import { RouteFormPage } from './pages/RouteFormPage';
+import { RouteDetailPage } from './pages/RouteDetailPage';
 
 function App() {
   return (
@@ -46,6 +56,19 @@ function App() {
         />
         <Route path="/projects/:projectId/rios" element={<RiosListPage />} />
         <Route path="/projects/:projectId/rios/:rioId" element={<RioDetailPage />} />
+        <Route path="/projects/:projectId/switches" element={<SwitchesListPage />} />
+        <Route path="/projects/:projectId/switches/:switchId" element={<SwitchDetailPage />} />
+        <Route path="/projects/:projectId/boxes" element={<BoxesListPage />} />
+        <Route path="/projects/:projectId/boxes/:boxId" element={<BoxDetailPage />} />
+        <Route path="/projects/:projectId/cables" element={<CablesListPage />} />
+        <Route path="/projects/:projectId/cables/:cableId" element={<CableDetailPage />} />
+        <Route
+          path="/projects/:projectId/connection-points"
+          element={<ConnectionPointsListPage />}
+        />
+        <Route path="/projects/:projectId/routes" element={<RoutesListPage />} />
+        <Route path="/projects/:projectId/routes/new" element={<RouteFormPage />} />
+        <Route path="/projects/:projectId/routes/:routeId" element={<RouteDetailPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Route>
     </Routes>

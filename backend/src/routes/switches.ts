@@ -195,7 +195,8 @@ switchesRouter.post(
 
           INSERT INTO nucleo.switch (proyecto_id, tag_switch, descripcion, marca_modelo, activo, created_at, created_by)
           OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_switch, INSERTED.descripcion,
-                 INSERTED.marca_modelo, INSERTED.activo, INSERTED.created_at, INSERTED.created_by
+                 INSERTED.marca_modelo, INSERTED.activo, INSERTED.created_at, INSERTED.created_by,
+                 INSERTED.updated_at, INSERTED.updated_by
           VALUES (TRY_CONVERT(BIGINT, @proyecto_id), @tag_switch, @descripcion, @marca_modelo, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 

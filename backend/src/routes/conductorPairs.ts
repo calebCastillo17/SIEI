@@ -234,7 +234,8 @@ conductorPairsRouter.post(
         .query(`
           INSERT INTO nucleo.par_conductor (proyecto_id, cable_id, numero_par, created_at, created_by)
           OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.cable_id, INSERTED.numero_par,
-                 CAST(0 AS BIT) AS in_use, INSERTED.created_at, INSERTED.created_by
+                 CAST(0 AS BIT) AS in_use, INSERTED.created_at, INSERTED.created_by,
+                 INSERTED.updated_at, INSERTED.updated_by
           VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @cable_id), @numero_par, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 

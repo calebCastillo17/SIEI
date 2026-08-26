@@ -27,3 +27,9 @@ export const listAlarmPriorities = (devUserEmail: string) =>
 
 export const listInterfaceTypes = (devUserEmail: string) =>
   listCatalog('/api/catalogs/interface-types', devUserEmail);
+
+export const listComTypes = (devUserEmail: string) =>
+  listCatalog('/api/catalogs/com-types', devUserEmail);
+
+export const listComMediaTypes = (devUserEmail: string) =>
+  listCatalog('/api/catalogs/com-media-types', devUserEmail);

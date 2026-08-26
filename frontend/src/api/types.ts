@@ -382,3 +382,255 @@ export interface ModuleType {
 export interface ModuleTypesListResponse {
   moduleTypes: ModuleType[];
 }
+
+/* ---- Comunicaciones: Switch -> Puerto -> Enlace_com ------------------- */
+
+export interface SwitchEntity {
+  id: string;
+  projectId: string;
+  tagSwitch: string;
+  descripcion: string | null;
+  marcaModelo: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface SwitchesListResponse {
+  projectId: string;
+  switches: SwitchEntity[];
+}
+
+export interface SwitchResponse {
+  switch: SwitchEntity;
+}
+
+export interface SwitchInput {
+  tagSwitch: string;
+  descripcion: string | null;
+  marcaModelo: string | null;
+}
+
+export interface Port {
+  id: string;
+  projectId: string;
+  switchId: string;
+  numeroPuerto: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface PortsListResponse {
+  projectId: string;
+  ports: Port[];
+}
+
+export interface CommLink {
+  id: string;
+  projectId: string;
+  equipoId: string | null;
+  instrumentoId: string | null;
+  puertoId: string;
+  tipoComId: string | null;
+  tipoMedioId: string | null;
+  tagMedio: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface CommLinksListResponse {
+  projectId: string;
+  commLinks: CommLink[];
+}
+
+export interface CommLinkInput {
+  equipoId: string | null;
+  instrumentoId: string | null;
+  puertoId: string;
+  tipoComId: string | null;
+  tipoMedioId: string | null;
+  tagMedio: string | null;
+}
+
+/* ---- Conexionado físico: Caja/Cable/Par_conductor/Punto/Ruta ---------- */
+
+export interface Box {
+  id: string;
+  projectId: string;
+  tagCaja: string;
+  descripcion: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface BoxesListResponse {
+  projectId: string;
+  boxes: Box[];
+}
+
+export interface BoxResponse {
+  box: Box;
+}
+
+export interface BoxInput {
+  tagCaja: string;
+  descripcion: string | null;
+}
+
+export interface Cable {
+  id: string;
+  projectId: string;
+  tagCable: string;
+  tipoCable: string | null;
+  capacidadConductores: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface CablesListResponse {
+  projectId: string;
+  cables: Cable[];
+}
+
+export interface CableResponse {
+  cable: Cable;
+}
+
+export interface CableInput {
+  tagCable: string;
+  tipoCable: string | null;
+  capacidadConductores: number;
+}
+
+export interface ConductorPair {
+  id: string;
+  projectId: string;
+  cableId: string;
+  numeroPar: number;
+  /** Derivado: hay un tramo_conexion activo que lo usa. No es un campo propio. */
+  inUse: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface ConductorPairsListResponse {
+  projectId: string;
+  conductorPairs: ConductorPair[];
+}
+
+export type ConnectionPointOwnerField =
+  | 'instrumentoId'
+  | 'equipoId'
+  | 'cajaId'
+  | 'rioId'
+  | 'moduloId';
+
+export interface ConnectionPoint {
+  id: string;
+  projectId: string;
+  instrumentoId: string | null;
+  equipoId: string | null;
+  cajaId: string | null;
+  rioId: string | null;
+  moduloId: string | null;
+  regleta: string | null;
+  bornera: string | null;
+  borne: string | null;
+  lado: string | null;
+  circuito: string | null;
+  hilo: string | null;
+  descripcion: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface ConnectionPointsListResponse {
+  projectId: string;
+  connectionPoints: ConnectionPoint[];
+}
+
+/** Exactamente uno de los 5 campos de dueño debe tener valor (XOR). */
+export interface ConnectionPointInput {
+  instrumentoId: string | null;
+  equipoId: string | null;
+  cajaId: string | null;
+  rioId: string | null;
+  moduloId: string | null;
+  regleta: string | null;
+  bornera: string | null;
+  borne: string | null;
+  lado: string | null;
+  circuito: string | null;
+  hilo: string | null;
+  descripcion: string | null;
+}
+
+export interface RouteSegment {
+  id: string;
+  routeId: string;
+  numeroOrden: number;
+  parConductorId: string;
+  puntoOrigenId: string;
+  puntoDestinoId: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface ConnectionRoute {
+  id: string;
+  projectId: string;
+  senalId: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+/** GET /:routeId trae la ruta con sus tramos anidados (ver connectionRoutes.ts). */
+export interface ConnectionRouteWithSegments extends ConnectionRoute {
+  segments: RouteSegment[];
+}
+
+export interface RoutesListResponse {
+  projectId: string;
+  routes: ConnectionRoute[];
+}
+
+export interface RouteResponse {
+  route: ConnectionRouteWithSegments;
+}
+
+/** Body de POST /routes — ver connectionRoutes.ts: un solo INSERT atómico. */
+export interface RouteSegmentInput {
+  parConductorId: string;
+  puntoOrigenId: string;
+  puntoDestinoId: string;
+}
+
+export interface RouteInput {
+  senalId: string;
+  segments: RouteSegmentInput[];
+}

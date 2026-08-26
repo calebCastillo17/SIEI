@@ -26,6 +26,7 @@ import { loopsRouter } from './routes/loops.js';
 import { clientsRouter } from './routes/clients.js';
 import { usersRouter } from './routes/users.js';
 import { membersRouter } from './routes/members.js';
+import { createSimpleCatalogRouter } from './lib/simpleCatalogRouter.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 
 const app = express();
@@ -152,6 +153,41 @@ app.use('/api/projects', projectsRouter);
  * usan requireProjectPermission.
  */
 app.use('/api/catalogs/module-types', moduleTypesRouter);
+
+/*
+ * Catálogos de dominio ABIERTO (sin seed, "no lista cerrada confirmada")
+ * — admiten POST, solo es_admin_sistema.
+ */
+app.use(
+  '/api/catalogs/interface-types',
+  createSimpleCatalogRouter('cat.cat_tipo_interfaz', true)
+);
+app.use(
+  '/api/catalogs/com-types',
+  createSimpleCatalogRouter('cat.cat_tipo_com', true)
+);
+app.use(
+  '/api/catalogs/com-media-types',
+  createSimpleCatalogRouter('cat.cat_tipo_medio_com', true)
+);
+
+/*
+ * Catálogos de lista CERRADA ya confirmada en los Excel de origen — solo
+ * lectura, ya sembrados por la migración 001.
+ */
+app.use(
+  '/api/catalogs/revision-states',
+  createSimpleCatalogRouter('cat.cat_estado_revision', false)
+);
+app.use(
+  '/api/catalogs/alarm-priorities',
+  createSimpleCatalogRouter('cat.cat_prioridad_alarma', false)
+);
+app.use(
+  '/api/catalogs/pnid-states',
+  createSimpleCatalogRouter('cat.cat_estado_pnid', false)
+);
+
 app.use('/api/clients', clientsRouter);
 app.use('/api/users', usersRouter);
 

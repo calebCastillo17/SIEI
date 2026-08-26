@@ -13,6 +13,7 @@
     "test:loops": "tsx tests/loops.api.test.ts",
     "test:projects-admin": "tsx tests/projects-admin.api.test.ts",
     "test:users-members": "tsx tests/users-members.api.test.ts",
+    "test:catalogs": "tsx tests/catalogs.api.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"

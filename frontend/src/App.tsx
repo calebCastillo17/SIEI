@@ -8,6 +8,9 @@ import { InstrumentDetailPage } from './pages/InstrumentDetailPage';
 import { SignalsListPage } from './pages/SignalsListPage';
 import { SignalFormPage } from './pages/SignalFormPage';
 import { SignalDetailPage } from './pages/SignalDetailPage';
+import { EquipmentListPage } from './pages/EquipmentListPage';
+import { EquipmentFormPage } from './pages/EquipmentFormPage';
+import { EquipmentDetailPage } from './pages/EquipmentDetailPage';
 
 function App() {
   return (
@@ -32,6 +35,12 @@ function App() {
         <Route
           path="/projects/:projectId/signals/:signalId"
           element={<SignalDetailPage />}
+        />
+        <Route path="/projects/:projectId/equipment" element={<EquipmentListPage />} />
+        <Route path="/projects/:projectId/equipment/new" element={<EquipmentFormPage />} />
+        <Route
+          path="/projects/:projectId/equipment/:equipmentId"
+          element={<EquipmentDetailPage />}
         />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Route>

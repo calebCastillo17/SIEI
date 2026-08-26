@@ -73,6 +73,12 @@ export function AppLayout() {
                 Instrumentos
               </NavLink>
               <NavLink
+                to={`/projects/${currentProject.id}/equipment`}
+                className="app-nav__link"
+              >
+                Equipos
+              </NavLink>
+              <NavLink
                 to={`/projects/${currentProject.id}/signals`}
                 className="app-nav__link"
               >

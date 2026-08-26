@@ -134,6 +134,31 @@ export interface EquipmentListResponse {
   equipment: Equipment[];
 }
 
+export interface EquipmentResponse {
+  equipment: Equipment;
+}
+
+/**
+ * POST/PATCH/DELETE de equipos devuelven un subconjunto más chico que GET
+ * (ver equipment.ts) — igual que instrumentos, solo se usa `id` de la
+ * respuesta para navegar y se vuelve a pedir el detalle con GET.
+ */
+export interface EquipmentMutationResponse {
+  equipment: {
+    id: string;
+    projectId: string;
+  };
+}
+
+/** Campos que POST/PATCH de equipos aceptan (ver equipment.ts). */
+export interface EquipmentInput {
+  tagEquipo: string;
+  descripcion: string | null;
+  sistema: string | null;
+  nodo: string | null;
+  panel: string | null;
+}
+
 /** Fila de cualquiera de los catálogos simples (ver lib/simpleCatalogRouter.ts). */
 export interface CatalogItem {
   id: string;

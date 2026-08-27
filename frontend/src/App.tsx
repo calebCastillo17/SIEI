@@ -5,6 +5,8 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { InstrumentsListPage } from './pages/InstrumentsListPage';
 import { InstrumentFormPage } from './pages/InstrumentFormPage';
 import { InstrumentDetailPage } from './pages/InstrumentDetailPage';
+import { PnidImportsPage } from './pages/PnidImportsPage';
+import { PnidImportDetailPage } from './pages/PnidImportDetailPage';
 import { SignalsListPage } from './pages/SignalsListPage';
 import { SignalFormPage } from './pages/SignalFormPage';
 import { SignalDetailPage } from './pages/SignalDetailPage';
@@ -42,6 +44,14 @@ function App() {
         <Route
           path="/projects/:projectId/instruments/new"
           element={<InstrumentFormPage />}
+        />
+        <Route
+          path="/projects/:projectId/instruments/pnid-imports"
+          element={<PnidImportsPage />}
+        />
+        <Route
+          path="/projects/:projectId/instruments/pnid-imports/:importId"
+          element={<PnidImportDetailPage />}
         />
         <Route
           path="/projects/:projectId/instruments/:instrumentId"

@@ -54,7 +54,13 @@ export interface ProjectResponse {
   project: Project;
 }
 
-/** Instrumento tal como lo devuelve GET (lista y detalle). */
+/**
+ * Instrumento tal como lo devuelve GET (lista y detalle) — incluye las
+ * columnas agregadas por la importación P&ID (ver database/migrations/
+ * 004_pnid_import.sql y backend/src/routes/instruments.ts). `pnpid`,
+ * `fuentePnpid` y `estadoPnidId` los administra solo el flujo de
+ * importación (o acceso directo a la base): no viajan en InstrumentInput.
+ */
 export interface Instrument {
   id: string;
   projectId: string;
@@ -68,6 +74,16 @@ export interface Instrument {
   sistema: string | null;
   ubicacion: string | null;
   nodo: string | null;
+  tagAnterior: string | null;
+  tecnologia: string | null;
+  funcionamiento: string | null;
+  cuerpoInstrumento: string | null;
+  conexionProceso: string | null;
+  planoPnid: string | null;
+  lineaPnid: string | null;
+  tipoSenalPnid: string | null;
+  equipoAsociadoId: string | null;
+  equipoAsociadoTag: string | null;
   fechaAgregado: string | null;
   fechaUltimaRevision: string | null;
   active: boolean;
@@ -100,17 +116,30 @@ export interface InstrumentMutationResponse {
   };
 }
 
-/** Campos que POST/PATCH de instrumentos aceptan (ver instruments.ts). */
+/**
+ * Campos que POST/PATCH de instrumentos aceptan (ver instruments.ts).
+ * `pnpid`/`fuentePnpid` NO están acá a propósito: el backend rechaza con
+ * 400 si esas claves siquiera están presentes en el body — los administra
+ * únicamente la importación P&ID.
+ */
 export interface InstrumentInput {
   tagInstrumento: string;
-  pnpid: string | null;
-  fuentePnpid: string | null;
   descripcion: string | null;
   tipoInstrumento: string | null;
   servicio: string | null;
   sistema: string | null;
   ubicacion: string | null;
   nodo: string | null;
+  tagAnterior: string | null;
+  tecnologia: string | null;
+  funcionamiento: string | null;
+  cuerpoInstrumento: string | null;
+  conexionProceso: string | null;
+  planoPnid: string | null;
+  lineaPnid: string | null;
+  tipoSenalPnid: string | null;
+  equipoAsociadoId: string | null;
+  equipoAsociadoTag: string | null;
 }
 
 /** Equipo tal como lo devuelve GET (ver equipment.ts). */
@@ -787,4 +816,134 @@ export interface MemberInput {
   email: string;
   nombre: string | null;
   rol: ProjectRole;
+}
+
+/* ---- Importación de Instrumentos desde P&ID / Plant 3D ----------------
+ * Tipos que reflejan exactamente backend/src/routes/pnidImports.ts. Dos
+ * formas de "resultado" distintas y NO intercambiables: la de PREVIEW
+ * (`PnidPreviewResultado`, trae `filaIndex`) y la del detalle GET
+ * (`PnidDetailResultado`, trae `id`/`numeroFila`/`aplicado`/`aplicadoAt`).
+ * No inventar un tipo único que las mezcle. */
+
+export type PnidImportEstado = 'PREVISUALIZADO' | 'APLICADO' | 'DESCARTADO' | 'ERROR';
+
+export interface PnidImportCounts {
+  sinCambios: number;
+  nuevos: number;
+  tagModificado: number;
+  datosModificados: number;
+  excluidosListado: number;
+  noExisteReporte: number;
+  requiereRevision: number;
+}
+
+export interface PnidPreviousImportRef {
+  importacionId: string;
+  fechaCarga: string;
+  estado: PnidImportEstado;
+}
+
+export interface PnidImportWarnings {
+  missingKnownColumns: string[];
+  unknownColumns: string[];
+  archivoYaImportadoAntes?: PnidPreviousImportRef;
+}
+
+/** `createdBy`/`appliedBy` son solo el ID numérico del usuario (string) —
+ * el backend no expone nombre/email en esta respuesta (ver comentario en
+ * PnidImportsPage). No inventar una resolución a nombre acá. */
+export interface PnidImport {
+  id: string;
+  projectId: string;
+  nombreArchivo: string;
+  hashArchivo: string;
+  fuente: string;
+  estado: PnidImportEstado;
+  totalFilas: number;
+  totalListadoTrue: number;
+  conteos: PnidImportCounts;
+  advertencias: PnidImportWarnings;
+  fechaCarga: string;
+  fechaAplicacion: string | null;
+  createdBy: string | null;
+  appliedBy: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface PnidFieldDiff {
+  campo: string;
+  anterior: string | null;
+  nuevo: string | null;
+}
+
+/** Para REQUIERE_REVISION/TAG_DUPLICADO/TAG_VACIO el backend manda una
+ * explicación en prosa en vez de un arreglo de diffs por campo. */
+export type PnidDiferencias = PnidFieldDiff[] | { detalle: string } | null;
+
+/** Todos los campos mapeados de la fila fuente (no solo los que cambiaron
+ * respecto al instrumento existente) — claves = PnidField (ver
+ * pnidLabels.ts). null si no hay fila fuente (NO_EXISTE_EN_PNID). */
+export type PnidDatosPropuestos = Record<string, string | null> | null;
+
+/** Forma de cada resultado dentro de la respuesta de POST /preview. */
+export interface PnidPreviewResultado {
+  filaIndex: number | null;
+  pnpid: string | null;
+  tagInstrumento: string | null;
+  instrumentoId: string | null;
+  resultado: string;
+  diferencias: PnidDiferencias;
+  requiereRevision: boolean;
+  datosPropuestos: PnidDatosPropuestos;
+}
+
+/** Forma de cada resultado dentro de GET /:importId (detalle). */
+export interface PnidDetailResultado {
+  id: string;
+  importacionId: string;
+  filaId: string | null;
+  numeroFila: number | null;
+  pnpid: string | null;
+  tagInstrumento: string | null;
+  instrumentoId: string | null;
+  resultado: string;
+  diferencias: PnidDiferencias;
+  requiereRevision: boolean;
+  aplicado: boolean;
+  aplicadoAt: string | null;
+  datosPropuestos: PnidDatosPropuestos;
+}
+
+export interface PnidImportsListResponse {
+  projectId: string;
+  imports: PnidImport[];
+}
+
+export interface PnidPreviewResponse {
+  import: PnidImport;
+  resultados: PnidPreviewResultado[];
+}
+
+export interface PnidImportDetailResponse {
+  import: PnidImport;
+  resultados: PnidDetailResultado[];
+}
+
+/** POST /:importId/apply devuelve una forma angosta (sin conteos) — hay
+ * que volver a pedir el detalle con GET para ver el resumen posterior. */
+export interface PnidApplyResponse {
+  import: {
+    id: string;
+    projectId: string;
+    estado: PnidImportEstado;
+  };
+}
+
+export interface PnidDiscardResponse {
+  import: {
+    id: string;
+    projectId: string;
+    estado: PnidImportEstado;
+  };
 }

@@ -33,18 +33,32 @@ interface ApiFetchOptions {
  * desarrollo (ver backend/src/middleware/authenticate.ts). Cuando se
  * integre Microsoft Entra ID, este es el único lugar que hay que cambiar
  * para pasar a un token real.
+ *
+ * `body` como FormData (única excepción a "todo es JSON"): la importación
+ * P&ID sube un archivo (multipart/form-data, ver backend/src/routes/
+ * pnidImports.ts `upload.single('file')`) — el navegador debe fijar el
+ * Content-Type con su propio boundary, nunca application/json.
  */
 export async function apiFetch<T>(
   path: string,
   options: ApiFetchOptions
 ): Promise<T> {
+  const isFormData = options.body instanceof FormData;
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: options.method ?? 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Dev-User-Email': options.devUserEmail
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+    headers: isFormData
+      ? { 'X-Dev-User-Email': options.devUserEmail }
+      : {
+          'Content-Type': 'application/json',
+          'X-Dev-User-Email': options.devUserEmail
+        },
+    body:
+      options.body === undefined
+        ? undefined
+        : isFormData
+          ? (options.body as FormData)
+          : JSON.stringify(options.body)
   });
 
   let json: unknown = null;

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { useDevUser } from '../auth/DevUserContext';
@@ -7,6 +7,9 @@ import { deactivateInstrument, listInstruments } from '../api/instruments';
 import { useAsyncData } from '../lib/useAsyncData';
 import type { Instrument } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
+import { PnidEstadoBadge } from '../components/PnidEstadoBadge';
+import { usePnidEstados } from '../components/usePnidEstados';
+import { PNID_ESTADO_LABELS } from '../components/pnidLabels';
 
 export function InstrumentsListPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -28,8 +31,69 @@ export function InstrumentsListPage() {
     refresh: load
   } = useAsyncData<Instrument[]>(fetchInstruments);
 
+  const { itemsById: pnidEstadosById } = usePnidEstados(devUser.email);
+
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Error | null>(null);
+
+  const [searchText, setSearchText] = useState('');
+  const [estadoFilter, setEstadoFilter] = useState('');
+  const [sistemaFilter, setSistemaFilter] = useState('');
+  const [nodoFilter, setNodoFilter] = useState('');
+
+  const items = useMemo(() => instruments ?? [], [instruments]);
+
+  /* Opciones de Sistema/Nodo = valores realmente presentes en los
+   * instrumentos ya cargados — no son catálogos propios (son texto libre
+   * en nucleo.instrumento), así que no hay de dónde más sacar la lista. */
+  const sistemaOptions = useMemo(
+    () => [...new Set(items.map((i) => i.sistema).filter((v): v is string => Boolean(v)))].sort(),
+    [items]
+  );
+  const nodoOptions = useMemo(
+    () => [...new Set(items.map((i) => i.nodo).filter((v): v is string => Boolean(v)))].sort(),
+    [items]
+  );
+
+  /*
+   * Filtrado en el cliente: GET /instruments no acepta ningún query param
+   * de búsqueda hoy (ver instruments.ts) — igual que en la tabla de
+   * resultados del import P&ID, con la escala real de un proyecto
+   * (cientos de instrumentos, no miles) filtrar sobre la lista ya cargada
+   * es razonable, no hace falta paginación/búsqueda server-side para esto.
+   */
+  const filteredItems = useMemo(() => {
+    const needle = searchText.trim().toLowerCase();
+
+    return items.filter((instrument) => {
+      if (estadoFilter) {
+        const codigo = instrument.estadoPnidId
+          ? (pnidEstadosById.get(instrument.estadoPnidId)?.codigo ?? null)
+          : null;
+        if (codigo !== estadoFilter) return false;
+      }
+
+      if (sistemaFilter && instrument.sistema !== sistemaFilter) return false;
+      if (nodoFilter && instrument.nodo !== nodoFilter) return false;
+
+      if (needle.length === 0) return true;
+
+      const haystack = [
+        instrument.tagInstrumento,
+        instrument.tagAnterior,
+        instrument.pnpid,
+        instrument.servicio,
+        instrument.tipoInstrumento,
+        instrument.sistema,
+        instrument.nodo
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(' ')
+        .toLowerCase();
+
+      return haystack.includes(needle);
+    });
+  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, pnidEstadosById]);
 
   if (!projectId) {
     return <p>Falta el proyecto en la URL.</p>;
@@ -59,7 +123,6 @@ export function InstrumentsListPage() {
   const canWrite = project?.access.permissions.write ?? false;
   const canDeactivate = project?.access.permissions.deactivate ?? false;
   const error = actionError ?? loadError;
-  const items = instruments ?? [];
 
   return (
     <section>
@@ -78,11 +141,21 @@ export function InstrumentsListPage() {
             Actualizar
           </button>
           {/*
-            El botón refleja el permiso para no ofrecer una acción que el
-            backend igual va a rechazar — pero la autorización real la
-            aplica requireProjectPermission('write') en el servidor, esto
-            es solo una guía visual.
+            Los botones reflejan el permiso para no ofrecer una acción que
+            el backend igual va a rechazar — pero la autorización real la
+            aplica requireProjectPermission('write')/('read') en el
+            servidor, esto es solo una guía visual. Un usuario sin permiso
+            de escritura igual puede entrar al historial de importaciones
+            P&ID (requiere solo 'read'), solo no puede generar preview,
+            aplicar ni descartar desde ahí.
           */}
+          <button
+            type="button"
+            className="button button--secondary"
+            onClick={() => navigate(`/projects/${projectId}/instruments/pnid-imports`)}
+          >
+            Importar P&amp;ID
+          </button>
           <button
             type="button"
             className="button"
@@ -104,48 +177,121 @@ export function InstrumentsListPage() {
       )}
 
       {!loading && items.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>TAG</th>
-              <th>Tipo</th>
-              <th>Servicio</th>
-              <th>Sistema</th>
-              <th>Ubicación</th>
-              <th aria-label="Acciones" />
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((instrument) => (
-              <tr key={instrument.id}>
-                <td>
-                  <Link to={`/projects/${projectId}/instruments/${instrument.id}`}>
-                    {instrument.tagInstrumento}
-                  </Link>
-                </td>
-                <td>{instrument.tipoInstrumento ?? '—'}</td>
-                <td>{instrument.servicio ?? '—'}</td>
-                <td>{instrument.sistema ?? '—'}</td>
-                <td>{instrument.ubicacion ?? '—'}</td>
-                <td className="table__row-actions">
-                  <button
-                    type="button"
-                    className="button button--danger button--small"
-                    disabled={!canDeactivate || deactivatingId === instrument.id}
-                    title={
-                      canDeactivate
-                        ? undefined
-                        : 'Tu rol no tiene permiso de desactivación en este proyecto.'
-                    }
-                    onClick={() => handleDeactivate(instrument)}
-                  >
-                    {deactivatingId === instrument.id ? 'Desactivando…' : 'Desactivar'}
-                  </button>
-                </td>
+        <>
+          <div className="form form--inline">
+            <label className="form__field">
+              <span>Buscar</span>
+              <input
+                type="text"
+                placeholder="TAG, TAG anterior, PnPID, servicio, tipo, sistema o nodo"
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+              />
+            </label>
+            <label className="form__field">
+              <span>Estado P&amp;ID</span>
+              <select value={estadoFilter} onChange={(event) => setEstadoFilter(event.target.value)}>
+                <option value="">Todos</option>
+                {Object.entries(PNID_ESTADO_LABELS).map(([codigo, label]) => (
+                  <option key={codigo} value={codigo}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="form__field">
+              <span>Sistema</span>
+              <select value={sistemaFilter} onChange={(event) => setSistemaFilter(event.target.value)}>
+                <option value="">Todos</option>
+                {sistemaOptions.map((sistema) => (
+                  <option key={sistema} value={sistema}>
+                    {sistema}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="form__field">
+              <span>Nodo</span>
+              <select value={nodoFilter} onChange={(event) => setNodoFilter(event.target.value)}>
+                <option value="">Todos</option>
+                {nodoOptions.map((nodo) => (
+                  <option key={nodo} value={nodo}>
+                    {nodo}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <p className="page-subtitle">
+            Mostrando {filteredItems.length} de {items.length} instrumentos.
+          </p>
+        </>
+      )}
+
+      {!loading && items.length > 0 && filteredItems.length === 0 && (
+        <p>Ningún instrumento coincide con la búsqueda/filtro actual.</p>
+      )}
+
+      {!loading && filteredItems.length > 0 && (
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>TAG</th>
+                <th>TAG anterior</th>
+                <th>Tipo</th>
+                <th>Servicio</th>
+                <th>Sistema</th>
+                <th>Nodo</th>
+                <th>PnPID</th>
+                <th>Estado P&amp;ID</th>
+                <th aria-label="Acciones" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filteredItems.map((instrument) => (
+                <tr key={instrument.id}>
+                  <td>
+                    <Link to={`/projects/${projectId}/instruments/${instrument.id}`}>
+                      {instrument.tagInstrumento}
+                    </Link>
+                  </td>
+                  <td>{instrument.tagAnterior ?? '—'}</td>
+                  <td>{instrument.tipoInstrumento ?? '—'}</td>
+                  <td>{instrument.servicio ?? '—'}</td>
+                  <td>{instrument.sistema ?? '—'}</td>
+                  <td>{instrument.nodo ?? '—'}</td>
+                  <td>{instrument.pnpid ?? '—'}</td>
+                  <td>
+                    <PnidEstadoBadge
+                      codigo={
+                        instrument.estadoPnidId
+                          ? (pnidEstadosById.get(instrument.estadoPnidId)?.codigo ?? null)
+                          : null
+                      }
+                    />
+                  </td>
+                  <td className="table__row-actions">
+                    <button
+                      type="button"
+                      className="button button--danger button--small"
+                      disabled={!canDeactivate || deactivatingId === instrument.id}
+                      title={
+                        canDeactivate
+                          ? undefined
+                          : 'Tu rol no tiene permiso de desactivación en este proyecto.'
+                      }
+                      onClick={() => handleDeactivate(instrument)}
+                    >
+                      {deactivatingId === instrument.id ? 'Desactivando…' : 'Desactivar'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

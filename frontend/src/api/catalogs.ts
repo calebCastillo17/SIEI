@@ -48,6 +48,13 @@ export const listComTypes = (devUserEmail: string) =>
 export const listComMediaTypes = (devUserEmail: string) =>
   listCatalog('/api/catalogs/com-media-types', devUserEmail);
 
+/** cat.cat_estado_pnid — usado para mostrar el estado P&ID de un
+ * instrumento (Instrument.estadoPnidId es un id crudo; acá se resuelve a
+ * su código legible, ver PnidEstadoBadge). Es de lista cerrada (`writable:
+ * false`), igual que la mayoría de los otros 8 catálogos de este archivo. */
+export const listPnidStates = (devUserEmail: string) =>
+  listCatalog('/api/catalogs/pnid-states', devUserEmail);
+
 export const createInterfaceType = (input: CatalogInput, devUserEmail: string) =>
   createCatalogItem('/api/catalogs/interface-types', input, devUserEmail);
 

@@ -422,6 +422,39 @@ a {
   margin: -8px 0 16px;
 }
 
+/* Aclaración neutral (no es un error ni una advertencia bloqueante). */
+.form__note {
+  font-size: 13px;
+  color: var(--text);
+  margin: -4px 0 12px;
+}
+
+/* ---- Avisos no bloqueantes (advertencias de estructura P&ID, etc.) --- */
+
+.notice {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.notice h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.notice ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+.notice + .notice {
+  margin-top: -8px;
+}
+
 /* ---- Detail list ----------------------------------------------------- */
 
 .detail-list {

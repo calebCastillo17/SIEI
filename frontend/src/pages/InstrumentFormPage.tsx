@@ -8,6 +8,7 @@ import { ApiError } from '../api/client';
 import type { InstrumentInput } from '../api/types';
 import { InstrumentForm } from '../components/InstrumentForm';
 import { emptyInstrumentInput } from '../components/instrumentFormDefaults';
+import { useInstrumentFormOptions } from '../components/useInstrumentFormOptions';
 import { ErrorMessage } from '../components/ErrorMessage';
 
 export function InstrumentFormPage() {
@@ -21,6 +22,12 @@ export function InstrumentFormPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<ApiError | Error | null>(null);
+
+  const {
+    data: options,
+    loading: optionsLoading,
+    error: optionsError
+  } = useInstrumentFormOptions(projectId ?? '', devUser.email);
 
   if (!projectId) {
     return <p>Falta el proyecto en la URL.</p>;
@@ -52,15 +59,20 @@ export function InstrumentFormPage() {
         </p>
       )}
 
-      <ErrorMessage error={error} />
+      <ErrorMessage error={error ?? optionsError} />
 
-      <InstrumentForm
-        initialValue={emptyInstrumentInput()}
-        submitLabel="Crear instrumento"
-        submitting={submitting}
-        onSubmit={handleSubmit}
-        onCancel={() => navigate(`/projects/${projectId}/instruments`)}
-      />
+      {optionsLoading && <p>Cargando opciones del formulario…</p>}
+
+      {options && (
+        <InstrumentForm
+          initialValue={emptyInstrumentInput()}
+          options={options}
+          submitLabel="Crear instrumento"
+          submitting={submitting}
+          onSubmit={handleSubmit}
+          onCancel={() => navigate(`/projects/${projectId}/instruments`)}
+        />
+      )}
     </section>
   );
 }

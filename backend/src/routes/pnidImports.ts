@@ -116,14 +116,24 @@ function serializeResultado(row: Record<string, any>) {
     diferencias: row.diferencias ? JSON.parse(row.diferencias) : null,
     requiereRevision: Boolean(row.requiere_revision),
     aplicado: Boolean(row.aplicado),
-    aplicadoAt: row.aplicado_at
+    aplicadoAt: row.aplicado_at,
+    /*
+     * Todos los campos mapeados de la fila fuente, no solo los que
+     * cambiaron — sin esto, una fila NUEVO_EN_PNID (que nunca tiene
+     * `diferencias`, no hay nada previo contra qué comparar) no muestra
+     * NINGÚN dato del reporte en preview (ej. "Instrumento Asociado" era
+     * invisible hasta aplicar). null si no hay fila fuente (NO_EXISTE_EN_PNID).
+     */
+    datosPropuestos: row.datos_fuente
+      ? extractFieldsFromSnapshot(JSON.parse(row.datos_fuente))
+      : null
   };
 }
 
 const RESULTADO_SELECT = `
   r.id, r.importacion_id, r.fila_id, f.numero_fila, r.pnpid, r.tag_instrumento,
   r.instrumento_id, e.codigo AS resultado_codigo, r.diferencias, r.requiere_revision,
-  r.aplicado, r.aplicado_at
+  r.aplicado, r.aplicado_at, f.datos_fuente
 `;
 
 /*
@@ -511,7 +521,10 @@ pnidImportsRouter.post(
             instrumentoId: entry.instrumentoId,
             resultado: entry.resultadoCodigo,
             diferencias: entry.diferencias,
-            requiereRevision: entry.requiereRevision
+            requiereRevision: entry.requiereRevision,
+            // Mismo motivo que en serializeResultado (GET detalle): todos los
+            // campos mapeados de la fila, no solo los que difieren.
+            datosPropuestos: entry.filaIndex !== null ? parsed.rows[entry.filaIndex].fields : null
           }))
         });
     } catch (error) {

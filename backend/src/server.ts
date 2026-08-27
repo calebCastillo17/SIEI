@@ -23,6 +23,7 @@ import { conductorPairsRouter } from './routes/conductorPairs.js';
 import { connectionPointsRouter } from './routes/connectionPoints.js';
 import { connectionRoutesRouter } from './routes/connectionRoutes.js';
 import { loopsRouter } from './routes/loops.js';
+import { pnidImportsRouter } from './routes/pnidImports.js';
 import { clientsRouter } from './routes/clients.js';
 import { usersRouter } from './routes/users.js';
 import { membersRouter } from './routes/members.js';
@@ -140,6 +141,10 @@ app.use(
 app.use(
   '/api/projects/:projectId/loops',
   loopsRouter
+);
+app.use(
+  '/api/projects/:projectId/pnid-imports',
+  pnidImportsRouter
 );
 app.use(
   '/api/projects/:projectId/members',

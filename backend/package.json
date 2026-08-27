@@ -14,6 +14,7 @@
     "test:projects-admin": "tsx tests/projects-admin.api.test.ts",
     "test:users-members": "tsx tests/users-members.api.test.ts",
     "test:catalogs": "tsx tests/catalogs.api.test.ts",
+    "test:pnid-imports": "tsx tests/pnidImports.api.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"
@@ -25,13 +26,18 @@
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
-    "mssql": "^12.7.0"
+    "jszip": "^3.10.1",
+    "mssql": "^12.7.0",
+    "multer": "^2.2.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/jszip": "^3.4.0",
     "@types/mssql": "^12.3.0",
+    "@types/multer": "^2.2.0",
     "@types/node": "^26.3.0",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"

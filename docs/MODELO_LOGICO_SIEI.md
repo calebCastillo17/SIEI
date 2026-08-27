@@ -291,9 +291,10 @@ Todas las tablas con `proyecto_id` siguen el patrón de FK compuesta descrito en
 | **Propósito** | Dispositivo de campo con identidad de ingeniería propia; puede originar señales y anclar un lazo. |
 | **PK interna** | `id`. `UNIQUE (id, proyecto_id)`. |
 | **FK** | `proyecto_id` → PROYECTO (NOT NULL); `estado_pnid_id` → `CAT_ESTADO_PNID` (nulo). |
-| **Atributos principales** | `tag_instrumento`, `pnpid`, `fuente_pnpid`, `descripcion`, `tipo_instrumento` (texto, 🟡 candidato a catálogo futuro), `servicio`, `sistema`, `ubicacion`, `nodo`, `fecha_agregado`, `fecha_ultima_revision`. |
+| **Atributos principales** | `tag_instrumento`, `pnpid`, `fuente_pnpid`, `descripcion`, `tipo_instrumento` (texto, 🟡 candidato a catálogo futuro), `servicio`, `sistema`, `ubicacion`, `nodo`, `fecha_agregado`, `fecha_ultima_revision`. **Agregados en migración 004** (importación P&ID/Plant 3D, ver `MODELO_FISICO_SIEI.md` 8.3 y `CLAUDE.md`): `tag_anterior`, `tecnologia`, `funcionamiento`, `cuerpo_instrumento`, `conexion_proceso`, `plano_pnid`, `linea_pnid`, `tipo_senal_pnid`, `equipo_asociado_id` (FK opcional → EQUIPO, relación distinta de `SEÑAL.equipo_id`), `equipo_asociado_tag`. |
 | **Obligatorios** | `proyecto_id`, `tag_instrumento`. |
 | **UNIQUE** | `(proyecto_id, tag_instrumento)` 🔵. `(proyecto_id, pnpid)` cuando no nulo 🟡. |
+| **Nota (migración 004)** | `pnpid`/`fuente_pnpid` dejaron de ser editables por el backend vía `POST`/`PATCH` de instrumentos — solo los administra el importador P&ID (`integracion.importacion_pnid*`, ver `MODELO_FISICO_SIEI.md` 8.3.1). |
 | **Relaciones** | `PROYECTO (N)──(1)`; `SEÑAL (0..N)──(1)` dueño directo; `SEÑAL (0..N)──(1)` agrupador funcional (rol distinto); `LAZO (0..1)──(1)` opcional 🔵. |
 | **Integridad** | `tag_instrumento` no es PK; ninguna FK directa hacia CAJA/CABLE/RIO/CANAL/SWITCH 🔵. |
 | **Alcance por proyecto** | Directo. |

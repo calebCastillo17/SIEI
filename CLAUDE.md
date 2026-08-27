@@ -46,7 +46,7 @@ Hard constraints:
 
 ## Database
 
-SQL Server. Schemas: **`nucleo`** (engineering data), **`cat`** (universal catalogs, no `proyecto_id`), **`seguridad`** (users, roles, project access).
+SQL Server. Schemas: **`nucleo`** (engineering data), **`cat`** (universal catalogs, no `proyecto_id`), **`seguridad`** (users, roles, project access), **`integracion`** (persistent import history — currently the P&ID/Plant 3D importer; see migration 004).
 
 ### Migrations (`database/migrations/`)
 
@@ -55,12 +55,23 @@ SQL Server. Schemas: **`nucleo`** (engineering data), **`cat`** (universal catal
 | `001_initial_schema.sql` | Core: `cat` + `nucleo`, 30 tables, composite FKs for multi-project isolation, filtered unique indexes, 12 triggers. |
 | `002_auth_users_roles.sql` | `seguridad`: `usuario`, `rol`, `usuario_proyecto_rol`, the `vw_acceso_proyecto` view, 4 triggers. |
 | `003_user_audit.sql` | Adds `created_by` / `updated_by` (`BIGINT NULL`, FK → `seguridad.usuario`) to all 20 `nucleo` tables. |
+| `004_pnid_import.sql` | Adds P&ID-origin columns to `nucleo.instrumento` (`tag_anterior`, `tecnologia`, `funcionamiento`, `cuerpo_instrumento`, `conexion_proceso`, `plano_pnid`, `linea_pnid`, `tipo_senal_pnid`, `equipo_asociado_id`/`_tag`); adds `DATOS_MODIFICADOS`/`REQUIERE_REVISION` to `cat.cat_estado_pnid`; creates schema `integracion` with `importacion_pnid` / `importacion_pnid_fila` / `importacion_pnid_resultado` (persistent snapshot + comparison history for the P&ID importer). |
 
 Every migration starts with the seven `SET` options (`ANSI_NULLS`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT`, `CONCAT_NULL_YIELDS_NULL`, `QUOTED_IDENTIFIER` **ON**, `NUMERIC_ROUNDABORT` **OFF**). These are **mandatory**, not decorative: without them every `CREATE UNIQUE INDEX ... WHERE ...` fails with error 1934, and because each index sits in its own `GO` batch the failure does not stop the script — tables and triggers get created while the filtered indexes silently do not. Any connection that later runs DML against these tables needs the same options (most drivers set them correctly; the usual offender is `ARITHABORT OFF` from legacy ODBC/OLE DB).
 
 ### Tests (`database/tests/`)
 
-Smoke tests `001`–`017`, run manually against a dev database. They are `BEGIN TRY` / `BEGIN CATCH` blocks that `PRINT` `PASS`/`FAIL` and roll back their own fixtures. **A failure prints but does not fail the process** — they are not usable as a CI gate as written. Several depend on a project with `codigo_proyecto = 'TEST-001'` created by earlier tests, so run them in order.
+Smoke tests `001`–`018`, run manually against a dev database. They are `BEGIN TRY` / `BEGIN CATCH` blocks that `PRINT` `PASS`/`FAIL` and roll back their own fixtures. **A failure prints but does not fail the process** — they are not usable as a CI gate as written. Several depend on a project with `codigo_proyecto = 'TEST-001'` created by earlier tests, so run them in order.
+
+### P&ID / Plant 3D import (`integracion` schema, migration 004)
+
+Two-phase flow (`backend/src/routes/pnidImports.ts`, `backend/src/lib/pnidImport/`): **PREVIEW** parses the uploaded report, persists a full row-by-row snapshot (`importacion_pnid_fila`, one row per physical Excel row, no exceptions) and a comparison result per row (`importacion_pnid_resultado`, which can also exist *without* a row — `fila_id NULL` — for a Plant3D-managed instrument that vanished from the new report entirely) — and never touches `nucleo.instrumento`. **APPLY** re-validates the batch is still `PREVISUALIZADO`, checks that no affected instrument changed since the preview (`instrumento_updated_at_preview` vs. current `updated_at`; any mismatch aborts the *entire* batch with `409 stale_pnid_preview`, never a partial apply), then applies each row's action inside one transaction.
+
+Identity rule: `(proyecto_id, PnPID)` identifies the P&ID object; `TAG` can change under the same `PnPID` without creating a duplicate (`TAG_MODIFICADO`). No fallback-by-TAG matching during normal import — reusing an old TAG for a genuinely new PnPID is flagged `REQUIERE_REVISION`, never resolved automatically. `NO_EXISTE_EN_PNID` (an instrument's PnPID disappeared from the report) is scored only against instruments where `fuente_pnpid = 'PLANT3D'` — a manually-created instrument is never touched by this comparison. `pnpid` / `fuente_pnpid` on `nucleo.instrumento` are no longer editable through the normal instruments POST/PATCH — only this import flow (and direct DB access) can set them; a manual instrument can still exist indefinitely with `pnpid IS NULL`.
+
+The importer tolerates unknown/missing columns instead of failing: a known column absent from the file produces a warning and is excluded from comparison (never inferred as cleared); an unrecognized column is kept in the row snapshot and reported as a warning, never rejected. Header matching is case/accent/separator-insensitive (Unicode NFD-based, generalizing the legacy Excel macro's normalization).
+
+**Real-world parsing gotcha (found via the actual reference report, `reference_excel/162281-620-Instrument List.xlsx`)**: some Plant 3D exports declare every OOXML namespace with an explicit prefix (`<x:worksheet xmlns:x=".../spreadsheetml/2006/main">` instead of the conventional unprefixed default) and reference an Excel Table object via an absolute relationship target — both are valid OOXML but exceljs's parser cannot load them. `backend/src/lib/pnidImport/parseExcel.ts`'s `normalizeNamespacedXlsx()` rewrites the specific namespaces exceljs expects unprefixed and strips the Excel Table object entirely (SIEI never reads it) before handing the buffer to exceljs. This runs unconditionally and is a no-op on normally-formed files.
 
 ### Key modelling decisions (details in `docs/MODELO_FISICO_SIEI.md`)
 

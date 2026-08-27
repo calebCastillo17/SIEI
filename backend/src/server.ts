@@ -27,8 +27,15 @@ import { pnidImportsRouter } from './routes/pnidImports.js';
 import { clientsRouter } from './routes/clients.js';
 import { usersRouter } from './routes/users.js';
 import { membersRouter } from './routes/members.js';
+import { documentacionRouter } from './routes/documentacion.js';
+import { plantillasEntregableRouter } from './routes/plantillasEntregable.js';
+import { configuracionesOrdenRouter } from './routes/configuracionesOrden.js';
+import { entregablesRouter } from './routes/entregables.js';
+import { revisionesEntregableRouter } from './routes/revisionesEntregable.js';
 import { createSimpleCatalogRouter } from './lib/simpleCatalogRouter.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
+import { tiposEntregableRouter } from './routes/tiposEntregable.js';
+import { ordenTipoInstrumentoRouter } from './routes/ordenTipoInstrumento.js';
 
 const app = express();
 
@@ -150,6 +157,26 @@ app.use(
   '/api/projects/:projectId/members',
   membersRouter
 );
+app.use(
+  '/api/projects/:projectId/documentacion',
+  documentacionRouter
+);
+app.use(
+  '/api/projects/:projectId/plantillas-entregable',
+  plantillasEntregableRouter
+);
+app.use(
+  '/api/projects/:projectId/configuraciones-orden',
+  configuracionesOrdenRouter
+);
+app.use(
+  '/api/projects/:projectId/entregables/:entregableId/revisiones',
+  revisionesEntregableRouter
+);
+app.use(
+  '/api/projects/:projectId/entregables',
+  entregablesRouter
+);
 
 app.use('/api/projects', projectsRouter);
 
@@ -211,6 +238,9 @@ app.use(
   '/api/catalogs/com-directions',
   createSimpleCatalogRouter('cat.cat_direccion_com', false)
 );
+
+app.use('/api/catalogs/tipos-entregable', tiposEntregableRouter);
+app.use('/api/catalogs/orden-tipo-instrumento', ordenTipoInstrumentoRouter);
 
 app.use('/api/clients', clientsRouter);
 app.use('/api/users', usersRouter);

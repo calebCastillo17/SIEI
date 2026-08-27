@@ -227,3 +227,25 @@ Al construir el módulo de importación real desde el reporte P&ID/Plant 3D (`da
 - **`INSTRUMENTO_ASOCIADO`** (columna "Instrumento Asociado", agregada por el usuario al reporte real después de la migración 004 — no es una fila previa de esta matriz): implementado como `instrumento_asociado_id` (FK compuesta opcional, auto-referencia a `nucleo.instrumento`) + `instrumento_asociado_tag` (texto literal del P&ID), en `database/migrations/005_instrumento_asociado.sql`. Vínculo INSTRUMENTO↔INSTRUMENTO — "el instrumento contiene al otro instrumento asociado" —, confirmado explícitamente como modelado y sincronizado igual que `EQUIPO_ASOCIADO`: mismo patrón de resolución por TAG en el import, mismo tratamiento en `DIFFABLE_FIELDS` (cambios producen `DATOS_MODIFICADOS`). Un instrumento no puede asociarse a sí mismo (`CK_instrumento_asociado_no_self`).
 
 Ninguno de estos campos se sincroniza automáticamente si su columna no está presente en un reporte dado — ver `CLAUDE.md` sección "P&ID / Plant 3D import" para la estrategia completa de columnas conocidas/desconocidas/ausentes.
+
+## 12. Listado de Instrumentos (LDI, migración 006) — cobertura de `reference_excel/Lista_instrumentos_plantilla.xlsx`
+
+Historial: una primera versión de este entregable se diseñó contra la plantilla `Listado_formato_Macros - PLANTILLA 1.xlsm` (hoja `LIST_INST`, 20 columnas confirmadas incluyendo `N° TAG WSP`). Dos rondas de corrección del usuario después de revisar el LDI generado — remover `N° TAG ANTERIOR`/`SISTEMA` primero, y luego adoptar una plantilla oficial nueva que restauró `SISTEMA` pero eliminó `N° TAG ANTERIOR` por completo — dejaron las **19 columnas** de abajo como el mapeo vigente. La plantilla anterior queda en el repo sin usarse.
+
+Las 19 columnas confirmadas de la hoja `Lista` (fila de encabezado real, fila 9: `Ítem, N° TAG, DESCRIPCIÓN, TIPO, TECNOLOGÍA, CONEXIÓN A PROCESO, LÍNEA, EQUIPO ASOCIADO, SERVICIO, LOCACIÓN, SISTEMA, HOJA DE DATOS, P&ID, DIAGRAMA DE LAZO, PLANO DE UBICACIÓN, MARCA/MODELO, COMENTARIOS, NODO, REV`) mapean así (ver `backend/src/lib/ldi/columns.ts` y `snapshot.ts` para la implementación exacta):
+
+| Columna del reporte | Fuente | Estado |
+|---|---|---|
+| Ítem | generado tras ordenar (nunca antes, a diferencia de la macro legacy); reinicia a `001` en cada cambio de LOCACIÓN | Confirmado |
+| N° TAG | `instrumento.tag_instrumento` | Confirmado |
+| DESCRIPCIÓN, TIPO, TECNOLOGÍA, CONEXIÓN A PROCESO, SERVICIO, SISTEMA, NODO | columnas homónimas de `instrumento` | Confirmado |
+| LÍNEA | `instrumento.linea_pnid` | Confirmado |
+| EQUIPO ASOCIADO | `instrumento.equipo_asociado_tag` (texto libre, no el id resuelto) | Confirmado |
+| LOCACIÓN | `instrumento.ubicacion` — además de columna, es la agrupación VISUAL principal del LDI (filas de sección) y el criterio de orden de mayor jerarquía; los instrumentos sin locación quedan siempre al final | Confirmado |
+| P&ID | `instrumento.plano_pnid` | Confirmado |
+| HOJA DE DATOS, DIAGRAMA DE LAZO, PLANO DE UBICACIÓN, MARCA/MODELO, COMENTARIOS | sin fuente confirmada — celda vacía (`""`), columna nunca eliminada, nunca genera advertencia | Explícitamente diferido |
+| REV | código de la revisión que emite el entregable (mismo valor en todas las filas de una emisión, no siempre `"A"` como la macro legacy) | Confirmado |
+
+**`instrumento.tag_anterior`** sigue existiendo íntegro en el Master (poblado por el import P&ID, ver sección 11) pero **no tiene columna en este entregable** — la plantilla oficial vigente no la trae, y no se reconstruye artificialmente.
+
+La carátula (hoja `Carátula`) y su tabla de revisiones (`B32:J36`, capacidad de 5, la más reciente siempre en la fila 36, encabezado fijo de la tabla en la fila 37 — confirmado leyendo la fórmula real `=LOOKUP(2,1/(NOT(ISBLANK(Carátula!B32:B36))),Carátula!B32:B36)` en `Lista!R3`) están documentadas en `MODELO_FISICO_SIEI.md` sección 8.20 y `CLAUDE.md`.

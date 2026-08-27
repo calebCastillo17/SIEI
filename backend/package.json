@@ -15,6 +15,7 @@
     "test:users-members": "tsx tests/users-members.api.test.ts",
     "test:catalogs": "tsx tests/catalogs.api.test.ts",
     "test:pnid-imports": "tsx tests/pnidImports.api.test.ts",
+    "test:entregables-ldi": "tsx tests/entregablesLdi.api.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"

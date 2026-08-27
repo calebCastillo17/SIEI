@@ -4,6 +4,8 @@
 
 **Leyenda**: 🔵 regla de negocio confirmada · 🟢 evidencia/práctica estándar no contradicha · 🟡 punto todavía sin confirmar explícitamente, señalado para tu atención · ✅ decisión aprobada por el usuario en esta ronda.
 
+**Nota (migración 006)**: las entidades de Entregables (`ENTREGABLE`, `REVISION_ENTREGABLE`, `PLANTILLA_ENTREGABLE`, `CONFIGURACION_ORDEN`, `TIPO_ENTREGABLE`) **no pasaron por este documento** — nunca formaron parte del alcance del núcleo que este archivo cierra (ver `MODELO_CONCEPTUAL_SIEI.md`, "Documentos/Entregables/Revisiones" estaba explícitamente fuera de alcance). Se diseñaron directamente a nivel físico, con su propia ronda de diagnóstico y aprobación de negocio; el registro completo está en `MODELO_FISICO_SIEI.md` sección 8.20 y `CLAUDE.md`. Esto no reabre ni contradice nada de lo cerrado acá.
+
 ---
 
 ## 1. Principios transversales de diseño

@@ -19,6 +19,8 @@ Entidades cubiertas: `CLIENTE, PROYECTO, INSTRUMENTO, EQUIPO, SEÑAL, TIPO/CLASI
 
 Explícitamente **fuera de alcance** en este documento (se modelarán en sus propios módulos más adelante): Matriz Causa-Efecto, Trazabilidad/Ingeniería previa, Documentos/Entregables/Revisiones, atributos definitivos de Cliente/Proyecto (etapas, alcance contractual, disciplinas, convenciones de nomenclatura).
 
+**Actualización (migración 006)**: "Documentos/Entregables/Revisiones" ya no está completamente fuera de alcance — el primer módulo real (Listado de Instrumentos / LDI) está implementado. Ver `CLAUDE.md` sección "Entregables / LDI" y `MODELO_FISICO_SIEI.md` para el modelo físico completo (`nucleo.entregable`, `nucleo.revision_entregable`, etc.). También quedaron resueltos, para este módulo, algunos de los "atributos definitivos de Cliente/Proyecto" señalados arriba como diferidos: etapa, disciplina documental y convención de numeración de documento ahora viven en `nucleo.proyecto_documentacion` y `nucleo.entregable` — como metadatos de documentación separados de la identidad estructural del proyecto, no como columnas nuevas en `PROYECTO`/`CLIENTE`.
+
 ---
 
 ## 2. Entidades

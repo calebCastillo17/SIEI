@@ -30,6 +30,13 @@ import { ProjectMembersPage } from './pages/ProjectMembersPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { UsersPage } from './pages/UsersPage';
 import { OpenCatalogsPage } from './pages/OpenCatalogsPage';
+import { EntregablesListPage } from './pages/EntregablesListPage';
+import { EntregableFormPage } from './pages/EntregableFormPage';
+import { EntregableDetailPage } from './pages/EntregableDetailPage';
+import { RevisionFormPage } from './pages/RevisionFormPage';
+import { RevisionDetailPage } from './pages/RevisionDetailPage';
+import { ProjectDocumentacionPage } from './pages/ProjectDocumentacionPage';
+import { ProjectPlantillasPage } from './pages/ProjectPlantillasPage';
 
 function App() {
   return (
@@ -85,7 +92,23 @@ function App() {
         <Route path="/projects/:projectId/routes/new" element={<RouteFormPage />} />
         <Route path="/projects/:projectId/routes/:routeId" element={<RouteDetailPage />} />
         <Route path="/projects/:projectId/loops" element={<LoopsListPage />} />
+        <Route path="/projects/:projectId/entregables" element={<EntregablesListPage />} />
+        <Route path="/projects/:projectId/entregables/new" element={<EntregableFormPage />} />
+        <Route
+          path="/projects/:projectId/entregables/:entregableId"
+          element={<EntregableDetailPage />}
+        />
+        <Route
+          path="/projects/:projectId/entregables/:entregableId/revisiones/new"
+          element={<RevisionFormPage />}
+        />
+        <Route
+          path="/projects/:projectId/entregables/:entregableId/revisiones/:revisionId"
+          element={<RevisionDetailPage />}
+        />
         <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
+        <Route path="/projects/:projectId/documentacion" element={<ProjectDocumentacionPage />} />
+        <Route path="/projects/:projectId/plantillas" element={<ProjectPlantillasPage />} />
         <Route path="/admin/clients" element={<ClientsPage />} />
         <Route path="/admin/users" element={<UsersPage />} />
         <Route path="/admin/catalogs" element={<OpenCatalogsPage />} />

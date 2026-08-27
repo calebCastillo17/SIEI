@@ -39,7 +39,19 @@ import { ordenTipoInstrumentoRouter } from './routes/ordenTipoInstrumento.js';
 
 const app = express();
 
-app.use(cors());
+/*
+ * exposedHeaders: por defecto CORS solo deja leer a JS un puñado de
+ * headers "seguros" de la respuesta (ninguno de estos dos) aunque el
+ * servidor los mande igual — un fetch() cross-origin (el caso real del
+ * frontend en Codespaces: puertos 5173/3000 son orígenes distintos) recibe
+ * el archivo pero `response.headers.get('Content-Disposition')` da null,
+ * así que el nombre real del archivo (ej. "104-22043-4620003347-LDI-620-J-
+ * 0001_RevA.xlsx") nunca llegaba al navegador y la descarga caía al
+ * nombre de respaldo genérico. X-Archivo-Sha256 tiene el mismo problema
+ * para cualquier verificación de integridad que se quiera hacer del lado
+ * del cliente.
+ */
+app.use(cors({ exposedHeaders: ['Content-Disposition', 'X-Archivo-Sha256'] }));
 app.use(express.json());
 
 

@@ -216,6 +216,25 @@ a {
   color: var(--text);
 }
 
+/* Cabecera de una subsección dentro de una página (ej. "Revisiones"
+ * dentro del detalle de un entregable) — mismo layout que .page-header
+ * pero con margen superior para separarla del bloque anterior. */
+.section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 32px 0 20px;
+  flex-wrap: wrap;
+}
+
+.section-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-h);
+  margin: 0;
+}
+
 /* ---- Buttons ----------------------------------------------------- */
 
 .button {
@@ -629,4 +648,65 @@ a {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
+}
+
+/* ---- Editor de criterios de orden (Entregables / LDI) ---------------- */
+
+.order-criteria {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+}
+
+.order-criteria__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.order-criteria__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-alt);
+}
+
+.order-criteria__position {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.order-criteria__label {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.order-criteria__actions {
+  display: flex;
+  gap: 4px;
+}
+
+.order-criteria__add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-h);
 }

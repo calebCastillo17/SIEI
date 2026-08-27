@@ -102,8 +102,20 @@ export function AppLayout() {
               <NavLink to={`/projects/${currentProject.id}/loops`} className="app-nav__link">
                 Lazos
               </NavLink>
+              <NavLink to={`/projects/${currentProject.id}/entregables`} className="app-nav__link">
+                Entregables
+              </NavLink>
               <NavLink to={`/projects/${currentProject.id}/members`} className="app-nav__link">
                 Miembros
+              </NavLink>
+              <NavLink
+                to={`/projects/${currentProject.id}/documentacion`}
+                className="app-nav__link"
+              >
+                Documentación
+              </NavLink>
+              <NavLink to={`/projects/${currentProject.id}/plantillas`} className="app-nav__link">
+                Plantillas
               </NavLink>
             </>
           )}

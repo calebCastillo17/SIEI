@@ -951,3 +951,255 @@ export interface PnidDiscardResponse {
     estado: PnidImportEstado;
   };
 }
+
+/*
+ * Entregables / LDI (migración 006) — reflejan exactamente lo que
+ * serializan backend/src/routes/{documentacion,plantillasEntregable,
+ * entregables,revisionesEntregable,tiposEntregable}.ts.
+ */
+
+export interface TipoEntregable {
+  id: string;
+  codigo: string;
+  descripcion: string;
+  disciplina: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface TiposEntregableResponse {
+  items: TipoEntregable[];
+}
+
+/** nucleo.proyecto_documentacion — 1:1 con el proyecto, metadatos de
+ * carátula. Todo NULL si el proyecto todavía no cargó nada (ver GET). */
+export interface ProyectoDocumentacion {
+  projectId: string;
+  codigoProyectoCumbra: string | null;
+  codigoProyectoCliente: string | null;
+  tituloCaratula: string | null;
+  etapaCodigo: string | null;
+  etapaNombre: string | null;
+  afe: string | null;
+  vp: string | null;
+  jefeDisciplina: string | null;
+  liderProyecto: string | null;
+  gerenteIngenieriaConstruccion: string | null;
+  inicialesPorDefault: string | null;
+  inicialesRevisadoDefault: string | null;
+  inicialesAprobadoDefault: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface DocumentacionResponse {
+  documentacion: ProyectoDocumentacion;
+}
+
+export type DocumentacionInput = Partial<
+  Omit<ProyectoDocumentacion, 'projectId' | 'createdAt' | 'updatedAt'>
+>;
+
+export interface PlantillaEntregable {
+  id: string;
+  projectId: string;
+  tipoEntregableId: string;
+  nombreArchivo: string;
+  archivoHash: string;
+  tamanioBytes: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+}
+
+export interface PlantillasListResponse {
+  projectId: string;
+  plantillas: PlantillaEntregable[];
+}
+
+export interface PlantillaMutationResponse {
+  plantilla: PlantillaEntregable;
+}
+
+/** Los mismos 11 campos válidos que backend/src/lib/ldi/order.ts
+ * CAMPOS_ORDEN_VALIDOS — si el backend agrega uno nuevo, agregarlo acá y
+ * a CAMPO_LABELS en OrderCriteriaEditor.tsx es lo único que hace falta. */
+export type OrdenCampo =
+  | 'sistema'
+  | 'nodo'
+  | 'tag'
+  | 'tag_anterior'
+  | 'servicio'
+  | 'tipo'
+  | 'tecnologia'
+  | 'locacion'
+  | 'equipo_asociado'
+  | 'instrumento_asociado'
+  | 'orden_instrumentos_asociados';
+
+export interface CriterioOrden {
+  campo: OrdenCampo;
+  direccion: 'ASC' | 'DESC';
+}
+
+export interface Entregable {
+  id: string;
+  projectId: string;
+  tipoEntregableId: string;
+  numeroDocumento: string;
+  componenteEtapa: string | null;
+  componenteProyecto: string | null;
+  componenteCliente: string | null;
+  componenteTipo: string | null;
+  componenteArea: string | null;
+  componenteDisciplina: string | null;
+  componenteCorrelativo: string | null;
+  titulo: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface EntregablesListResponse {
+  projectId: string;
+  entregables: Entregable[];
+}
+
+export interface EntregableResponse {
+  entregable: Entregable;
+}
+
+export interface EntregableInput {
+  tipoEntregableId: string;
+  componenteArea?: string | null;
+  componenteDisciplina?: string | null;
+  componenteCorrelativo: string;
+  titulo?: string | null;
+}
+
+export type RevisionEstado = 'BORRADOR' | 'EMITIDA' | 'DESCARTADA';
+
+export interface RevisionEntregable {
+  id: string;
+  projectId: string;
+  entregableId: string;
+  codigoRevision: string;
+  fecha: string;
+  descripcion: string;
+  inicialesPor: string;
+  inicialesRevisado: string;
+  inicialesAprobado: string;
+  estado: RevisionEstado;
+  configuracionOrdenId: string | null;
+  criteriosAplicados: CriterioOrden[] | null;
+  plantillaId: string | null;
+  archivoId: string | null;
+  emitidaBy: string | null;
+  emitidaAt: string | null;
+  descartadaBy: string | null;
+  descartadaAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+}
+
+export interface RevisionesListResponse {
+  projectId: string;
+  entregableId: string;
+  revisiones: RevisionEntregable[];
+}
+
+/** Las 19 columnas del LDI ya resueltas — ver backend/src/lib/ldi/
+ * snapshot.ts. Genérico a propósito en el backend (JSON), tipado acá solo
+ * para este entregable. */
+export interface LdiSnapshotRow {
+  tag: string;
+  descripcion: string;
+  tipo: string;
+  tecnologia: string;
+  conexionProceso: string;
+  linea: string;
+  equipoAsociado: string;
+  servicio: string;
+  locacion: string;
+  sistema: string;
+  hojaDeDatos: string;
+  pnid: string;
+  diagramaDeLazo: string;
+  planoDeUbicacion: string;
+  marcaModelo: string;
+  comentarios: string;
+  nodo: string;
+  rev: string;
+}
+
+export interface RevisionFila {
+  item: number;
+  instrumentoId?: string;
+  snapshot: LdiSnapshotRow;
+}
+
+export interface RevisionCaratulaHistorial {
+  codigoRevision: string;
+  fecha: string;
+  descripcion: string;
+  inicialesPor: string;
+  inicialesRevisado: string;
+  inicialesAprobado: string;
+}
+
+export interface MetadatosSnapshot {
+  proyectoCumbra: string | null;
+  proyectoCliente: string | null;
+  titulo: string | null;
+  etapaCodigo: string | null;
+  etapaNombre: string | null;
+  afe: string | null;
+  vp: string | null;
+  jefeDisciplina: string | null;
+  liderProyecto: string | null;
+  gerenteIngenieriaConstruccion: string | null;
+  numeroDocumento: string;
+  revisionesMostradasEnCaratula?: RevisionCaratulaHistorial[];
+}
+
+export interface RevisionDetailResponse {
+  revision: RevisionEntregable;
+  metadatosSnapshot: MetadatosSnapshot | null;
+  filas: RevisionFila[];
+}
+
+/** Forma común de POST (crear BORRADOR) y PATCH (editar/regenerar
+ * preview) — ambos devuelven el preview persistido completo. */
+export interface RevisionMutationResponse {
+  revision: RevisionEntregable;
+  metadatosSnapshot: MetadatosSnapshot;
+  totalFilas: number;
+  filas: RevisionFila[];
+}
+
+export interface RevisionEmitirResponse {
+  revision: RevisionEntregable;
+  archivo: {
+    id: string;
+    nombreArchivo: string;
+    archivoHash: string;
+    tamanioBytes: number;
+  };
+}
+
+export interface RevisionCreateInput {
+  codigoRevision: string;
+  fecha?: string;
+  descripcion: string;
+  inicialesPor?: string;
+  inicialesRevisado?: string;
+  inicialesAprobado?: string;
+  criterios?: CriterioOrden[];
+  configuracionOrdenId?: string;
+}
+
+export type RevisionUpdateInput = Partial<RevisionCreateInput>;

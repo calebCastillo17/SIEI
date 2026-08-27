@@ -68,6 +68,7 @@ const MAPPED_FIELD_COLUMNS: Record<Exclude<PnidField, 'pnpid' | 'tagInstrumento'
   tipoSenalPnid: 'tipo_senal_pnid',
   lineaPnid: 'linea_pnid',
   equipoAsociadoTag: 'equipo_asociado_tag',
+  instrumentoAsociadoTag: 'instrumento_asociado_tag',
   servicio: 'servicio',
   ubicacion: 'ubicacion',
   sistema: 'sistema',
@@ -301,7 +302,8 @@ pnidImportsRouter.post(
           SELECT id, tag_instrumento, pnpid, fuente_pnpid, updated_at,
                  descripcion, tipo_instrumento, servicio, sistema, ubicacion, nodo,
                  tag_anterior, tecnologia, funcionamiento, cuerpo_instrumento,
-                 conexion_proceso, plano_pnid, linea_pnid, tipo_senal_pnid, equipo_asociado_tag
+                 conexion_proceso, plano_pnid, linea_pnid, tipo_senal_pnid, equipo_asociado_tag,
+                 instrumento_asociado_tag
           FROM nucleo.instrumento
           WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
             AND activo = 1;
@@ -332,7 +334,8 @@ pnidImportsRouter.post(
           planoPnid: row.plano_pnid,
           lineaPnid: row.linea_pnid,
           tipoSenalPnid: row.tipo_senal_pnid,
-          equipoAsociadoTag: row.equipo_asociado_tag
+          equipoAsociadoTag: row.equipo_asociado_tag,
+          instrumentoAsociadoTag: row.instrumento_asociado_tag
         };
 
         if (snapshot.pnpid) {
@@ -794,6 +797,19 @@ async function applyNuevoInstrumento(
           AND activo = 1
       )`);
     }
+
+    if (field === 'instrumentoAsociadoTag') {
+      // Auto-referencia a nucleo.instrumento — nunca hace falta excluir la
+      // propia fila acá: todavía no existe (es un INSERT), no puede
+      // resolver a sí misma.
+      columns.push('instrumento_asociado_id');
+      values.push(`(
+        SELECT TOP (1) id FROM nucleo.instrumento
+        WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+          AND tag_instrumento = @${paramName}
+          AND activo = 1
+      )`);
+    }
   }
 
   await request.query(`
@@ -856,6 +872,22 @@ async function applyActualizarInstrumento(
           WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
             AND tag_equipo = @${paramName}
             AND activo = 1
+        )
+      `);
+    }
+
+    if (field === 'instrumentoAsociadoTag') {
+      // Excluye la propia fila: un TAG asociado que por error coincide con
+      // el TAG del mismo instrumento nunca debe resolver a auto-referencia
+      // (CK_instrumento_asociado_no_self la rechazaría igual, pero acá
+      // resolvemos a NULL en silencio en vez de abortar todo el batch).
+      assignments.push(`
+        instrumento_asociado_id = (
+          SELECT TOP (1) id FROM nucleo.instrumento
+          WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND tag_instrumento = @${paramName}
+            AND activo = 1
+            AND id <> TRY_CONVERT(BIGINT, @instrumento_id)
         )
       `);
     }

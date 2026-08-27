@@ -24,6 +24,7 @@ export const PNID_FIELD_LABELS: Record<string, string> = {
   tipoSenalPnid: 'Tipo de señal (P&ID)',
   lineaPnid: 'Línea P&ID',
   equipoAsociadoTag: 'Equipo asociado',
+  instrumentoAsociadoTag: 'Instrumento asociado',
   servicio: 'Servicio',
   ubicacion: 'Ubicación',
   sistema: 'Sistema',

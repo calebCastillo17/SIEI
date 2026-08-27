@@ -27,6 +27,7 @@ export type PnidField =
   | 'tipoSenalPnid'
   | 'lineaPnid'
   | 'equipoAsociadoTag'
+  | 'instrumentoAsociadoTag'
   | 'servicio'
   | 'ubicacion'
   | 'sistema'
@@ -71,6 +72,7 @@ const CANONICAL_HEADERS: Array<{ header: string; field: PnidField }> = [
   { header: 'Tipo de Senal', field: 'tipoSenalPnid' },
   { header: 'Line', field: 'lineaPnid' },
   { header: 'Equipo Asociado', field: 'equipoAsociadoTag' },
+  { header: 'Instrumento Asociado', field: 'instrumentoAsociadoTag' },
   { header: 'Servicio', field: 'servicio' },
   { header: 'Location', field: 'ubicacion' },
   { header: 'Sistema', field: 'sistema' },
@@ -151,6 +153,7 @@ export const PNID_FIELD_MAX_LENGTH: Record<PnidField, number> = {
   tipoSenalPnid: 50,
   lineaPnid: 100,
   equipoAsociadoTag: 50,
+  instrumentoAsociadoTag: 50,
   servicio: 200,
   ubicacion: 100,
   sistema: 50,

@@ -6,7 +6,10 @@ import type { InstrumentFormOptions } from './useInstrumentFormOptions';
 import { CatalogSelect } from './CatalogSelect';
 import { PNID_FIELD_LABELS } from './pnidLabels';
 
-type TextFieldKey = Exclude<keyof InstrumentInput, 'tagInstrumento' | 'equipoAsociadoId'>;
+type TextFieldKey = Exclude<
+  keyof InstrumentInput,
+  'tagInstrumento' | 'equipoAsociadoId' | 'instrumentoAsociadoId'
+>;
 
 interface FieldSpec {
   key: TextFieldKey;
@@ -41,7 +44,8 @@ const PNID_CONTENT_FIELDS: FieldSpec[] = [
   { key: 'planoPnid', label: PNID_FIELD_LABELS.planoPnid, max: 30 },
   { key: 'lineaPnid', label: PNID_FIELD_LABELS.lineaPnid, max: 100 },
   { key: 'tipoSenalPnid', label: PNID_FIELD_LABELS.tipoSenalPnid, max: 50 },
-  { key: 'equipoAsociadoTag', label: 'Equipo asociado (tag libre)', max: 50 }
+  { key: 'equipoAsociadoTag', label: 'Equipo asociado (tag libre)', max: 50 },
+  { key: 'instrumentoAsociadoTag', label: 'Instrumento asociado (tag libre)', max: 50 }
 ];
 
 interface InstrumentFormProps {
@@ -50,6 +54,10 @@ interface InstrumentFormProps {
   submitLabel: string;
   submitting: boolean;
   disabled?: boolean;
+  /** Id del instrumento que se está editando — se excluye de las opciones
+   * de "Instrumento asociado" (no puede asociarse a sí mismo, ver
+   * CK_instrumento_asociado_no_self). Ausente al crear uno nuevo. */
+  currentInstrumentId?: string;
   onSubmit: (value: InstrumentInput) => void;
   onCancel?: () => void;
 }
@@ -60,6 +68,7 @@ export function InstrumentForm({
   submitLabel,
   submitting,
   disabled = false,
+  currentInstrumentId,
   onSubmit,
   onCancel
 }: InstrumentFormProps) {
@@ -75,6 +84,9 @@ export function InstrumentForm({
   }
 
   const equipmentOptions = options.equipment.map((e) => ({ id: e.id, label: e.tagEquipo }));
+  const instrumentOptions = options.instruments
+    .filter((i) => i.id !== currentInstrumentId)
+    .map((i) => ({ id: i.id, label: i.tagInstrumento }));
 
   return (
     <form className="form form--wide" onSubmit={handleSubmit}>
@@ -122,6 +134,16 @@ export function InstrumentForm({
           />
         </label>
 
+        <label className="form__field">
+          <span>Instrumento asociado</span>
+          <CatalogSelect
+            disabled={disabled || submitting}
+            value={value.instrumentoAsociadoId}
+            onChange={(next) => setValue((prev) => ({ ...prev, instrumentoAsociadoId: next }))}
+            options={instrumentOptions}
+          />
+        </label>
+
         {PNID_CONTENT_FIELDS.map((field) => (
           <label key={field.key} className="form__field">
             <span>{field.label}</span>
@@ -135,9 +157,9 @@ export function InstrumentForm({
           </label>
         ))}
         <p className="form__field form__field--wide form__note">
-          "Equipo asociado" (el selector) y "Equipo asociado (tag libre)" son
-          dos campos independientes en la base — el import P&amp;ID los
-          sincroniza automáticamente, pero este formulario no lo hace.
+          Cada selector y su "(tag libre)" correspondiente son dos campos
+          independientes en la base — el import P&amp;ID los sincroniza
+          automáticamente al aplicar, pero este formulario no lo hace.
         </p>
       </fieldset>
 

@@ -25,6 +25,7 @@ export interface InstrumentSnapshot {
   lineaPnid: string | null;
   tipoSenalPnid: string | null;
   equipoAsociadoTag: string | null;
+  instrumentoAsociadoTag: string | null;
 }
 
 export interface FieldDiff {

@@ -73,6 +73,8 @@ instrumentsRouter.get(
             tipo_senal_pnid,
             equipo_asociado_id,
             equipo_asociado_tag,
+            instrumento_asociado_id,
+            instrumento_asociado_tag,
             fecha_agregado,
             fecha_ultima_revision,
             activo,
@@ -115,6 +117,9 @@ instrumentsRouter.get(
           equipoAsociadoId:
             row.equipo_asociado_id === null ? null : String(row.equipo_asociado_id),
           equipoAsociadoTag: row.equipo_asociado_tag,
+          instrumentoAsociadoId:
+            row.instrumento_asociado_id === null ? null : String(row.instrumento_asociado_id),
+          instrumentoAsociadoTag: row.instrumento_asociado_tag,
 
           fechaAgregado: row.fecha_agregado,
           fechaUltimaRevision: row.fecha_ultima_revision,
@@ -184,6 +189,8 @@ instrumentsRouter.get(
             tipo_senal_pnid,
             equipo_asociado_id,
             equipo_asociado_tag,
+            instrumento_asociado_id,
+            instrumento_asociado_tag,
             fecha_agregado,
             fecha_ultima_revision,
             activo,
@@ -236,6 +243,9 @@ instrumentsRouter.get(
           equipoAsociadoId:
             row.equipo_asociado_id === null ? null : String(row.equipo_asociado_id),
           equipoAsociadoTag: row.equipo_asociado_tag,
+          instrumentoAsociadoId:
+            row.instrumento_asociado_id === null ? null : String(row.instrumento_asociado_id),
+          instrumentoAsociadoTag: row.instrumento_asociado_tag,
 
           fechaAgregado: row.fecha_agregado,
           fechaUltimaRevision: row.fecha_ultima_revision,
@@ -305,7 +315,9 @@ instrumentsRouter.post(
         lineaPnid = null,
         tipoSenalPnid = null,
         equipoAsociadoId = null,
-        equipoAsociadoTag = null
+        equipoAsociadoTag = null,
+        instrumentoAsociadoId = null,
+        instrumentoAsociadoTag = null
       } = body;
 
       if (
@@ -341,6 +353,18 @@ instrumentsRouter.post(
         return;
       }
 
+      if (
+        instrumentoAsociadoId !== null &&
+        instrumentoAsociadoId !== undefined &&
+        !/^\d+$/.test(String(instrumentoAsociadoId))
+      ) {
+        res.status(400).json({
+          error: 'validation_error',
+          message: 'instrumentoAsociadoId must be a numeric id or null.'
+        });
+        return;
+      }
+
       const optionalFields: Array<{
         name: string;
         value: unknown;
@@ -360,7 +384,8 @@ instrumentsRouter.post(
         { name: 'planoPnid', value: planoPnid, max: 30 },
         { name: 'lineaPnid', value: lineaPnid, max: 100 },
         { name: 'tipoSenalPnid', value: tipoSenalPnid, max: 50 },
-        { name: 'equipoAsociadoTag', value: equipoAsociadoTag, max: 50 }
+        { name: 'equipoAsociadoTag', value: equipoAsociadoTag, max: 50 },
+        { name: 'instrumentoAsociadoTag', value: instrumentoAsociadoTag, max: 50 }
       ];
 
       for (const field of optionalFields) {
@@ -412,6 +437,8 @@ instrumentsRouter.post(
         .input('tipo_senal_pnid', sql.NVarChar(50), tipoSenalPnid)
         .input('equipo_asociado_id', sql.NVarChar(30), equipoAsociadoId)
         .input('equipo_asociado_tag', sql.NVarChar(50), equipoAsociadoTag)
+        .input('instrumento_asociado_id', sql.NVarChar(30), instrumentoAsociadoId)
+        .input('instrumento_asociado_tag', sql.NVarChar(50), instrumentoAsociadoTag)
 
         .query(`
           IF EXISTS (
@@ -446,6 +473,8 @@ instrumentsRouter.post(
             tipo_senal_pnid,
             equipo_asociado_id,
             equipo_asociado_tag,
+            instrumento_asociado_id,
+            instrumento_asociado_tag,
             activo,
             created_at,
             created_by
@@ -482,6 +511,8 @@ instrumentsRouter.post(
             @tipo_senal_pnid,
             TRY_CONVERT(BIGINT, @equipo_asociado_id),
             @equipo_asociado_tag,
+            TRY_CONVERT(BIGINT, @instrumento_asociado_id),
+            @instrumento_asociado_tag,
             1,
             SYSUTCDATETIME(),
             TRY_CONVERT(BIGINT, @created_by)
@@ -527,7 +558,8 @@ instrumentsRouter.post(
       if (number === 547) {
         res.status(400).json({
           error: 'invalid_reference',
-          message: 'equipoAsociadoId does not exist, is inactive, or does not belong to this project.'
+          message:
+            'equipoAsociadoId/instrumentoAsociadoId does not exist, is inactive, or does not belong to this project.'
         });
         return;
       }
@@ -642,6 +674,11 @@ instrumentsRouter.patch(
           column: 'equipo_asociado_tag',
           sqlType: sql.NVarChar(50),
           max: 50
+        },
+        instrumentoAsociadoTag: {
+          column: 'instrumento_asociado_tag',
+          sqlType: sql.NVarChar(50),
+          max: 50
         }
       } as const;
 
@@ -673,11 +710,34 @@ instrumentsRouter.patch(
         }
       }
 
+      const hasInstrumentoAsociadoId = 'instrumentoAsociadoId' in body;
+      if (hasInstrumentoAsociadoId) {
+        const value = body.instrumentoAsociadoId;
+        if (value !== null && !/^\d+$/.test(String(value))) {
+          res.status(400).json({
+            error: 'validation_error',
+            message: 'instrumentoAsociadoId must be a numeric id or null.'
+          });
+          return;
+        }
+        // Un instrumento no puede asociarse a sí mismo (ver
+        // CK_instrumento_asociado_no_self, database/migrations/
+        // 005_instrumento_asociado.sql) — se valida acá también para dar
+        // un 400 claro en vez de un 500 por violación de CHECK.
+        if (value !== null && String(value) === instrumentId) {
+          res.status(400).json({
+            error: 'validation_error',
+            message: 'instrumentoAsociadoId cannot be the instrument itself.'
+          });
+          return;
+        }
+      }
+
       const keys = Object.keys(body).filter(
         (key) => key in allowedFields
       ) as Array<keyof typeof allowedFields>;
 
-      if (keys.length === 0 && !hasEquipoAsociadoId) {
+      if (keys.length === 0 && !hasEquipoAsociadoId && !hasInstrumentoAsociadoId) {
         res.status(400).json({
           error: 'validation_error',
           message: 'No editable fields were provided.'
@@ -761,6 +821,11 @@ instrumentsRouter.patch(
       if (hasEquipoAsociadoId) {
         request.input('equipo_asociado_id', sql.NVarChar(30), body.equipoAsociadoId);
         assignments.push('equipo_asociado_id = TRY_CONVERT(BIGINT, @equipo_asociado_id)');
+      }
+
+      if (hasInstrumentoAsociadoId) {
+        request.input('instrumento_asociado_id', sql.NVarChar(30), body.instrumentoAsociadoId);
+        assignments.push('instrumento_asociado_id = TRY_CONVERT(BIGINT, @instrumento_asociado_id)');
       }
 
       /*
@@ -896,7 +961,8 @@ instrumentsRouter.patch(
       if (number === 547) {
         res.status(400).json({
           error: 'invalid_reference',
-          message: 'equipoAsociadoId does not exist, is inactive, or does not belong to this project.'
+          message:
+            'equipoAsociadoId/instrumentoAsociadoId does not exist, is inactive, or does not belong to this project.'
         });
         return;
       }

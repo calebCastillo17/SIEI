@@ -56,12 +56,13 @@ SQL Server. Schemas: **`nucleo`** (engineering data), **`cat`** (universal catal
 | `002_auth_users_roles.sql` | `seguridad`: `usuario`, `rol`, `usuario_proyecto_rol`, the `vw_acceso_proyecto` view, 4 triggers. |
 | `003_user_audit.sql` | Adds `created_by` / `updated_by` (`BIGINT NULL`, FK → `seguridad.usuario`) to all 20 `nucleo` tables. |
 | `004_pnid_import.sql` | Adds P&ID-origin columns to `nucleo.instrumento` (`tag_anterior`, `tecnologia`, `funcionamiento`, `cuerpo_instrumento`, `conexion_proceso`, `plano_pnid`, `linea_pnid`, `tipo_senal_pnid`, `equipo_asociado_id`/`_tag`); adds `DATOS_MODIFICADOS`/`REQUIERE_REVISION` to `cat.cat_estado_pnid`; creates schema `integracion` with `importacion_pnid` / `importacion_pnid_fila` / `importacion_pnid_resultado` (persistent snapshot + comparison history for the P&ID importer). |
+| `005_instrumento_asociado.sql` | Adds `instrumento_asociado_id`/`_tag` to `nucleo.instrumento` — a link between two instruments ("Instrumento Asociado" column added later to the P&ID report), modeled exactly like `equipo_asociado_id`/`_tag` (self-referencing composite FK `(instrumento_asociado_id, proyecto_id) → nucleo.instrumento(id, proyecto_id)`, resolved by TAG during P&ID APPLY, diffable like every other content field). A `CHECK` (`CK_instrumento_asociado_no_self`) rejects an instrument associating to itself. |
 
 Every migration starts with the seven `SET` options (`ANSI_NULLS`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT`, `CONCAT_NULL_YIELDS_NULL`, `QUOTED_IDENTIFIER` **ON**, `NUMERIC_ROUNDABORT` **OFF**). These are **mandatory**, not decorative: without them every `CREATE UNIQUE INDEX ... WHERE ...` fails with error 1934, and because each index sits in its own `GO` batch the failure does not stop the script — tables and triggers get created while the filtered indexes silently do not. Any connection that later runs DML against these tables needs the same options (most drivers set them correctly; the usual offender is `ARITHABORT OFF` from legacy ODBC/OLE DB).
 
 ### Tests (`database/tests/`)
 
-Smoke tests `001`–`018`, run manually against a dev database. They are `BEGIN TRY` / `BEGIN CATCH` blocks that `PRINT` `PASS`/`FAIL` and roll back their own fixtures. **A failure prints but does not fail the process** — they are not usable as a CI gate as written. Several depend on a project with `codigo_proyecto = 'TEST-001'` created by earlier tests, so run them in order.
+Smoke tests `001`–`019`, run manually against a dev database. They are `BEGIN TRY` / `BEGIN CATCH` blocks that `PRINT` `PASS`/`FAIL` and roll back their own fixtures. **A failure prints but does not fail the process** — they are not usable as a CI gate as written. Several depend on a project with `codigo_proyecto = 'TEST-001'` created by earlier tests, so run them in order.
 
 ### P&ID / Plant 3D import (`integracion` schema, migration 004)
 

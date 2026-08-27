@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
@@ -48,7 +48,9 @@ function toInput(instrument: Instrument): InstrumentInput {
     lineaPnid: instrument.lineaPnid,
     tipoSenalPnid: instrument.tipoSenalPnid,
     equipoAsociadoId: instrument.equipoAsociadoId,
-    equipoAsociadoTag: instrument.equipoAsociadoTag
+    equipoAsociadoTag: instrument.equipoAsociadoTag,
+    instrumentoAsociadoId: instrument.instrumentoAsociadoId,
+    instrumentoAsociadoTag: instrument.instrumentoAsociadoTag
   };
 }
 
@@ -281,6 +283,22 @@ export function InstrumentDetailPage() {
               <dd>{instrument.equipoAsociadoTag ?? '—'}</dd>
             </div>
             <div>
+              <dt>Instrumento asociado</dt>
+              <dd>
+                {instrument.instrumentoAsociadoId ? (
+                  <Link to={`/projects/${projectId}/instruments/${instrument.instrumentoAsociadoId}`}>
+                    Ver instrumento
+                  </Link>
+                ) : (
+                  '—'
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Instrumento asociado (tag libre)</dt>
+              <dd>{instrument.instrumentoAsociadoTag ?? '—'}</dd>
+            </div>
+            <div>
               <dt>Fecha agregado</dt>
               <dd>{instrument.fechaAgregado ?? '—'}</dd>
             </div>
@@ -299,6 +317,7 @@ export function InstrumentDetailPage() {
             <InstrumentForm
               initialValue={toInput(instrument)}
               options={formOptions}
+              currentInstrumentId={instrument.id}
               submitLabel="Guardar cambios"
               submitting={submitting}
               disabled={!canWrite}

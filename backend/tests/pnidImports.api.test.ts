@@ -218,7 +218,7 @@ async function main(): Promise<void> {
 
     const HEADERS = [
       'PnPID', 'Tag', 'Listado', 'Tag Anterior', 'Descripcion', 'Type',
-      'Servicio', 'Sistema', 'Equipo Asociado', 'Tipo de Senal'
+      'Servicio', 'Sistema', 'Equipo Asociado', 'Instrumento Asociado', 'Tipo de Senal'
     ];
 
     const pnpidA = `A${runId}`;

@@ -84,6 +84,8 @@ export interface Instrument {
   tipoSenalPnid: string | null;
   equipoAsociadoId: string | null;
   equipoAsociadoTag: string | null;
+  instrumentoAsociadoId: string | null;
+  instrumentoAsociadoTag: string | null;
   fechaAgregado: string | null;
   fechaUltimaRevision: string | null;
   active: boolean;
@@ -140,6 +142,8 @@ export interface InstrumentInput {
   tipoSenalPnid: string | null;
   equipoAsociadoId: string | null;
   equipoAsociadoTag: string | null;
+  instrumentoAsociadoId: string | null;
+  instrumentoAsociadoTag: string | null;
 }
 
 /** Equipo tal como lo devuelve GET (ver equipment.ts). */

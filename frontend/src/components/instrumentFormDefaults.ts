@@ -18,6 +18,8 @@ export function emptyInstrumentInput(): InstrumentInput {
     lineaPnid: null,
     tipoSenalPnid: null,
     equipoAsociadoId: null,
-    equipoAsociadoTag: null
+    equipoAsociadoTag: null,
+    instrumentoAsociadoId: null,
+    instrumentoAsociadoTag: null
   };
 }

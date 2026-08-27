@@ -580,6 +580,17 @@ a {
   color: var(--text);
 }
 
+.catalog-section {
+  margin-bottom: 32px;
+}
+
+.catalog-section h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-h);
+  margin: 0 0 12px;
+}
+
 .physical-slot__comm-links {
   display: flex;
   flex-direction: column;

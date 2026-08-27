@@ -27,6 +27,7 @@ import { LoopsListPage } from './pages/LoopsListPage';
 import { ProjectMembersPage } from './pages/ProjectMembersPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { UsersPage } from './pages/UsersPage';
+import { OpenCatalogsPage } from './pages/OpenCatalogsPage';
 
 function App() {
   return (
@@ -77,6 +78,7 @@ function App() {
         <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
         <Route path="/admin/clients" element={<ClientsPage />} />
         <Route path="/admin/users" element={<UsersPage />} />
+        <Route path="/admin/catalogs" element={<OpenCatalogsPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Route>
     </Routes>

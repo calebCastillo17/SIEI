@@ -172,6 +172,28 @@ export interface CatalogListResponse {
   items: CatalogItem[];
 }
 
+/** POST devuelve una forma más chica que GET: su OUTPUT INSERTED no trae
+ * updated_at (ver simpleCatalogRouter.ts) — recién creado, siempre sería
+ * null de todas formas, así que no se re-tipa como CatalogItem completo. */
+export interface CatalogItemMutationResponse {
+  item: {
+    id: string;
+    codigo: string;
+    descripcion: string | null;
+    createdAt: string;
+  };
+}
+
+/** Body de POST para los 3 catálogos de dominio ABIERTO (interface-types,
+ * com-types, com-media-types) — los otros 6 son de lista CERRADA, solo
+ * lectura (ver lib/simpleCatalogRouter.ts). Sin PATCH/DELETE en ningún
+ * caso: no hay `activo` para desactivar, y editar/borrar un código ya
+ * referenciado rompería FKs existentes. */
+export interface CatalogInput {
+  codigo: string;
+  descripcion: string | null;
+}
+
 export type SignalClassCode = 'CONTROL' | 'COM';
 
 /** Señal tal como la devuelve GET (ver signals.ts serializeSignal). */

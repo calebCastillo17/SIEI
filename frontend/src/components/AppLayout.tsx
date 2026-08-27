@@ -120,6 +120,9 @@ export function AppLayout() {
               <NavLink to="/admin/users" className="app-nav__link">
                 Usuarios
               </NavLink>
+              <NavLink to="/admin/catalogs" className="app-nav__link">
+                Catálogos
+              </NavLink>
             </>
           )}
         </nav>

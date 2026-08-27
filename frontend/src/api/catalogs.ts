@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { CatalogListResponse } from './types';
+import type { CatalogInput, CatalogItemMutationResponse, CatalogListResponse } from './types';
 
 /**
  * Los 9 catálogos globales expuestos por backend/src/lib/simpleCatalogRouter.ts
@@ -8,6 +8,20 @@ import type { CatalogListResponse } from './types';
  */
 function listCatalog(path: string, devUserEmail: string): Promise<CatalogListResponse> {
   return apiFetch<CatalogListResponse>(path, { devUserEmail });
+}
+
+/** Solo los 3 catálogos de dominio ABIERTO admiten POST, y solo
+ * es_admin_sistema (ver simpleCatalogRouter.ts, `writable: true`). */
+function createCatalogItem(
+  path: string,
+  input: CatalogInput,
+  devUserEmail: string
+): Promise<CatalogItemMutationResponse> {
+  return apiFetch<CatalogItemMutationResponse>(path, {
+    method: 'POST',
+    body: input,
+    devUserEmail
+  });
 }
 
 export const listSignalClasses = (devUserEmail: string) =>
@@ -33,3 +47,12 @@ export const listComTypes = (devUserEmail: string) =>
 
 export const listComMediaTypes = (devUserEmail: string) =>
   listCatalog('/api/catalogs/com-media-types', devUserEmail);
+
+export const createInterfaceType = (input: CatalogInput, devUserEmail: string) =>
+  createCatalogItem('/api/catalogs/interface-types', input, devUserEmail);
+
+export const createComType = (input: CatalogInput, devUserEmail: string) =>
+  createCatalogItem('/api/catalogs/com-types', input, devUserEmail);
+
+export const createComMediaType = (input: CatalogInput, devUserEmail: string) =>
+  createCatalogItem('/api/catalogs/com-media-types', input, devUserEmail);

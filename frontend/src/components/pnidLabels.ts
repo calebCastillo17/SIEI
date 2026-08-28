@@ -10,9 +10,13 @@
  * InstrumentInput que vienen de ahí) — no un vocabulario aparte.
  */
 
-/** Campos sincronizables por la importación P&ID (sin pnpid/tagInstrumento/
- * listado, que no son "contenido" — ver DIFFABLE_FIELDS en headers.ts). */
+/** Campos sincronizables por la importación P&ID (sin tagInstrumento/
+ * listado, que no son "contenido" — ver DIFFABLE_FIELDS en headers.ts).
+ * `pnpid` tampoco es parte de DIFFABLE_FIELDS, pero SÍ puede aparecer en un
+ * diff manual armado a mano para PNPID_ACTUALIZADO (ver compare.ts) — por
+ * eso tiene label acá aunque el comparador nunca lo genere solo. */
 export const PNID_FIELD_LABELS: Record<string, string> = {
+  pnpid: 'PnPID',
   tagAnterior: 'TAG anterior',
   planoPnid: 'Plano P&ID',
   tipoInstrumento: 'Tipo de instrumento',
@@ -35,13 +39,15 @@ export function pnidFieldLabel(campo: string): string {
   return PNID_FIELD_LABELS[campo] ?? campo;
 }
 
-/** Los 9 códigos de cat.cat_estado_pnid, en el orden en que conviene
- * presentarlos (ver database/migrations/004_pnid_import.sql). */
+/** Los 10 códigos de cat.cat_estado_pnid, en el orden en que conviene
+ * presentarlos (ver database/migrations/004_pnid_import.sql y
+ * 008_pnid_actualizacion_pnpid.sql). */
 export const PNID_ESTADO_LABELS: Record<string, string> = {
   OK: 'Sin cambios',
   NUEVO_EN_PNID: 'Nuevo en P&ID',
   TAG_MODIFICADO: 'TAG modificado',
   DATOS_MODIFICADOS: 'Datos modificados',
+  PNPID_ACTUALIZADO: 'PnPID actualizado',
   NO_LISTADO: 'No listado',
   NO_EXISTE_EN_PNID: 'No existe en P&ID',
   REQUIERE_REVISION: 'Requiere revisión',

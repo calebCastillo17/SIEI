@@ -385,12 +385,23 @@ async function main(): Promise<void> {
 
     // ===================== V2: DATOS_MODIFICADOS =====================
 
+    // PnPID nuevo reclamando el TAG del instrumento MANUAL (creado al
+    // principio, sin PnPID) — a diferencia de D (PLANT3D), acá el
+    // fallback por TAG NO debe re-anclar solo: sigue siendo
+    // REQUIERE_REVISION (ver compare.ts: solo se re-ancla si el dueño del
+    // TAG ya es fuente_pnpid = 'PLANT3D').
+    const pnpidManualClaim = `MANUAL-CLAIM-${runId}`;
+
     const rowsV2: Row[] = [
       { ...baseRowA, Descripcion: 'Descripcion CAMBIADA A' },
       { PnPID: pnpidB, Tag: tagB, Listado: false },
-      { PnPID: pnpidD1, Tag: tagD, Listado: true, Descripcion: 'Primero con este TAG' },
-      // pnpidD2 nuevo, pero reclama el TAG que ya tiene pnpidD1 -> REQUIERE_REVISION
-      { PnPID: pnpidD2, Tag: tagD, Listado: true, Descripcion: 'Conflicto de tag' }
+      // El reporte "nuevo" trae a D con un PnPID DISTINTO del que tiene hoy
+      // en el Master (pnpidD1) — la fila vieja YA NO está en el archivo,
+      // como pasaría en una re-exportación real de la herramienta P&ID del
+      // usuario -> PNPID_ACTUALIZADO (re-ancla, no crea uno nuevo).
+      { PnPID: pnpidD2, Tag: tagD, Listado: true, Descripcion: 'PnPID renovado por la herramienta' },
+      // pnpidManualClaim nuevo, reclama el TAG del instrumento MANUAL -> REQUIERE_REVISION (sin cambios)
+      { PnPID: pnpidManualClaim, Tag: manualTag, Listado: true, Descripcion: 'Reclamo sobre instrumento manual' }
     ];
 
     const bufferV2 = await buildWorkbookBuffer(HEADERS, rowsV2);
@@ -410,10 +421,27 @@ async function main(): Promise<void> {
       Array.isArray(findResultado(resultadosV2, tagA)?.diferencias) &&
         findResultado(resultadosV2, tagA).diferencias.some((d: any) => d.campo === 'descripcion')
     );
+    // D es un instrumento PLANT3D (creado por APPLY V1) — un PnPID nuevo
+    // reclamando su mismo TAG es exactamente el caso real que resolvimos
+    // con el usuario (su herramienta P&ID regenera el PnPID entre
+    // exportaciones): se re-ancla automáticamente, PNPID_ACTUALIZADO, NO
+    // queda en REQUIERE_REVISION.
+    const resultadoD2 = resultadosV2.find((r: any) => r.pnpid === pnpidD2);
     check(
-      'PREVIEW V2: PnPID nuevo D2 reclamando el TAG de D1 -> REQUIERE_REVISION',
-      resultadosV2.find((r: any) => r.pnpid === pnpidD2)?.resultado === 'REQUIERE_REVISION',
-      resultadosV2.find((r: any) => r.pnpid === pnpidD2)
+      'PREVIEW V2: PnPID nuevo D2 reclamando el TAG de un D1 ya PLANT3D -> PNPID_ACTUALIZADO (no REQUIERE_REVISION)',
+      resultadoD2?.resultado === 'PNPID_ACTUALIZADO' && resultadoD2?.instrumentoId === instrD.id,
+      resultadoD2
+    );
+    check(
+      'PREVIEW V2: la diferencia de D2 incluye el propio campo pnpid (viejo -> nuevo)',
+      Array.isArray(resultadoD2?.diferencias) &&
+        resultadoD2.diferencias.some((d: any) => d.campo === 'pnpid' && d.anterior === pnpidD1 && d.nuevo === pnpidD2),
+      resultadoD2?.diferencias
+    );
+    check(
+      'PREVIEW V2: el mismo TAG reclamado sobre un instrumento MANUAL (sin PLANT3D) SIGUE en REQUIERE_REVISION',
+      resultadosV2.find((r: any) => r.pnpid === pnpidManualClaim)?.resultado === 'REQUIERE_REVISION',
+      resultadosV2.find((r: any) => r.pnpid === pnpidManualClaim)
     );
 
     const applyV2 = await call('editor', 'POST', `${IMPORTS}/${importId2}/apply`);
@@ -423,8 +451,25 @@ async function main(): Promise<void> {
     check('Descripcion de A quedó actualizada tras DATOS_MODIFICADOS', instrAAfterV2?.descripcion === 'Descripcion CAMBIADA A');
     check('tag_anterior de A sigue igual (no se autogenera nunca)', instrAAfterV2?.tagAnterior === 'LEGACY-TAG-A');
 
-    const instrD2Created = (await call('admin', 'GET', INSTRUMENTS)).json?.instruments?.find((i: any) => i.tagInstrumento === tagD && i.pnpid === pnpidD2);
-    check('El conflicto D2 (REQUIERE_REVISION) NUNCA creó un instrumento', !instrD2Created);
+    const instrumentsAfterV2 = (await call('admin', 'GET', INSTRUMENTS)).json?.instruments ?? [];
+    const instrDAfterV2 = instrumentsAfterV2.find((i: any) => i.tagInstrumento === tagD);
+    check(
+      'D sigue siendo EL MISMO instrumento (mismo id) — PNPID_ACTUALIZADO nunca crea uno nuevo',
+      instrDAfterV2?.id === instrD.id,
+      { antes: instrD.id, despues: instrDAfterV2?.id }
+    );
+    check('El PnPID de D quedó re-anclado al valor nuevo (D2)', instrDAfterV2?.pnpid === pnpidD2, instrDAfterV2);
+    check(
+      'No quedó ningún instrumento duplicado con TAG D',
+      instrumentsAfterV2.filter((i: any) => i.tagInstrumento === tagD).length === 1
+    );
+
+    const manualAfterV2 = (await call('admin', 'GET', `${INSTRUMENTS}/${manualInstrumentId}`)).json?.instrument;
+    check(
+      'El instrumento MANUAL nunca se tocó (REQUIERE_REVISION nunca se aplica): sigue sin pnpid',
+      manualAfterV2?.pnpid === null && manualAfterV2?.fuentePnpid === null,
+      manualAfterV2
+    );
 
     // ===================== V2b: COLUMNA PRESENTE PERO CELDA VACIA -> SI PARTICIPA EN EL DIFF =====================
 

@@ -23,6 +23,7 @@ const COUNT_LABELS: Array<{ key: keyof PnidImportDetailResponse['import']['conte
   { key: 'nuevos', label: 'Nuevos' },
   { key: 'tagModificado', label: 'TAG modificados' },
   { key: 'datosModificados', label: 'Datos modificados' },
+  { key: 'pnpidActualizado', label: 'PnPID actualizado' },
   { key: 'excluidosListado', label: 'No listados' },
   { key: 'noExisteReporte', label: 'No existen en P&ID' },
   { key: 'requiereRevision', label: 'Requieren revisión' }
@@ -180,7 +181,8 @@ export function PnidImportDetailPage() {
     const confirmed = window.confirm(
       `¿Aplicar esta importación? Se van a crear/actualizar instrumentos en el proyecto según el preview: ` +
         `${detail.import.conteos.nuevos} nuevos, ${detail.import.conteos.tagModificado} con TAG modificado, ` +
-        `${detail.import.conteos.datosModificados} con datos modificados, ${detail.import.conteos.excluidosListado} marcados no listados, ` +
+        `${detail.import.conteos.datosModificados} con datos modificados, ${detail.import.conteos.pnpidActualizado} con PnPID actualizado, ` +
+        `${detail.import.conteos.excluidosListado} marcados no listados, ` +
         `${detail.import.conteos.noExisteReporte} marcados como no existentes en el reporte. ` +
         `Los ${detail.import.conteos.requiereRevision} que requieren revisión NO se van a aplicar. Esta acción no se puede deshacer desde acá.`
     );

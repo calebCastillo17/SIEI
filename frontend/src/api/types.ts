@@ -861,6 +861,7 @@ export interface PnidImportCounts {
   nuevos: number;
   tagModificado: number;
   datosModificados: number;
+  pnpidActualizado: number;
   excluidosListado: number;
   noExisteReporte: number;
   requiereRevision: number;

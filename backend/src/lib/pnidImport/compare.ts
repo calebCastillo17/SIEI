@@ -121,6 +121,14 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
   const results: ComparisonResultEntry[] = [];
 
   const seenPnpidsInFile = new Set<string>();
+  /** IDs de instrumentos ya resueltos por una fila del archivo — más
+   * amplio que `seenPnpidsInFile`: un PNPID_ACTUALIZADO resuelve un
+   * instrumento cuyo PnPID VIEJO (la clave real en `plant3dManagedByPnpid`
+   * más abajo) nunca aparece en el archivo nuevo — sin este set, ese mismo
+   * instrumento también caería en el barrido final de NO_EXISTE_EN_PNID,
+   * generando dos resultados para el mismo instrumento (choca contra
+   * UX_importacion_pnid_resultado_instrumento). */
+  const resolvedInstrumentoIds = new Set<string>();
   const eligibleIndexes: number[] = [];
 
   rows.forEach((row, idx) => {
@@ -224,6 +232,43 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
     if (!matchByPnpid) {
       const tagOwner = existingByTag.get(row.tagInstrumento);
       if (tagOwner) {
+        /*
+         * Mismo TAG que un instrumento ya administrado por Plant3D, pero
+         * con un PnPID que no calza con NINGÚN instrumento existente — la
+         * herramienta P&ID del usuario regenera el PnPID entre
+         * exportaciones para el mismo objeto físico (confirmado con datos
+         * reales: 67% de un reporte real caía acá). Se adopta el mismo
+         * fallback que la macro VBA legacy del usuario
+         * (Actualizar_Master_Desde_IMPORT: busca por PnPID, si no aparece
+         * cae a TAG y re-ancla el PnPID sin pedir revisión) — a diferencia
+         * de la macro, acá NUNCA se mezcla en silencio con OK: queda como
+         * un resultado propio y auditable, PNPID_ACTUALIZADO, con el PnPID
+         * viejo/nuevo explícito en `diferencias`.
+         *
+         * Solo aplica si el dueño del TAG ya es PLANT3D — si es un
+         * instrumento manual (creado a mano, sin pnpid), un reporte P&ID
+         * reclamándolo de golpe sigue siendo una decisión que un humano
+         * debe confirmar, así que cae al REQUIERE_REVISION de siempre.
+         *
+         * Guard adicional: si OTRA fila de este mismo archivo ya reclamó a
+         * este mismo instrumento (por PnPID directo o por este mismo
+         * fallback — ej. el archivo trae tanto el PnPID viejo como el
+         * nuevo del mismo objeto por error), no se genera un segundo
+         * resultado para el mismo instrumento — eso violaría
+         * UX_importacion_pnid_resultado_instrumento. Se marca
+         * REQUIERE_REVISION en vez de reventar la importación entera.
+         */
+        if (tagOwner.fuentePnpid === 'PLANT3D' && !resolvedInstrumentoIds.has(tagOwner.id)) {
+          const contentDiffs = compareFields(tagOwner, row, presentFields);
+          const diffs: FieldDiff[] = [
+            { campo: 'pnpid', anterior: tagOwner.pnpid, nuevo: row.pnpid },
+            ...contentDiffs
+          ];
+          results.push(makeEntry(idx, row, tagOwner, 'PNPID_ACTUALIZADO', diffs, false));
+          resolvedInstrumentoIds.add(tagOwner.id);
+          return;
+        }
+
         results.push(
           makeEntry(
             idx,
@@ -231,9 +276,11 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
             undefined,
             'REQUIERE_REVISION',
             {
-              detalle:
-                `El TAG "${row.tagInstrumento}" ya pertenece al instrumento #${tagOwner.id} ` +
-                `(PnPID ${tagOwner.pnpid ?? 'sin PnPID'}). No se aplica automáticamente.`
+              detalle: resolvedInstrumentoIds.has(tagOwner.id)
+                ? `El TAG "${row.tagInstrumento}" (PnPID ${row.pnpid}) y otra fila de este mismo archivo ` +
+                  `resuelven ambas al instrumento #${tagOwner.id}. No se aplica automáticamente.`
+                : `El TAG "${row.tagInstrumento}" ya pertenece al instrumento #${tagOwner.id} ` +
+                  `(PnPID ${tagOwner.pnpid ?? 'sin PnPID'}). No se aplica automáticamente.`
             },
             true
           )
@@ -244,11 +291,33 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
       return;
     }
 
+    if (resolvedInstrumentoIds.has(matchByPnpid.id)) {
+      // Mismo caso de arriba, en la dirección opuesta: otra fila (por
+      // fallback de TAG) ya reclamó este instrumento antes de que
+      // llegáramos a su fila por PnPID directo.
+      results.push(
+        makeEntry(
+          idx,
+          row,
+          undefined,
+          'REQUIERE_REVISION',
+          {
+            detalle:
+              `El PnPID "${row.pnpid}" y otra fila de este mismo archivo resuelven ambas al ` +
+              `instrumento #${matchByPnpid.id}. No se aplica automáticamente.`
+          },
+          true
+        )
+      );
+      return;
+    }
+
     if (matchByPnpid.tagInstrumento.trim() !== row.tagInstrumento) {
       const diffs = compareFields(matchByPnpid, row, presentFields);
       results.push(
         makeEntry(idx, row, matchByPnpid, 'TAG_MODIFICADO', diffs.length > 0 ? diffs : null, false)
       );
+      resolvedInstrumentoIds.add(matchByPnpid.id);
       return;
     }
 
@@ -258,12 +327,16 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
     } else {
       results.push(makeEntry(idx, row, matchByPnpid, 'OK', null, false));
     }
+    resolvedInstrumentoIds.add(matchByPnpid.id);
   });
 
   // Instrumentos administrados por Plant3D cuyo PnPID no aparece en NINGUNA
   // fila de este archivo (con cualquier Listado) — alcance corrección C.
+  // `resolvedInstrumentoIds` cubre el caso PNPID_ACTUALIZADO: el PnPID
+  // VIEJO (la clave acá) nunca aparece en el archivo nuevo, pero el
+  // instrumento sí quedó resuelto — no es "no existe en P&ID".
   for (const [pnpid, instrumento] of plant3dManagedByPnpid) {
-    if (seenPnpidsInFile.has(pnpid)) continue;
+    if (seenPnpidsInFile.has(pnpid) || resolvedInstrumentoIds.has(instrumento.id)) continue;
     results.push(makeEntry(null, null, instrumento, 'NO_EXISTE_EN_PNID', null, false));
   }
 

@@ -90,6 +90,7 @@ function serializeImportacion(row: Record<string, any>) {
       nuevos: row.conteo_nuevos,
       tagModificado: row.conteo_tag_modificado,
       datosModificados: row.conteo_datos_modificados,
+      pnpidActualizado: row.conteo_pnpid_actualizado,
       excluidosListado: row.conteo_excluidos_listado,
       noExisteReporte: row.conteo_no_existe_reporte,
       requiereRevision: row.conteo_requiere_revision
@@ -154,8 +155,8 @@ pnidImportsRouter.get(
         .query(`
           SELECT id, proyecto_id, nombre_archivo, hash_archivo, fuente, estado,
                  total_filas, total_listado_true, conteo_sin_cambios, conteo_nuevos,
-                 conteo_tag_modificado, conteo_datos_modificados, conteo_excluidos_listado,
-                 conteo_no_existe_reporte, conteo_requiere_revision, advertencias,
+                 conteo_tag_modificado, conteo_datos_modificados, conteo_pnpid_actualizado,
+                 conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision, advertencias,
                  fecha_carga, fecha_aplicacion, created_by, applied_by, created_at, updated_at
           FROM integracion.importacion_pnid
           WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
@@ -200,8 +201,8 @@ pnidImportsRouter.get(
         .query(`
           SELECT id, proyecto_id, nombre_archivo, hash_archivo, fuente, estado,
                  total_filas, total_listado_true, conteo_sin_cambios, conteo_nuevos,
-                 conteo_tag_modificado, conteo_datos_modificados, conteo_excluidos_listado,
-                 conteo_no_existe_reporte, conteo_requiere_revision, advertencias,
+                 conteo_tag_modificado, conteo_datos_modificados, conteo_pnpid_actualizado,
+                 conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision, advertencias,
                  fecha_carga, fecha_aplicacion, created_by, applied_by, created_at, updated_at
           FROM integracion.importacion_pnid
           WHERE id = TRY_CONVERT(BIGINT, @importacion_id)
@@ -360,6 +361,7 @@ pnidImportsRouter.post(
         nuevos: 0,
         tagModificado: 0,
         datosModificados: 0,
+        pnpidActualizado: 0,
         excluidosListado: 0,
         noExisteReporte: 0,
         requiereRevision: 0
@@ -371,6 +373,7 @@ pnidImportsRouter.post(
           case 'NUEVO_EN_PNID': counts.nuevos++; break;
           case 'TAG_MODIFICADO': counts.tagModificado++; break;
           case 'DATOS_MODIFICADOS': counts.datosModificados++; break;
+          case 'PNPID_ACTUALIZADO': counts.pnpidActualizado++; break;
           case 'NO_LISTADO': counts.excluidosListado++; break;
           case 'NO_EXISTE_EN_PNID': counts.noExisteReporte++; break;
           case 'REQUIERE_REVISION':
@@ -417,6 +420,7 @@ pnidImportsRouter.post(
         .input('nuevos', sql.Int, counts.nuevos)
         .input('tag_modificado', sql.Int, counts.tagModificado)
         .input('datos_modificados', sql.Int, counts.datosModificados)
+        .input('pnpid_actualizado', sql.Int, counts.pnpidActualizado)
         .input('excluidos_listado', sql.Int, counts.excluidosListado)
         .input('no_existe_reporte', sql.Int, counts.noExisteReporte)
         .input('requiere_revision', sql.Int, counts.requiereRevision)
@@ -427,13 +431,13 @@ pnidImportsRouter.post(
             proyecto_id, nombre_archivo, hash_archivo, estado,
             total_filas, total_listado_true,
             conteo_sin_cambios, conteo_nuevos, conteo_tag_modificado, conteo_datos_modificados,
-            conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision,
+            conteo_pnpid_actualizado, conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision,
             advertencias, created_by
           )
           OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.nombre_archivo, INSERTED.hash_archivo,
                  INSERTED.fuente, INSERTED.estado, INSERTED.total_filas, INSERTED.total_listado_true,
                  INSERTED.conteo_sin_cambios, INSERTED.conteo_nuevos, INSERTED.conteo_tag_modificado,
-                 INSERTED.conteo_datos_modificados, INSERTED.conteo_excluidos_listado,
+                 INSERTED.conteo_datos_modificados, INSERTED.conteo_pnpid_actualizado, INSERTED.conteo_excluidos_listado,
                  INSERTED.conteo_no_existe_reporte, INSERTED.conteo_requiere_revision,
                  INSERTED.advertencias, INSERTED.fecha_carga, INSERTED.fecha_aplicacion,
                  INSERTED.created_by, INSERTED.applied_by, INSERTED.created_at, INSERTED.updated_at
@@ -441,7 +445,7 @@ pnidImportsRouter.post(
             TRY_CONVERT(BIGINT, @proyecto_id), @nombre_archivo, @hash_archivo, @estado,
             @total_filas, @total_listado_true,
             @sin_cambios, @nuevos, @tag_modificado, @datos_modificados,
-            @excluidos_listado, @no_existe_reporte, @requiere_revision,
+            @pnpid_actualizado, @excluidos_listado, @no_existe_reporte, @requiere_revision,
             @advertencias, TRY_CONVERT(BIGINT, @created_by)
           );
         `);
@@ -673,7 +677,12 @@ pnidImportsRouter.post(
 
         if (codigo === 'NUEVO_EN_PNID') {
           await applyNuevoInstrumento(transaction, projectId, userId, datosFuente, fields, presentFields, estadoIdByCodigo);
-        } else if (codigo === 'TAG_MODIFICADO' || codigo === 'DATOS_MODIFICADOS' || codigo === 'OK') {
+        } else if (
+          codigo === 'TAG_MODIFICADO' ||
+          codigo === 'DATOS_MODIFICADOS' ||
+          codigo === 'OK' ||
+          codigo === 'PNPID_ACTUALIZADO'
+        ) {
           await applyActualizarInstrumento(
             transaction,
             projectId,
@@ -862,6 +871,16 @@ async function applyActualizarInstrumento(
     .input('nuevo_tag', sql.NVarChar(50), getFieldRaw(datosFuente, 'Tag'))
     .input('estado_pnid_id', sql.NVarChar(30), estadoIdByCodigo.get(codigo))
     .input('updated_by', sql.NVarChar(30), userId);
+
+  // PNPID_ACTUALIZADO es el único caso donde esta función re-ancla el
+  // PnPID en sí (identidad, no "contenido" — por eso pnpid nunca está en
+  // MAPPED_FIELD_COLUMNS más abajo). Mismo TAG, mismo instrumento, la
+  // herramienta P&ID del usuario simplemente le asignó un PnPID nuevo en
+  // esta exportación — ver compare.ts.
+  if (codigo === 'PNPID_ACTUALIZADO') {
+    assignments.push('pnpid = @nuevo_pnpid');
+    request.input('nuevo_pnpid', sql.NVarChar(50), getFieldRaw(datosFuente, 'PnPID'));
+  }
 
   for (const field of Object.keys(MAPPED_FIELD_COLUMNS) as Array<keyof typeof MAPPED_FIELD_COLUMNS>) {
     if (!presentFields.has(field)) continue;

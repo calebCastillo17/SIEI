@@ -249,3 +249,21 @@ Las 19 columnas confirmadas de la hoja `Lista` (fila de encabezado real, fila 9:
 **`instrumento.tag_anterior`** sigue existiendo íntegro en el Master (poblado por el import P&ID, ver sección 11) pero **no tiene columna en este entregable** — la plantilla oficial vigente no la trae, y no se reconstruye artificialmente.
 
 La carátula (hoja `Carátula`) y su tabla de revisiones (`B32:J36`, capacidad de 5, la más reciente siempre en la fila 36, encabezado fijo de la tabla en la fila 37 — confirmado leyendo la fórmula real `=LOOKUP(2,1/(NOT(ISBLANK(Carátula!B32:B36))),Carátula!B32:B36)` en `Lista!R3`) están documentadas en `MODELO_FISICO_SIEI.md` sección 8.20 y `CLAUDE.md`.
+
+## 13. Equipos (migración 007) — cobertura de `reference_excel/equipos_620.xlsx`
+
+Las 6 columnas reales del archivo (`EQUIPO, DESCRIPCIÓN, PANEL, SISTEMA, NODO, P&ID`, 30 registros) mapean así:
+
+| Columna Excel | Destino | Estado |
+|---|---|---|
+| EQUIPO | `nucleo.equipo.tag_equipo` | Confirmado |
+| DESCRIPCIÓN | `nucleo.equipo.descripcion` | Confirmado |
+| PANEL | `nucleo.equipo.panel` | Confirmado |
+| SISTEMA | `nucleo.equipo.sistema` | Confirmado |
+| NODO | `nucleo.equipo.nodo` | Confirmado |
+| P&ID | `nucleo.equipo.plano_pnid` (migración 007) | Confirmado |
+| — (sin columna en el Excel) | `nucleo.equipo.tipo_equipo_id` | Asignado por el script de carga (`ELECTRICO` para los 30 registros iniciales), no viene del archivo |
+
+**Nota sobre `TAG_EQUIPO_INST`**: una fuente de referencia más rica (`02_MASTER_IO_620.xlsm`, hoja `EQUIPOS`, mismos 27 de los 30 registros) trae una 7ª columna con ese nombre — distingue el tag propio de un equipo del tag que Instrumentación realmente referencia cuando son entidades distintas (ej. `620-AFL-5001` variador → `620-PPD-5014` la bomba que maneja). Se evaluó explícitamente y el usuario decidió **no** incluirlo en esta versión — no existe en `equipos_620.xlsx` (la fuente oficial de este dataset) y no se modela ningún campo ni relación equivalente en `nucleo.equipo`.
+
+Todos los campos son opcionales salvo `tag_equipo` — casos reales del archivo ("Medidor multifunción", "Relé Multilin...", "Tablero de Sincronización") tienen varios de estos campos vacíos.

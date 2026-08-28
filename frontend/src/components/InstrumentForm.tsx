@@ -83,7 +83,10 @@ export function InstrumentForm({
     onSubmit({ ...value, tagInstrumento: value.tagInstrumento.trim() });
   }
 
-  const equipmentOptions = options.equipment.map((e) => ({ id: e.id, label: e.tagEquipo }));
+  const equipmentOptions = options.equipment.map((e) => {
+    const base = e.descripcion ? `${e.tagEquipo} — ${e.descripcion}` : e.tagEquipo;
+    return { id: e.id, label: e.tipoEquipoNombre ? `${base} [${e.tipoEquipoNombre.toUpperCase()}]` : base };
+  });
   const instrumentOptions = options.instruments
     .filter((i) => i.id !== currentInstrumentId)
     .map((i) => ({ id: i.id, label: i.tagInstrumento }));

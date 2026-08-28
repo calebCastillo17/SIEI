@@ -8,8 +8,9 @@ import {
   getEquipment,
   updateEquipment
 } from '../api/equipment';
+import { listTiposEquipo } from '../api/tiposEquipo';
 import { useAsyncData } from '../lib/useAsyncData';
-import type { Equipment, EquipmentInput } from '../api/types';
+import type { Equipment, EquipmentInput, TipoEquipo } from '../api/types';
 import { EquipmentForm } from '../components/EquipmentForm';
 import { ErrorMessage } from '../components/ErrorMessage';
 
@@ -19,7 +20,9 @@ function toInput(equipment: Equipment): EquipmentInput {
     descripcion: equipment.descripcion,
     sistema: equipment.sistema,
     nodo: equipment.nodo,
-    panel: equipment.panel
+    panel: equipment.panel,
+    planoPnid: equipment.planoPnid,
+    tipoEquipoId: equipment.tipoEquipoId
   };
 }
 
@@ -49,6 +52,11 @@ export function EquipmentDetailPage() {
     error: loadError,
     refresh: load
   } = useAsyncData<Equipment | null>(fetchEquipment);
+
+  const fetchTiposEquipo = useCallback(() => {
+    return listTiposEquipo(devUser.email).then((r) => r.items);
+  }, [devUser.email]);
+  const { data: tiposEquipo } = useAsyncData<TipoEquipo[]>(fetchTiposEquipo);
 
   const [editing, setEditing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -134,6 +142,18 @@ export function EquipmentDetailPage() {
       {!loading && equipment && !editing && (
         <dl className="detail-list">
           <div>
+            <dt>Descripción</dt>
+            <dd>{equipment.descripcion ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>Tipo</dt>
+            <dd>{equipment.tipoEquipoNombre ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>Panel</dt>
+            <dd>{equipment.panel ?? '—'}</dd>
+          </div>
+          <div>
             <dt>Sistema</dt>
             <dd>{equipment.sistema ?? '—'}</dd>
           </div>
@@ -142,12 +162,8 @@ export function EquipmentDetailPage() {
             <dd>{equipment.nodo ?? '—'}</dd>
           </div>
           <div>
-            <dt>Panel</dt>
-            <dd>{equipment.panel ?? '—'}</dd>
-          </div>
-          <div>
-            <dt>Descripción</dt>
-            <dd>{equipment.descripcion ?? '—'}</dd>
+            <dt>P&amp;ID</dt>
+            <dd>{equipment.planoPnid ?? '—'}</dd>
           </div>
           <div>
             <dt>Creado</dt>
@@ -165,6 +181,7 @@ export function EquipmentDetailPage() {
       {!loading && equipment && editing && (
         <EquipmentForm
           initialValue={toInput(equipment)}
+          tiposEquipo={tiposEquipo ?? []}
           submitLabel="Guardar cambios"
           submitting={submitting}
           disabled={!canWrite}

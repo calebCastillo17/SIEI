@@ -17,6 +17,13 @@ import { getDbPool } from '../db/sql.js';
  * sin CHECK propios y sin triggers propios en la tabla equipo, solo la
  * FK a proyecto y el índice único filtrado de TAG por proyecto activo.
  * Este router sigue exactamente el mismo patrón que instruments.ts.
+ *
+ * Catálogo CURADO a mano — el usuario decide qué equipos incluir, esto
+ * nunca se puebla automáticamente desde un reporte P&ID (migración 007).
+ * `tipo_equipo_id` (FK a cat.cat_tipo_equipo) distingue disciplina/origen
+ * (ELECTRICO / INSTRUMENTACION); se serializa junto con su código/nombre
+ * resueltos (`tipoEquipoCodigo`/`tipoEquipoNombre`) para que el frontend no
+ * tenga que hacer un segundo join.
  */
 export const equipmentRouter = Router({ mergeParams: true });
 
@@ -58,22 +65,27 @@ equipmentRouter.get(
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .query(`
           SELECT
-            id,
-            proyecto_id,
-            tag_equipo,
-            descripcion,
-            sistema,
-            nodo,
-            panel,
-            activo,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-          FROM nucleo.equipo
-          WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1
-          ORDER BY tag_equipo;
+            e.id,
+            e.proyecto_id,
+            e.tag_equipo,
+            e.descripcion,
+            e.sistema,
+            e.nodo,
+            e.panel,
+            e.plano_pnid,
+            e.tipo_equipo_id,
+            t.codigo AS tipo_equipo_codigo,
+            t.nombre AS tipo_equipo_nombre,
+            e.activo,
+            e.created_at,
+            e.updated_at,
+            e.created_by,
+            e.updated_by
+          FROM nucleo.equipo e
+          LEFT JOIN cat.cat_tipo_equipo t ON t.id = e.tipo_equipo_id
+          WHERE e.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND e.activo = 1
+          ORDER BY e.tag_equipo;
         `);
 
       res.status(200).json({
@@ -87,6 +99,10 @@ equipmentRouter.get(
           sistema: row.sistema,
           nodo: row.nodo,
           panel: row.panel,
+          planoPnid: row.plano_pnid,
+          tipoEquipoId: row.tipo_equipo_id === null ? null : String(row.tipo_equipo_id),
+          tipoEquipoCodigo: row.tipo_equipo_codigo,
+          tipoEquipoNombre: row.tipo_equipo_nombre,
 
           active: Boolean(row.activo),
           createdAt: row.created_at,
@@ -131,22 +147,27 @@ equipmentRouter.get(
         .input('equipo_id', sql.NVarChar(30), equipmentId)
         .query(`
           SELECT
-            id,
-            proyecto_id,
-            tag_equipo,
-            descripcion,
-            sistema,
-            nodo,
-            panel,
-            activo,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-          FROM nucleo.equipo
-          WHERE id = TRY_CONVERT(BIGINT, @equipo_id)
-            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1;
+            e.id,
+            e.proyecto_id,
+            e.tag_equipo,
+            e.descripcion,
+            e.sistema,
+            e.nodo,
+            e.panel,
+            e.plano_pnid,
+            e.tipo_equipo_id,
+            t.codigo AS tipo_equipo_codigo,
+            t.nombre AS tipo_equipo_nombre,
+            e.activo,
+            e.created_at,
+            e.updated_at,
+            e.created_by,
+            e.updated_by
+          FROM nucleo.equipo e
+          LEFT JOIN cat.cat_tipo_equipo t ON t.id = e.tipo_equipo_id
+          WHERE e.id = TRY_CONVERT(BIGINT, @equipo_id)
+            AND e.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND e.activo = 1;
         `);
 
       const row = result.recordset[0];
@@ -169,6 +190,10 @@ equipmentRouter.get(
           sistema: row.sistema,
           nodo: row.nodo,
           panel: row.panel,
+          planoPnid: row.plano_pnid,
+          tipoEquipoId: row.tipo_equipo_id === null ? null : String(row.tipo_equipo_id),
+          tipoEquipoCodigo: row.tipo_equipo_codigo,
+          tipoEquipoNombre: row.tipo_equipo_nombre,
 
           active: Boolean(row.activo),
 
@@ -205,7 +230,9 @@ equipmentRouter.post(
         descripcion = null,
         sistema = null,
         nodo = null,
-        panel = null
+        panel = null,
+        planoPnid = null,
+        tipoEquipoId = null
       } = req.body ?? {};
 
       if (typeof tagEquipo !== 'string' || tagEquipo.trim().length === 0) {
@@ -230,7 +257,8 @@ equipmentRouter.post(
         { name: 'descripcion', value: descripcion, max: 300 },
         { name: 'sistema', value: sistema, max: 50 },
         { name: 'nodo', value: nodo, max: 50 },
-        { name: 'panel', value: panel, max: 50 }
+        { name: 'panel', value: panel, max: 50 },
+        { name: 'planoPnid', value: planoPnid, max: 50 }
       ];
 
       for (const field of optionalFields) {
@@ -255,9 +283,21 @@ equipmentRouter.post(
         }
       }
 
+      if (
+        tipoEquipoId !== null &&
+        tipoEquipoId !== undefined &&
+        !/^\d+$/.test(String(tipoEquipoId))
+      ) {
+        res.status(400).json({
+          error: 'validation_error',
+          message: 'tipoEquipoId must be a numeric id or null.'
+        });
+        return;
+      }
+
       const pool = await getDbPool();
 
-      const result = await pool
+      const insertResult = await pool
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('created_by', sql.NVarChar(30), userId)
@@ -266,6 +306,8 @@ equipmentRouter.post(
         .input('sistema', sql.NVarChar(50), sistema)
         .input('nodo', sql.NVarChar(50), nodo)
         .input('panel', sql.NVarChar(50), panel)
+        .input('plano_pnid', sql.NVarChar(50), planoPnid)
+        .input('tipo_equipo_id', sql.NVarChar(30), tipoEquipoId)
         .query(`
           IF EXISTS (
             SELECT 1
@@ -285,21 +327,14 @@ equipmentRouter.post(
             sistema,
             nodo,
             panel,
+            plano_pnid,
+            tipo_equipo_id,
             activo,
             created_at,
             created_by
           )
           OUTPUT
-            INSERTED.id,
-            INSERTED.proyecto_id,
-            INSERTED.tag_equipo,
-            INSERTED.descripcion,
-            INSERTED.sistema,
-            INSERTED.nodo,
-            INSERTED.panel,
-            INSERTED.activo,
-            INSERTED.created_at,
-            INSERTED.created_by
+            INSERTED.id
           VALUES (
             TRY_CONVERT(BIGINT, @proyecto_id),
             @tag_equipo,
@@ -307,10 +342,27 @@ equipmentRouter.post(
             @sistema,
             @nodo,
             @panel,
+            @plano_pnid,
+            TRY_CONVERT(BIGINT, @tipo_equipo_id),
             1,
             SYSUTCDATETIME(),
             TRY_CONVERT(BIGINT, @created_by)
           );
+        `);
+
+      const newId = String(insertResult.recordset[0].id);
+
+      const result = await pool
+        .request()
+        .input('id', sql.NVarChar(30), newId)
+        .query(`
+          SELECT
+            e.id, e.proyecto_id, e.tag_equipo, e.descripcion, e.sistema, e.nodo, e.panel,
+            e.plano_pnid, e.tipo_equipo_id, t.codigo AS tipo_equipo_codigo, t.nombre AS tipo_equipo_nombre,
+            e.activo, e.created_at, e.updated_at, e.created_by, e.updated_by
+          FROM nucleo.equipo e
+          LEFT JOIN cat.cat_tipo_equipo t ON t.id = e.tipo_equipo_id
+          WHERE e.id = TRY_CONVERT(BIGINT, @id);
         `);
 
       const row = result.recordset[0];
@@ -327,9 +379,15 @@ equipmentRouter.post(
             sistema: row.sistema,
             nodo: row.nodo,
             panel: row.panel,
+            planoPnid: row.plano_pnid,
+            tipoEquipoId: row.tipo_equipo_id === null ? null : String(row.tipo_equipo_id),
+            tipoEquipoCodigo: row.tipo_equipo_codigo,
+            tipoEquipoNombre: row.tipo_equipo_nombre,
             active: Boolean(row.activo),
             createdAt: row.created_at,
-            createdBy: row.created_by === null ? null : String(row.created_by)
+            updatedAt: row.updated_at,
+            createdBy: row.created_by === null ? null : String(row.created_by),
+            updatedBy: row.updated_by === null ? null : String(row.updated_by)
           }
         });
 
@@ -340,6 +398,14 @@ equipmentRouter.post(
         res.status(409).json({
           error: 'equipment_tag_conflict',
           message: 'An active equipment with this TAG already exists in the project.'
+        });
+        return;
+      }
+
+      if (number === 547) {
+        res.status(400).json({
+          error: 'invalid_reference',
+          message: 'tipoEquipoId does not exist.'
         });
         return;
       }
@@ -378,7 +444,8 @@ equipmentRouter.patch(
         descripcion: { column: 'descripcion', sqlType: sql.NVarChar(300), max: 300 },
         sistema: { column: 'sistema', sqlType: sql.NVarChar(50), max: 50 },
         nodo: { column: 'nodo', sqlType: sql.NVarChar(50), max: 50 },
-        panel: { column: 'panel', sqlType: sql.NVarChar(50), max: 50 }
+        panel: { column: 'panel', sqlType: sql.NVarChar(50), max: 50 },
+        planoPnid: { column: 'plano_pnid', sqlType: sql.NVarChar(50), max: 50 }
       } as const;
 
       const body = req.body ?? {};
@@ -387,7 +454,9 @@ equipmentRouter.patch(
         (key) => key in allowedFields
       ) as Array<keyof typeof allowedFields>;
 
-      if (keys.length === 0) {
+      const hasTipoEquipoId = 'tipoEquipoId' in body;
+
+      if (keys.length === 0 && !hasTipoEquipoId) {
         res.status(400).json({
           error: 'validation_error',
           message: 'No editable fields were provided.'
@@ -428,6 +497,18 @@ equipmentRouter.patch(
         }
       }
 
+      if (
+        hasTipoEquipoId &&
+        body.tipoEquipoId !== null &&
+        !/^\d+$/.test(String(body.tipoEquipoId))
+      ) {
+        res.status(400).json({
+          error: 'validation_error',
+          message: 'tipoEquipoId must be a numeric id or null.'
+        });
+        return;
+      }
+
       const pool = await getDbPool();
       const request = pool.request();
 
@@ -445,6 +526,11 @@ equipmentRouter.patch(
         request.input(parameter, config.sqlType, body[key]);
         assignments.push(`${config.column} = @${parameter}`);
       });
+
+      if (hasTipoEquipoId) {
+        request.input('tipo_equipo_id', sql.NVarChar(30), body.tipoEquipoId);
+        assignments.push('tipo_equipo_id = TRY_CONVERT(BIGINT, @tipo_equipo_id)');
+      }
 
       if ('tagEquipo' in body) {
         request.input('nuevo_tag', sql.NVarChar(50), body.tagEquipo);
@@ -486,24 +572,28 @@ equipmentRouter.patch(
           updated_at = SYSUTCDATETIME(),
           updated_by = TRY_CONVERT(BIGINT, @updated_by)
         OUTPUT
-          INSERTED.id,
-          INSERTED.proyecto_id,
-          INSERTED.tag_equipo,
-          INSERTED.descripcion,
-          INSERTED.sistema,
-          INSERTED.nodo,
-          INSERTED.panel,
-          INSERTED.activo,
-          INSERTED.created_at,
-          INSERTED.updated_at,
-          INSERTED.created_by,
-          INSERTED.updated_by
+          INSERTED.id
         WHERE id = TRY_CONVERT(BIGINT, @equipo_id)
           AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
           AND activo = 1;
       `);
 
-      const row = result.recordset[0];
+      const updatedId = result.recordset[0]?.id;
+
+      const finalResult = await pool
+        .request()
+        .input('id', sql.NVarChar(30), String(updatedId))
+        .query(`
+          SELECT
+            e.id, e.proyecto_id, e.tag_equipo, e.descripcion, e.sistema, e.nodo, e.panel,
+            e.plano_pnid, e.tipo_equipo_id, t.codigo AS tipo_equipo_codigo, t.nombre AS tipo_equipo_nombre,
+            e.activo, e.created_at, e.updated_at, e.created_by, e.updated_by
+          FROM nucleo.equipo e
+          LEFT JOIN cat.cat_tipo_equipo t ON t.id = e.tipo_equipo_id
+          WHERE e.id = TRY_CONVERT(BIGINT, @id);
+        `);
+
+      const row = finalResult.recordset[0];
 
       res.status(200).json({
         equipment: {
@@ -515,6 +605,10 @@ equipmentRouter.patch(
           sistema: row.sistema,
           nodo: row.nodo,
           panel: row.panel,
+          planoPnid: row.plano_pnid,
+          tipoEquipoId: row.tipo_equipo_id === null ? null : String(row.tipo_equipo_id),
+          tipoEquipoCodigo: row.tipo_equipo_codigo,
+          tipoEquipoNombre: row.tipo_equipo_nombre,
 
           active: Boolean(row.activo),
 
@@ -533,6 +627,14 @@ equipmentRouter.patch(
         res.status(409).json({
           error: 'equipment_tag_conflict',
           message: 'An active equipment with this TAG already exists in the project.'
+        });
+        return;
+      }
+
+      if (number === 547) {
+        res.status(400).json({
+          error: 'invalid_reference',
+          message: 'tipoEquipoId does not exist.'
         });
         return;
       }
@@ -559,6 +661,14 @@ equipmentRouter.patch(
  * nucleo.equipo no tiene triggers propios, así que a diferencia de
  * nucleo.senal el OUTPUT sin INTO sí es válido aquí (igual que en
  * instruments.ts).
+ *
+ * "Recursos en uso no se pueden desactivar" (mismo principio que canal/
+ * módulo/punto_conexion/cable, ver CLAUDE.md): un equipo referenciado por
+ * un instrumento activo (`equipo_asociado_id`, asociación curada a mano) o
+ * por un enlace de comunicaciones activo (`enlace_com.equipo_id`) se
+ * rechaza en vez de desactivarse en silencio. Nunca se tocan esas
+ * relaciones automáticamente — el usuario decide primero qué hacer con
+ * ellas (reasignar, desactivar el enlace, etc.).
  */
 equipmentRouter.delete(
   '/:equipmentId',
@@ -579,6 +689,36 @@ equipmentRouter.delete(
       }
 
       const pool = await getDbPool();
+
+      const usageResult = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('equipo_id', sql.NVarChar(30), equipmentId)
+        .query(`
+          SELECT
+            (SELECT COUNT(*) FROM nucleo.instrumento
+              WHERE equipo_asociado_id = TRY_CONVERT(BIGINT, @equipo_id)
+                AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+                AND activo = 1) AS instrumentos_asociados,
+            (SELECT COUNT(*) FROM nucleo.enlace_com
+              WHERE equipo_id = TRY_CONVERT(BIGINT, @equipo_id)
+                AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+                AND activo = 1) AS enlaces_com;
+        `);
+
+      const { instrumentos_asociados: instrumentosAsociados, enlaces_com: enlacesCom } = usageResult.recordset[0];
+
+      if (instrumentosAsociados > 0 || enlacesCom > 0) {
+        const motivos: string[] = [];
+        if (instrumentosAsociados > 0) motivos.push(`${instrumentosAsociados} instrumento(s) activo(s) lo tienen como equipo asociado`);
+        if (enlacesCom > 0) motivos.push(`${enlacesCom} enlace(s) de comunicaciones activo(s) lo usan`);
+
+        res.status(409).json({
+          error: 'equipment_in_use',
+          message: `No se puede desactivar: ${motivos.join(' y ')}. Reasigná o desactivá esas relaciones primero.`
+        });
+        return;
+      }
 
       const result = await pool
         .request()

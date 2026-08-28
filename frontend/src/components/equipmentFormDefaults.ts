@@ -6,6 +6,8 @@ export function emptyEquipmentInput(): EquipmentInput {
     descripcion: null,
     sistema: null,
     nodo: null,
-    panel: null
+    panel: null,
+    planoPnid: null,
+    tipoEquipoId: null
   };
 }

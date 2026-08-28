@@ -146,7 +146,11 @@ export interface InstrumentInput {
   instrumentoAsociadoTag: string | null;
 }
 
-/** Equipo tal como lo devuelve GET (ver equipment.ts). */
+/** Equipo tal como lo devuelve GET (ver equipment.ts). Catálogo curado a
+ * mano — nunca se puebla automáticamente desde un reporte P&ID (migración
+ * 007). `tipoEquipoCodigo`/`tipoEquipoNombre` vienen ya resueltos (join
+ * contra cat.cat_tipo_equipo), igual patrón que otras entidades con un
+ * catálogo referenciado. */
 export interface Equipment {
   id: string;
   projectId: string;
@@ -155,6 +159,10 @@ export interface Equipment {
   sistema: string | null;
   nodo: string | null;
   panel: string | null;
+  planoPnid: string | null;
+  tipoEquipoId: string | null;
+  tipoEquipoCodigo: string | null;
+  tipoEquipoNombre: string | null;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -190,6 +198,23 @@ export interface EquipmentInput {
   sistema: string | null;
   nodo: string | null;
   panel: string | null;
+  planoPnid: string | null;
+  tipoEquipoId: string | null;
+}
+
+/** cat.cat_tipo_equipo (migración 007) — catálogo global, solo lectura,
+ * lista cerrada por ahora (ELECTRICO / INSTRUMENTACION). No reutiliza
+ * CatalogItem: su columna de texto es `nombre`, no `descripcion`. */
+export interface TipoEquipo {
+  id: string;
+  codigo: string;
+  nombre: string;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface TiposEquipoResponse {
+  items: TipoEquipo[];
 }
 
 /** Fila de cualquiera de los catálogos simples (ver lib/simpleCatalogRouter.ts). */

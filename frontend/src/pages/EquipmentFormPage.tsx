@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import { createEquipment } from '../api/equipment';
+import { listTiposEquipo } from '../api/tiposEquipo';
 import { ApiError } from '../api/client';
-import type { EquipmentInput } from '../api/types';
+import { useAsyncData } from '../lib/useAsyncData';
+import type { EquipmentInput, TipoEquipo } from '../api/types';
 import { EquipmentForm } from '../components/EquipmentForm';
 import { emptyEquipmentInput } from '../components/equipmentFormDefaults';
 import { ErrorMessage } from '../components/ErrorMessage';
@@ -21,6 +23,11 @@ export function EquipmentFormPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<ApiError | Error | null>(null);
+
+  const fetchTiposEquipo = useCallback(() => {
+    return listTiposEquipo(devUser.email).then((r) => r.items);
+  }, [devUser.email]);
+  const { data: tiposEquipo } = useAsyncData<TipoEquipo[]>(fetchTiposEquipo);
 
   if (!projectId) {
     return <p>Falta el proyecto en la URL.</p>;
@@ -56,6 +63,7 @@ export function EquipmentFormPage() {
 
       <EquipmentForm
         initialValue={emptyEquipmentInput()}
+        tiposEquipo={tiposEquipo ?? []}
         submitLabel="Crear equipo"
         submitting={submitting}
         onSubmit={handleSubmit}

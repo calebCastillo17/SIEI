@@ -788,20 +788,26 @@ async function applyNuevoInstrumento(
     values.push(`@${paramName}`);
     request.input(paramName, sql.NVarChar(maxLen), (fields[field] ?? null)?.slice(0, maxLen) ?? null);
 
-    if (field === 'equipoAsociadoTag') {
-      columns.push('equipo_asociado_id');
-      values.push(`(
-        SELECT TOP (1) id FROM nucleo.equipo
-        WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-          AND tag_equipo = @${paramName}
-          AND activo = 1
-      )`);
-    }
+    // equipo_asociado_id NUNCA se resuelve automáticamente acá — es una
+    // curación manual exclusiva de SIEI (ver equipment.ts / instruments.ts
+    // PATCH). El P&ID solo puede escribir equipo_asociado_tag (el texto de
+    // referencia), nunca el id: incluso en un INSERT nuevo, la asociación
+    // curada empieza en NULL y el usuario la fija a mano si corresponde.
+    // Decisión explícita del usuario tras encontrar que la versión anterior
+    // de este código SÍ resolvía por coincidencia exacta de TAG — eso era
+    // justo el automatismo que no quiere: un P&ID desactualizado nunca debe
+    // decidir con qué equipo curado de SIEI queda vinculado un instrumento.
 
     if (field === 'instrumentoAsociadoTag') {
       // Auto-referencia a nucleo.instrumento — nunca hace falta excluir la
       // propia fila acá: todavía no existe (es un INSERT), no puede
       // resolver a sí misma.
+      //
+      // NOTA: esto SÍ sigue resolviendo automáticamente por TAG, a
+      // diferencia de equipo_asociado_id de arriba — es el mismo patrón de
+      // automatismo y probablemente merece el mismo tratamiento, pero el
+      // usuario pidió explícitamente dejarlo como está por ahora y tratarlo
+      // como pendiente separado (no tocar en este cambio).
       columns.push('instrumento_asociado_id');
       values.push(`(
         SELECT TOP (1) id FROM nucleo.instrumento
@@ -865,16 +871,12 @@ async function applyActualizarInstrumento(
     assignments.push(`${column} = @${paramName}`);
     request.input(paramName, sql.NVarChar(maxLen), (fields[field] ?? null)?.slice(0, maxLen) ?? null);
 
-    if (field === 'equipoAsociadoTag') {
-      assignments.push(`
-        equipo_asociado_id = (
-          SELECT TOP (1) id FROM nucleo.equipo
-          WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND tag_equipo = @${paramName}
-            AND activo = 1
-        )
-      `);
-    }
+    // equipo_asociado_id NUNCA se toca acá — ver el comentario equivalente
+    // en applyCrearInstrumento. Antes de este cambio, esta UPDATE SÍ
+    // resolvía y pisaba equipo_asociado_id en cada importación que trajera
+    // "Equipo Asociado", incluso sobre una fila cuyo equipo_asociado_id ya
+    // había sido curado a mano por el usuario — exactamente el automatismo
+    // que se pidió eliminar.
 
     if (field === 'instrumentoAsociadoTag') {
       // Excluye la propia fila: un TAG asociado que por error coincide con

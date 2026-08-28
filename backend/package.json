@@ -16,6 +16,8 @@
     "test:catalogs": "tsx tests/catalogs.api.test.ts",
     "test:pnid-imports": "tsx tests/pnidImports.api.test.ts",
     "test:entregables-ldi": "tsx tests/entregablesLdi.api.test.ts",
+    "test:equipos-instrumentacion": "tsx tests/equiposInstrumentacion.api.test.ts",
+    "seed:equipos-620": "tsx scripts/seedEquiposDesdeExcel.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js"

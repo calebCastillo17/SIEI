@@ -40,10 +40,11 @@ export function InstrumentsListPage() {
   const [estadoFilter, setEstadoFilter] = useState('');
   const [sistemaFilter, setSistemaFilter] = useState('');
   const [nodoFilter, setNodoFilter] = useState('');
+  const [planoPnidFilter, setPlanoPnidFilter] = useState('');
 
   const items = useMemo(() => instruments ?? [], [instruments]);
 
-  /* Opciones de Sistema/Nodo = valores realmente presentes en los
+  /* Opciones de Sistema/Nodo/P&ID = valores realmente presentes en los
    * instrumentos ya cargados — no son catálogos propios (son texto libre
    * en nucleo.instrumento), así que no hay de dónde más sacar la lista. */
   const sistemaOptions = useMemo(
@@ -52,6 +53,10 @@ export function InstrumentsListPage() {
   );
   const nodoOptions = useMemo(
     () => [...new Set(items.map((i) => i.nodo).filter((v): v is string => Boolean(v)))].sort(),
+    [items]
+  );
+  const planoPnidOptions = useMemo(
+    () => [...new Set(items.map((i) => i.planoPnid).filter((v): v is string => Boolean(v)))].sort(),
     [items]
   );
 
@@ -75,6 +80,7 @@ export function InstrumentsListPage() {
 
       if (sistemaFilter && instrument.sistema !== sistemaFilter) return false;
       if (nodoFilter && instrument.nodo !== nodoFilter) return false;
+      if (planoPnidFilter && instrument.planoPnid !== planoPnidFilter) return false;
 
       if (needle.length === 0) return true;
 
@@ -82,6 +88,7 @@ export function InstrumentsListPage() {
         instrument.tagInstrumento,
         instrument.tagAnterior,
         instrument.pnpid,
+        instrument.planoPnid,
         instrument.servicio,
         instrument.tipoInstrumento,
         instrument.sistema,
@@ -93,7 +100,7 @@ export function InstrumentsListPage() {
 
       return haystack.includes(needle);
     });
-  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, pnidEstadosById]);
+  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, pnidEstadosById]);
 
   if (!projectId) {
     return <p>Falta el proyecto en la URL.</p>;
@@ -183,7 +190,7 @@ export function InstrumentsListPage() {
               <span>Buscar</span>
               <input
                 type="text"
-                placeholder="TAG, TAG anterior, PnPID, servicio, tipo, sistema o nodo"
+                placeholder="TAG, TAG anterior, PnPID, P&ID, servicio, tipo, sistema o nodo"
                 value={searchText}
                 onChange={(event) => setSearchText(event.target.value)}
               />
@@ -221,6 +228,17 @@ export function InstrumentsListPage() {
                 ))}
               </select>
             </label>
+            <label className="form__field">
+              <span>P&amp;ID</span>
+              <select value={planoPnidFilter} onChange={(event) => setPlanoPnidFilter(event.target.value)}>
+                <option value="">Todos</option>
+                {planoPnidOptions.map((plano) => (
+                  <option key={plano} value={plano}>
+                    {plano}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <p className="page-subtitle">
@@ -245,6 +263,7 @@ export function InstrumentsListPage() {
                 <th>Sistema</th>
                 <th>Nodo</th>
                 <th>PnPID</th>
+                <th>P&amp;ID</th>
                 <th>Estado P&amp;ID</th>
                 <th aria-label="Acciones" />
               </tr>
@@ -263,6 +282,7 @@ export function InstrumentsListPage() {
                   <td>{instrument.sistema ?? '—'}</td>
                   <td>{instrument.nodo ?? '—'}</td>
                   <td>{instrument.pnpid ?? '—'}</td>
+                  <td>{instrument.planoPnid ?? '—'}</td>
                   <td>
                     <PnidEstadoBadge
                       codigo={

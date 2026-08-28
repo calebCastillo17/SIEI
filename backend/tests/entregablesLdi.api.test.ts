@@ -381,12 +381,91 @@ async function main() {
   const emitidas = historial.json.revisiones.filter((r: any) => r.estado === 'EMITIDA');
   check(`Historial tiene ${emitidas.length} revisiones EMITIDA (A,B,C,D,0,1 = 6)`, emitidas.length === 6);
 
+  // ==================== fila_caratula: valores realmente persistidos ====================
+  // A fue la primera emitida (-> fila 36) y es la 6ª en llegar a la 5ª fila
+  // libre (32-36) ya ocupada por B,C,D,0 -> A debe ser la expulsada
+  // (la de fila más alta = más antigua en la ventana), y las demás suben
+  // una fila para hacerle lugar a "1" en la 32. Confirmado también por
+  // inspección directa del .xlsx generado (Rev1: fila 36=B, 35=C, 34=D,
+  // 33=0, 32=1, A ausente).
+  const filaPorCodigo = new Map<string, number | null>(
+    emitidas.map((r: any) => [r.codigoRevision, r.filaCaratula])
+  );
+  check(
+    'A fue expulsada de la carátula (filaCaratula = null)',
+    filaPorCodigo.get('A') === null,
+    Object.fromEntries(filaPorCodigo)
+  );
+  check('B ocupa la fila 36 (subió desde 35 al expulsarse A)', filaPorCodigo.get('B') === 36);
+  check('C ocupa la fila 35 (subió desde 34)', filaPorCodigo.get('C') === 35);
+  check('D ocupa la fila 34 (subió desde 33)', filaPorCodigo.get('D') === 34);
+  check('0 ocupa la fila 33 (subió desde 32)', filaPorCodigo.get('0') === 33);
+  check('1 ocupa la fila 32 (la más nueva, la más baja)', filaPorCodigo.get('1') === 32);
+
   if (ultimaRevisionId) {
     const descargaUltima = await downloadArchivo(projectId, entregableId, ultimaRevisionId);
     const ultimaPath = path.join(outDir, '104-22043-4620003347-LDI-620-J-0001_Rev1.xlsx');
     await writeFile(ultimaPath, descargaUltima.buffer);
     console.log(`Última revisión (Rev 1, para ver el carrusel de 5) guardada en: ${ultimaPath}`);
   }
+
+  // ==================== eliminación definitiva (migración 009) ====================
+  // draft1Id ya está DESCARTADA desde el inicio de la suite (nunca llegó a
+  // emitirse, nunca tuvo fila_caratula) — caso simple para probar la rama
+  // DESCARTADA sin interferir con el carrusel de arriba.
+  async function callAs(email: string, method: string, p: string, body?: unknown) {
+    const res = await fetch(BASE + p, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-Dev-User-Email': email },
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    let json: any = null;
+    try { json = await res.json(); } catch { /* sin body JSON */ }
+    return { status: res.status, json };
+  }
+
+  const deleteNoConfirm = await call('DELETE', `${REVISIONES}/${draft1Id}`);
+  check(
+    'DELETE definitivo sin eliminarDefinitivamente -> 409 confirmacion_requerida',
+    deleteNoConfirm.status === 409 && deleteNoConfirm.json?.error === 'confirmacion_requerida',
+    deleteNoConfirm.json
+  );
+
+  const deleteAsViewer = await callAs('viewer@siei.local', 'DELETE', `${REVISIONES}/${draft1Id}`, {
+    eliminarDefinitivamente: true
+  });
+  check('DELETE definitivo como VIEWER sin acceso -> 403', deleteAsViewer.status === 403, deleteAsViewer.json);
+
+  const deleteDraft1 = await call('DELETE', `${REVISIONES}/${draft1Id}`, { eliminarDefinitivamente: true });
+  check(
+    'DELETE definitivo de una DESCARTADA como ADMIN -> 200',
+    deleteDraft1.status === 200 && deleteDraft1.json?.eliminado === true && deleteDraft1.json?.estadoAnterior === 'DESCARTADA',
+    deleteDraft1.json
+  );
+
+  const historialTrasDelete1 = await call('GET', REVISIONES);
+  check(
+    'La revisión eliminada ya no aparece en el historial',
+    !historialTrasDelete1.json.revisiones.some((r: any) => r.id === draft1Id)
+  );
+
+  // Caso real motivador: eliminar definitivamente una EMITIDA que ya fue
+  // expulsada de la carátula (Rev A — filaCaratula = null desde arriba).
+  const deleteRevAConfirm = await call('DELETE', `${REVISIONES}/${revAId}`, { eliminarDefinitivamente: true });
+  check(
+    'DELETE definitivo de una EMITIDA (ya expulsada de carátula) como ADMIN -> 200',
+    deleteRevAConfirm.status === 200 && deleteRevAConfirm.json?.eliminado === true && deleteRevAConfirm.json?.estadoAnterior === 'EMITIDA',
+    deleteRevAConfirm.json
+  );
+
+  const descargaRevABorrada = await downloadArchivo(projectId, entregableId, revAId);
+  check('El archivo de la revisión eliminada ya no se puede descargar (404)', descargaRevABorrada.status === 404);
+
+  const historialTrasDeleteA = await call('GET', REVISIONES);
+  check(
+    'Rev A ya no aparece en el historial tras el borrado definitivo',
+    !historialTrasDeleteA.json.revisiones.some((r: any) => r.id === revAId)
+  );
 
   // ==================== permisos ====================
   const viewerCreate = await fetch(`${BASE}${REVISIONES}`, {

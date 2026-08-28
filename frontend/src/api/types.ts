@@ -1127,6 +1127,10 @@ export interface RevisionEntregable {
   emitidaAt: string | null;
   descartadaBy: string | null;
   descartadaAt: string | null;
+  /** Fila fija (32-36) de la carátula, asignada una sola vez al emitir y
+   * nunca recalculada después (migración 010) — `null` si nunca se emitió
+   * o si ya fue expulsada de la ventana de 5 revisiones visibles. */
+  filaCaratula: number | null;
   createdAt: string;
   updatedAt: string | null;
   createdBy: string | null;
@@ -1229,3 +1233,12 @@ export interface RevisionCreateInput {
 }
 
 export type RevisionUpdateInput = Partial<RevisionCreateInput>;
+
+/** DELETE .../revisiones/:id sobre una EMITIDA/DESCARTADA con
+ * `eliminarDefinitivamente: true` (migración 009) — borrado físico real,
+ * nunca vuelve a existir. */
+export interface RevisionEliminacionResponse {
+  eliminado: true;
+  revisionId: string;
+  estadoAnterior: RevisionEstado;
+}

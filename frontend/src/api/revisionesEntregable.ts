@@ -2,6 +2,7 @@ import { apiFetch, ApiError, API_BASE_URL } from './client';
 import type {
   RevisionCreateInput,
   RevisionDetailResponse,
+  RevisionEliminacionResponse,
   RevisionEmitirResponse,
   RevisionesListResponse,
   RevisionMutationResponse,
@@ -93,6 +94,26 @@ export function emitirRevision(
 ): Promise<RevisionEmitirResponse> {
   return apiFetch<RevisionEmitirResponse>(`${base(projectId, entregableId)}/${revisionId}/emitir`, {
     method: 'POST',
+    devUserEmail
+  });
+}
+
+/** DELETE .../revisiones/:revisionId con `{ eliminarDefinitivamente:
+ * true }` — SOLO para una revisión ya EMITIDA o DESCARTADA (migración
+ * 009). Borrado físico real (revisión + snapshot + archivo emitido),
+ * irreversible. Requiere permiso de administración del proyecto: 403 si
+ * el rol actual no lo tiene, 409 si se llama sin el flag de confirmación
+ * (ver `discardRevision` para el caso BORRADOR -> DESCARTADA, que es
+ * distinto y reversible en el sentido de que no borra nada). */
+export function deleteRevisionDefinitivamente(
+  projectId: string,
+  entregableId: string,
+  revisionId: string,
+  devUserEmail: string
+): Promise<RevisionEliminacionResponse> {
+  return apiFetch<RevisionEliminacionResponse>(`${base(projectId, entregableId)}/${revisionId}`, {
+    method: 'DELETE',
+    body: { eliminarDefinitivamente: true },
     devUserEmail
   });
 }

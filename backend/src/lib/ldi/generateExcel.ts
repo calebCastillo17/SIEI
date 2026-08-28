@@ -32,14 +32,21 @@ export interface RevisionCaratula {
   inicialesPor: string;
   inicialesRevisado: string;
   inicialesAprobado: string;
+  /** Fila física de la carátula (32-36) — asignada UNA VEZ, la primera
+   * vez que la revisión se emite, y nunca recalculada después (migración
+   * 010: revision_entregable.fila_caratula). El caller (revisionesEntregable.ts)
+   * decide la asignación/desplazamiento; este generador solo escribe
+   * donde se le indica. */
+  filaCaratula: number;
 }
 
 export interface GenerarLdiExcelInput {
   plantillaBuffer: Buffer;
   meta: CaratulaMetadata;
-  /** Últimas revisiones EMITIDA, más reciente primero — se usan como
-   * máximo las primeras 5 (capacidad real de la plantilla, ver
-   * docs/MODELO_FISICO_SIEI.md). BORRADOR/DESCARTADA nunca llegan acá. */
+  /** Revisiones EMITIDA todavía visibles en la carátula (capacidad real
+   * de la plantilla: 5 filas, 32-36 — ver docs/MODELO_FISICO_SIEI.md),
+   * cada una con su propia fila ya resuelta. BORRADOR/DESCARTADA nunca
+   * llegan acá. */
   revisionesCaratula: RevisionCaratula[];
   /**
    * Ya ordenadas por el motor de orden (`order.ts`) según los criterios
@@ -109,8 +116,8 @@ const LOCACION_SIN_VALOR = '(SIN LOCACIÓN)';
  * Hoja1!R3 ("Revisión:" del bloque de encabezado), y re-verificado
  * independientemente contra esta plantilla (no reutilizado de la
  * anterior). */
-const CARATULA_REVISIONES_FILA_MAS_RECIENTE = 36;
-const CARATULA_REVISIONES_CAPACIDAD = 5;
+const CARATULA_REVISIONES_FILA_MIN = 32;
+const CARATULA_REVISIONES_FILA_MAX = 36;
 
 function findSheet(wb: ExcelJS.Workbook, candidates: string[]): ExcelJS.Worksheet {
   for (const name of candidates) {
@@ -230,17 +237,20 @@ function fillCaratula(
   // en la plantilla (SIEI no los administra todavía).
 
   // Tabla de revisiones: solo EMITIDA llega acá (filtrado por el caller),
-  // máximo 5, la más reciente siempre en la fila 36.
-  const ultimas = revisiones.slice(0, CARATULA_REVISIONES_CAPACIDAD);
-  ultimas.forEach((rev, idxDesdeLaMasReciente) => {
-    const fila = CARATULA_REVISIONES_FILA_MAS_RECIENTE - idxDesdeLaMasReciente;
+  // cada una a su propia fila_caratula ya resuelta (32-36) — fija desde
+  // que se asignó por primera vez, nunca recalculada por posición/orden.
+  for (const rev of revisiones) {
+    if (rev.filaCaratula < CARATULA_REVISIONES_FILA_MIN || rev.filaCaratula > CARATULA_REVISIONES_FILA_MAX) {
+      throw new LdiTemplateError(`filaCaratula fuera de rango (${CARATULA_REVISIONES_FILA_MIN}-${CARATULA_REVISIONES_FILA_MAX}): ${rev.filaCaratula}`);
+    }
+    const fila = rev.filaCaratula;
     ws.getCell(`B${fila}`).value = rev.codigoRevision;
     ws.getCell(`C${fila}`).value = new Date(`${rev.fecha}T00:00:00Z`);
     ws.getCell(`D${fila}`).value = rev.descripcion;
     ws.getCell(`H${fila}`).value = rev.inicialesPor;
     ws.getCell(`I${fila}`).value = rev.inicialesRevisado;
     ws.getCell(`J${fila}`).value = rev.inicialesAprobado;
-  });
+  }
 }
 
 /** Busca, en las primeras `maxRow` filas de `ws`, una celda cuyo texto

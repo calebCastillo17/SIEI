@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import {
+  deleteRevisionDefinitivamente,
   discardRevision,
   downloadRevisionArchivo,
   emitirRevision,
@@ -53,6 +54,7 @@ export function RevisionDetailPage() {
 
   const project = findProject(projectId);
   const canWrite = project?.access.permissions.write ?? false;
+  const canAdminister = project?.access.permissions.administer ?? false;
 
   const fetchDetail = useCallback(async (): Promise<RevisionDetailResponse | null> => {
     if (!projectId || !entregableId || !revisionId) return null;
@@ -89,6 +91,7 @@ export function RevisionDetailPage() {
   const [emitting, setEmitting] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [deletingDefinitivamente, setDeletingDefinitivamente] = useState(false);
   const [actionError, setActionError] = useState<Error | null>(null);
 
   if (!projectId || !entregableId || !revisionId) {
@@ -165,6 +168,26 @@ export function RevisionDetailPage() {
     }
   }
 
+  async function handleDeleteDefinitivamente() {
+    if (deletingDefinitivamente || !revision) return;
+    const confirmed = window.confirm(
+      `¿Eliminar DEFINITIVAMENTE la revisión "${revision.codigoRevision}"? ` +
+        'Esto borra el registro, su snapshot y el archivo .xlsx emitido de forma permanente — no hay forma de deshacerlo. ' +
+        'Escribí "eliminar" y confirmá para continuar.'
+    );
+    if (!confirmed) return;
+
+    setDeletingDefinitivamente(true);
+    setActionError(null);
+    try {
+      await deleteRevisionDefinitivamente(projectId!, entregableId!, revisionId!, devUser.email);
+      navigate(`/projects/${projectId}/entregables/${entregableId}`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err : new Error('Error desconocido.'));
+      setDeletingDefinitivamente(false);
+    }
+  }
+
   async function handleDownload() {
     if (downloading) return;
     setDownloading(true);
@@ -218,6 +241,21 @@ export function RevisionDetailPage() {
         <div className="notice">
           <h3>Revisión descartada</h3>
           <p>Esta revisión es de solo lectura y ya no se puede emitir. Queda como historial.</p>
+          <div className="form__actions">
+            <button
+              type="button"
+              className="button button--danger"
+              disabled={!canAdminister || deletingDefinitivamente}
+              title={
+                canAdminister
+                  ? 'Borra permanentemente esta revisión.'
+                  : 'Eliminar una revisión descartada requiere permiso de administración en el proyecto.'
+              }
+              onClick={handleDeleteDefinitivamente}
+            >
+              {deletingDefinitivamente ? 'Eliminando…' : 'Eliminar definitivamente'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -257,6 +295,14 @@ export function RevisionDetailPage() {
               <dd>{revision.emitidaAt ? new Date(revision.emitidaAt).toLocaleString() : '—'}</dd>
             </div>
           )}
+          {esEmitida && (
+            <div>
+              <dt>Fila en carátula</dt>
+              <dd>
+                {revision.filaCaratula ?? 'Ya no aparece (expulsada por revisiones más nuevas)'}
+              </dd>
+            </div>
+          )}
         </dl>
       )}
 
@@ -264,6 +310,19 @@ export function RevisionDetailPage() {
         <div className="form__actions">
           <button type="button" className="button" disabled={downloading} onClick={handleDownload}>
             {downloading ? 'Descargando…' : 'Descargar Excel'}
+          </button>
+          <button
+            type="button"
+            className="button button--danger"
+            disabled={!canAdminister || deletingDefinitivamente}
+            title={
+              canAdminister
+                ? 'Borra permanentemente esta revisión y su archivo emitido.'
+                : 'Eliminar una revisión emitida requiere permiso de administración en el proyecto.'
+            }
+            onClick={handleDeleteDefinitivamente}
+          >
+            {deletingDefinitivamente ? 'Eliminando…' : 'Eliminar definitivamente'}
           </button>
         </div>
       )}

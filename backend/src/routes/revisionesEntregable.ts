@@ -67,6 +67,7 @@ function serializeRevision(row: Record<string, any>) {
     criteriosAplicados: row.criterios_aplicados_json ? JSON.parse(row.criterios_aplicados_json) : null,
     plantillaId: row.plantilla_id === null ? null : String(row.plantilla_id),
     archivoId: row.archivo_id === null ? null : String(row.archivo_id),
+    filaCaratula: row.fila_caratula === null ? null : Number(row.fila_caratula),
     emitidaBy: row.emitida_by === null ? null : String(row.emitida_by),
     emitidaAt: row.emitida_at,
     descartadaBy: row.descartada_by === null ? null : String(row.descartada_by),
@@ -81,7 +82,7 @@ const REVISION_SELECT = `
   id, proyecto_id, entregable_id, codigo_revision, fecha, descripcion,
   iniciales_por, iniciales_revisado, iniciales_aprobado, estado,
   configuracion_orden_id, criterios_aplicados_json, metadatos_snapshot_json,
-  plantilla_id, archivo_id, emitida_by, emitida_at, descartada_by, descartada_at,
+  plantilla_id, archivo_id, fila_caratula, emitida_by, emitida_at, descartada_by, descartada_at,
   created_at, updated_at, created_by, updated_by
 `;
 
@@ -240,6 +241,9 @@ interface RevisionParaCaratula {
   inicialesPor: string;
   inicialesRevisado: string;
   inicialesAprobado: string;
+  /** Fila física 32-36, o null si todavía no se asignó (revisión que aún
+   * no se emitió — ver `planificarFilaCaratula`). */
+  filaCaratula: number | null;
 }
 
 function toIsoDate(value: unknown): string {
@@ -247,11 +251,23 @@ function toIsoDate(value: unknown): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Igual que RevisionParaCaratula, pero con `filaCaratula` garantizado no
+ * nulo (el SELECT que la produce ya filtra `fila_caratula IS NOT NULL`) e
+ * `id` propio — evita repetir `!` en cada uso de planificarFilaCaratula. */
+interface RevisionEmitidaConFila extends Omit<RevisionParaCaratula, 'filaCaratula'> {
+  id: string;
+  filaCaratula: number;
+}
+
+/** Trae las revisiones EMITIDA que TODAVÍA tienen fila de carátula
+ * asignada (migración 010) — nunca las expulsadas de la ventana de 5. No
+ * ordena por fecha: el orden en pantalla ya no importa para nada, cada
+ * una se ubica por su propia `filaCaratula`. */
 async function fetchRevisionesEmitidasPrevias(
   pool: sql.ConnectionPool,
   entregableId: string,
   excluirRevisionId?: string
-): Promise<RevisionParaCaratula[]> {
+): Promise<RevisionEmitidaConFila[]> {
   const request = pool.request().input('entregable_id', sql.NVarChar(30), entregableId);
   let filtroExclusion = '';
   if (excluirRevisionId) {
@@ -260,22 +276,65 @@ async function fetchRevisionesEmitidasPrevias(
   }
 
   const result = await request.query(`
-    SELECT codigo_revision, fecha, descripcion, iniciales_por, iniciales_revisado, iniciales_aprobado, emitida_at
+    SELECT id, codigo_revision, fecha, descripcion, iniciales_por, iniciales_revisado, iniciales_aprobado, fila_caratula
     FROM nucleo.revision_entregable
     WHERE entregable_id = TRY_CONVERT(BIGINT, @entregable_id)
       AND estado = 'EMITIDA'
+      AND fila_caratula IS NOT NULL
       ${filtroExclusion}
-    ORDER BY emitida_at DESC;
+    ORDER BY fila_caratula ASC;
   `);
 
   return result.recordset.map((r: any) => ({
+    id: String(r.id),
     codigoRevision: r.codigo_revision,
     fecha: toIsoDate(r.fecha),
     descripcion: r.descripcion,
     inicialesPor: r.iniciales_por,
     inicialesRevisado: r.iniciales_revisado,
-    inicialesAprobado: r.iniciales_aprobado
+    inicialesAprobado: r.iniciales_aprobado,
+    filaCaratula: r.fila_caratula
   }));
+}
+
+interface PlanFilaCaratula {
+  /** Fila que le corresponde a LA REVISIÓN QUE SE ESTÁ EMITIENDO ahora. */
+  nuevaFilaActual: number;
+  /** Id de la revisión que se cae de la carátula para hacerle lugar a la
+   * nueva (su fila_caratula pasa a NULL), o null si todavía había lugar
+   * libre y no hizo falta expulsar a nadie. */
+  idExpulsado: string | null;
+  /** Ids cuya fila_caratula sube +1 (se corrieron para liberar la 32). */
+  idsQueSuben: string[];
+}
+
+/**
+ * La primera revisión de un entregable va a la fila 36; cada revisión
+ * nueva sube una fila (35, 34, 33, 32) — asignación fija para siempre,
+ * nunca recalculada por posición (pedido explícito del usuario, migración
+ * 010). Al llegar a una 6ª (ya no hay fila libre entre 32 y 36), la más
+ * antigua de las 5 visibles (la de fila_caratula más alta, 36) se retira
+ * de la carátula y las demás suben un lugar para liberar la 32.
+ *
+ * Función pura — no toca la base. El caller aplica el plan dentro de la
+ * misma transacción que emite la revisión.
+ */
+function planificarFilaCaratula(
+  activos: Array<{ id: string; filaCaratula: number }>
+): PlanFilaCaratula {
+  if (activos.length === 0) {
+    return { nuevaFilaActual: 36, idExpulsado: null, idsQueSuben: [] };
+  }
+
+  const minFila = Math.min(...activos.map((a) => a.filaCaratula));
+  if (minFila > 32) {
+    return { nuevaFilaActual: minFila - 1, idExpulsado: null, idsQueSuben: [] };
+  }
+
+  // Las 5 filas están ocupadas: se expulsa la más antigua (fila más alta).
+  const expulsado = activos.reduce((a, b) => (a.filaCaratula > b.filaCaratula ? a : b));
+  const idsQueSuben = activos.filter((a) => a.id !== expulsado.id).map((a) => a.id);
+  return { nuevaFilaActual: 32, idExpulsado: expulsado.id, idsQueSuben };
 }
 
 function construirMetadatosSnapshot(
@@ -296,9 +355,10 @@ function construirMetadatosSnapshot(
     liderProyecto: doc?.lider_proyecto ?? null,
     gerenteIngenieriaConstruccion: doc?.gerente_ingenieria_construccion ?? null,
     numeroDocumento: entregable.numero_documento,
-    // Vista previa de cómo quedaría la tabla de revisiones de carátula si
-    // ESTA revisión se emitiera ahora — la más reciente primero.
-    revisionesMostradasEnCaratula: [revisionActual, ...revisionesEmitidasPrevias].slice(0, 5)
+    // Vista de cómo se ve (o se vería) la tabla de revisiones de
+    // carátula — cada una en su propia fila fija, nunca recalculada por
+    // orden/posición.
+    revisionesMostradasEnCaratula: [revisionActual, ...revisionesEmitidasPrevias]
   };
 }
 
@@ -516,15 +576,21 @@ revisionesEntregableRouter.post(
         snapshot: construirSnapshotFila(inst, codigo)
       }));
 
+      // Todavía es un BORRADOR — no se persiste ninguna fila_caratula acá,
+      // solo se estima cuál le tocaría si se emitiera ahora mismo (para
+      // que el preview de la carátula sea representativo).
+      const revisionesPrevias = await fetchRevisionesEmitidasPrevias(pool, entregableId);
+      const planFilaTentativo = planificarFilaCaratula(revisionesPrevias);
+
       const revisionActualParaCaratula: RevisionParaCaratula = {
         codigoRevision: codigo,
         fecha: fecha ? toIsoDate(fecha) : toIsoDate(new Date()),
         descripcion: descripcion.trim(),
         inicialesPor,
         inicialesRevisado,
-        inicialesAprobado
+        inicialesAprobado,
+        filaCaratula: planFilaTentativo.nuevaFilaActual
       };
-      const revisionesPrevias = await fetchRevisionesEmitidasPrevias(pool, entregableId);
       const metadatosSnapshot = construirMetadatosSnapshot(doc, entregable, revisionActualParaCaratula, revisionesPrevias);
 
       transaction = new sql.Transaction(pool);
@@ -691,15 +757,20 @@ revisionesEntregableRouter.patch(
         snapshot: construirSnapshotFila(inst, codigo)
       }));
 
+      // Sigue en BORRADOR — misma lógica que en el POST: solo se estima la
+      // fila tentativa, nada se persiste todavía.
+      const revisionesPrevias = await fetchRevisionesEmitidasPrevias(pool, entregableId!, revisionId);
+      const planFilaTentativo = planificarFilaCaratula(revisionesPrevias);
+
       const revisionActualParaCaratula: RevisionParaCaratula = {
         codigoRevision: codigo,
         fecha,
         descripcion,
         inicialesPor,
         inicialesRevisado,
-        inicialesAprobado
+        inicialesAprobado,
+        filaCaratula: planFilaTentativo.nuevaFilaActual
       };
-      const revisionesPrevias = await fetchRevisionesEmitidasPrevias(pool, entregableId!, revisionId);
       const metadatosSnapshot = construirMetadatosSnapshot(doc, entregable, revisionActualParaCaratula, revisionesPrevias);
 
       transaction = new sql.Transaction(pool);
@@ -768,47 +839,151 @@ revisionesEntregableRouter.patch(
 );
 
 /*
- * DELETE .../revisiones/:revisionId — "Descartar": BORRADOR -> DESCARTADA.
- * Nunca borra físicamente (ver decisión del usuario) — el registro y su
- * snapshot quedan, solo de lectura, y ya no se puede emitir.
+ * DELETE .../revisiones/:revisionId
+ *
+ * Dos comportamientos según el estado actual:
+ *  - BORRADOR -> "Descartar": cambio de estado a DESCARTADA (como siempre
+ *    fue). Nunca borra físicamente esta rama — el registro y su snapshot
+ *    quedan, solo de lectura, y ya no se puede emitir.
+ *  - EMITIDA / DESCARTADA -> "Eliminar definitivamente" (migración 009,
+ *    pedido explícito del usuario tras generar varias revisiones de
+ *    prueba reales): borrado físico real, incluido el archivo .xlsx.
+ *    Requiere `eliminarDefinitivamente: true` en el body (si no viene,
+ *    409 — nunca se borra por accidente) y permiso 'administer' del
+ *    proyecto (más estricto que el 'write' del resto de este router,
+ *    chequeado a mano acá porque es la única acción de este archivo que
+ *    lo necesita). El bypass de los triggers de inmutabilidad vive
+ *    SOLO en esta transacción (SESSION_CONTEXT se apaga antes del
+ *    COMMIT, así la conexión vuelve "limpia" al pool — ver migración
+ *    009).
  */
 revisionesEntregableRouter.delete(
   '/:revisionId',
   requireProjectPermission('write'),
   async (req: Request, res: Response, next: NextFunction) => {
+    let transaction: sql.Transaction | undefined;
+
     try {
       const projectId = req.projectAccess!.projectId;
       const entregableId = normalizeParam(req.params.entregableId);
       const revisionId = normalizeParam(req.params.revisionId);
       const userId = req.authUser!.id;
+      const body = req.body ?? {};
 
       const pool = await getDbPool();
-      const result = await pool
+
+      const current = await pool
         .request()
         .input('id', sql.NVarChar(30), revisionId)
         .input('entregable_id', sql.NVarChar(30), entregableId)
         .input('proyecto_id', sql.NVarChar(30), projectId)
-        .input('descartada_by', sql.NVarChar(30), userId)
         .query(`
-          UPDATE nucleo.revision_entregable
-          SET estado = N'DESCARTADA', descartada_by = TRY_CONVERT(BIGINT, @descartada_by), descartada_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
+          SELECT id, estado FROM nucleo.revision_entregable
           WHERE id = TRY_CONVERT(BIGINT, @id)
             AND entregable_id = TRY_CONVERT(BIGINT, @entregable_id)
-            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND estado = N'BORRADOR';
+            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id);
         `);
+      const revisionActual = current.recordset[0];
 
-      const row = result.rowsAffected[0] > 0 ? await fetchRevisionRow(pool, revisionId!) : undefined;
-      if (!row) {
+      if (!revisionActual) {
+        res.status(404).json({ error: 'revision_not_found', message: 'Revision does not exist for this entregable.' });
+        return;
+      }
+
+      if (revisionActual.estado === 'BORRADOR') {
+        const result = await pool
+          .request()
+          .input('id', sql.NVarChar(30), revisionId)
+          .input('descartada_by', sql.NVarChar(30), userId)
+          .query(`
+            UPDATE nucleo.revision_entregable
+            SET estado = N'DESCARTADA', descartada_by = TRY_CONVERT(BIGINT, @descartada_by), descartada_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
+            WHERE id = TRY_CONVERT(BIGINT, @id) AND estado = N'BORRADOR';
+          `);
+
+        const row = result.rowsAffected[0] > 0 ? await fetchRevisionRow(pool, revisionId!) : undefined;
+        if (!row) {
+          res.status(409).json({ error: 'revision_no_descartable', message: 'La revisión ya no está en estado BORRADOR.' });
+          return;
+        }
+
+        res.status(200).json({ revision: serializeRevision(row) });
+        return;
+      }
+
+      // A partir de acá: EMITIDA o DESCARTADA -> eliminación definitiva.
+      if (body.eliminarDefinitivamente !== true) {
         res.status(409).json({
-          error: 'revision_no_descartable',
-          message: 'La revisión no existe en este entregable o ya no está en estado BORRADOR.'
+          error: 'confirmacion_requerida',
+          message: `Esta revisión ya está ${revisionActual.estado} — eliminarla es definitivo y borra también su archivo emitido. Reenviá la solicitud con { "eliminarDefinitivamente": true } para confirmar.`
         });
         return;
       }
 
-      res.status(200).json({ revision: serializeRevision(row) });
+      if (!req.projectAccess!.permissions.administer) {
+        res.status(403).json({
+          error: 'forbidden',
+          message: 'Eliminar una revisión EMITIDA o DESCARTADA requiere permiso de administración en el proyecto.'
+        });
+        return;
+      }
+
+      transaction = new sql.Transaction(pool);
+      await transaction.begin();
+
+      await new sql.Request(transaction).query(
+        `EXEC sp_set_session_context @key = N'siei_bypass_inmutabilidad_revision', @value = 1;`
+      );
+
+      /*
+       * CK_revision_entregable_emitida_completa exige archivo_id NOT NULL
+       * mientras estado = 'EMITIDA' — nulearlo sin más, sobre una fila
+       * todavía EMITIDA, viola ese CHECK (descubierto probando este mismo
+       * endpoint contra una EMITIDA real). Como la fila entera se borra
+       * dentro de esta misma transacción unas líneas más abajo, bajar
+       * estado a BORRADOR acá es un estado transitorio que nadie más llega
+       * a ver — solo destraba el CHECK para poder romper el vínculo
+       * circular con revision_entregable_archivo antes del DELETE. No
+       * afecta la respuesta: estadoAnterior ya se leyó de `revisionActual`
+       * más arriba.
+       */
+      await new sql.Request(transaction)
+        .input('id', sql.NVarChar(30), revisionId)
+        .query(`UPDATE nucleo.revision_entregable SET archivo_id = NULL, estado = N'BORRADOR' WHERE id = TRY_CONVERT(BIGINT, @id);`);
+
+      await new sql.Request(transaction)
+        .input('id', sql.NVarChar(30), revisionId)
+        .query(`DELETE FROM nucleo.revision_entregable_archivo WHERE revision_id = TRY_CONVERT(BIGINT, @id);`);
+
+      await new sql.Request(transaction)
+        .input('id', sql.NVarChar(30), revisionId)
+        .query(`DELETE FROM nucleo.revision_entregable_fila WHERE revision_id = TRY_CONVERT(BIGINT, @id);`);
+
+      await new sql.Request(transaction)
+        .input('id', sql.NVarChar(30), revisionId)
+        .query(`DELETE FROM nucleo.revision_entregable WHERE id = TRY_CONVERT(BIGINT, @id);`);
+
+      // Apaga el bypass ANTES del commit — la conexión vuelve al pool sin
+      // rastro de la marca, ninguna otra request la hereda por accidente.
+      await new sql.Request(transaction).query(
+        `EXEC sp_set_session_context @key = N'siei_bypass_inmutabilidad_revision', @value = 0;`
+      );
+
+      await transaction.commit();
+
+      res.status(200).json({
+        eliminado: true,
+        revisionId,
+        estadoAnterior: revisionActual.estado
+      });
     } catch (error) {
+      if (transaction) {
+        try {
+          await transaction.rollback();
+        } catch {
+          // ya pudo haber quedado sin transacción viva
+        }
+      }
       next(error);
     }
   }
@@ -879,17 +1054,42 @@ revisionesEntregableRouter.post(
 
       const filas = filasResult.recordset.map((f: any) => ({ item: f.item, snapshot: JSON.parse(f.datos_snapshot) }));
 
+      // Fila de carátula: se resuelve y se congela ACÁ, para siempre — no
+      // se recalcula nunca más aunque se emitan más revisiones después
+      // (pedido explícito del usuario, migración 010). `plan` decide si
+      // hace falta expulsar a la más antigua de las 5 visibles y subir a
+      // las demás para liberar la fila 32.
+      const revisionesPrevias = await fetchRevisionesEmitidasPrevias(pool, entregableId!, revisionId);
+      const planFila = planificarFilaCaratula(revisionesPrevias);
+
       const revisionActualParaCaratula: RevisionCaratula = {
         codigoRevision: revision.codigo_revision,
         fecha: toIsoDate(revision.fecha),
         descripcion: revision.descripcion,
         inicialesPor: revision.iniciales_por,
         inicialesRevisado: revision.iniciales_revisado,
-        inicialesAprobado: revision.iniciales_aprobado
+        inicialesAprobado: revision.iniciales_aprobado,
+        filaCaratula: planFila.nuevaFilaActual
       };
-      const revisionesPrevias = await fetchRevisionesEmitidasPrevias(pool, entregableId!, revisionId);
-      const revisionesCaratula = [revisionActualParaCaratula, ...revisionesPrevias].slice(0, 5);
-      const metadatosSnapshotFinal = construirMetadatosSnapshot(doc, entregable, revisionActualParaCaratula, revisionesPrevias);
+
+      // Vista para ESTE Excel: las previas que sobreviven (sin la
+      // expulsada), con su fila ya corrida +1 si correspondía, más la
+      // actual en su fila recién asignada.
+      const revisionesCaratula: RevisionCaratula[] = [
+        ...revisionesPrevias
+          .filter((r) => r.id !== planFila.idExpulsado)
+          .map((r) => ({
+            codigoRevision: r.codigoRevision,
+            fecha: r.fecha,
+            descripcion: r.descripcion,
+            inicialesPor: r.inicialesPor,
+            inicialesRevisado: r.inicialesRevisado,
+            inicialesAprobado: r.inicialesAprobado,
+            filaCaratula: planFila.idsQueSuben.includes(r.id) ? r.filaCaratula! + 1 : r.filaCaratula!
+          })),
+        revisionActualParaCaratula
+      ];
+      const metadatosSnapshotFinal = construirMetadatosSnapshot(doc, entregable, revisionActualParaCaratula, revisionesCaratula.slice(0, -1));
 
       const meta: CaratulaMetadata = {
         proyectoCumbra: doc?.codigo_proyecto_cumbra ?? null,
@@ -940,18 +1140,47 @@ revisionesEntregableRouter.post(
       await new sql.Request(transaction)
         .input('id', sql.NVarChar(30), revisionId)
         .input('archivo_id', sql.NVarChar(30), archivoId)
+        .input('fila_caratula', sql.Int, planFila.nuevaFilaActual)
         .input('metadatos_snapshot_json', sql.NVarChar(sql.MAX), JSON.stringify(metadatosSnapshotFinal))
         .input('emitida_by', sql.NVarChar(30), userId)
         .query(`
           UPDATE nucleo.revision_entregable
           SET estado = N'EMITIDA',
               archivo_id = TRY_CONVERT(BIGINT, @archivo_id),
+              fila_caratula = @fila_caratula,
               metadatos_snapshot_json = @metadatos_snapshot_json,
               emitida_by = TRY_CONVERT(BIGINT, @emitida_by),
               emitida_at = SYSUTCDATETIME(),
               updated_at = SYSUTCDATETIME()
           WHERE id = TRY_CONVERT(BIGINT, @id);
         `);
+
+      // La revisión que se está emitiendo recién ahora pasa a EMITIDA (el
+      // UPDATE de arriba) — el trigger no la bloquea porque ANTES de este
+      // UPDATE seguía en BORRADOR. Pero las que hay que correr/expulsar
+      // más abajo YA son EMITIDA desde antes: sin el bypass, esas SÍ
+      // quedarían rechazadas (ver migración 009).
+      if (planFila.idExpulsado || planFila.idsQueSuben.length > 0) {
+        await new sql.Request(transaction).query(
+          `EXEC sp_set_session_context @key = N'siei_bypass_inmutabilidad_revision', @value = 1;`
+        );
+
+        if (planFila.idExpulsado) {
+          await new sql.Request(transaction)
+            .input('id', sql.NVarChar(30), planFila.idExpulsado)
+            .query(`UPDATE nucleo.revision_entregable SET fila_caratula = NULL WHERE id = TRY_CONVERT(BIGINT, @id);`);
+        }
+
+        for (const idQueSube of planFila.idsQueSuben) {
+          await new sql.Request(transaction)
+            .input('id', sql.NVarChar(30), idQueSube)
+            .query(`UPDATE nucleo.revision_entregable SET fila_caratula = fila_caratula + 1 WHERE id = TRY_CONVERT(BIGINT, @id);`);
+        }
+
+        await new sql.Request(transaction).query(
+          `EXEC sp_set_session_context @key = N'siei_bypass_inmutabilidad_revision', @value = 0;`
+        );
+      }
 
       await transaction.commit();
 

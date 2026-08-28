@@ -36,6 +36,7 @@ import { createSimpleCatalogRouter } from './lib/simpleCatalogRouter.js';
 import { devAuthzRouter } from './routes/devAuthz.js';
 import { tiposEntregableRouter } from './routes/tiposEntregable.js';
 import { ordenTipoInstrumentoRouter } from './routes/ordenTipoInstrumento.js';
+import { tiposEquipoRouter } from './routes/tiposEquipo.js';
 
 const app = express();
 
@@ -253,6 +254,7 @@ app.use(
 
 app.use('/api/catalogs/tipos-entregable', tiposEntregableRouter);
 app.use('/api/catalogs/orden-tipo-instrumento', ordenTipoInstrumentoRouter);
+app.use('/api/catalogs/tipos-equipo', tiposEquipoRouter);
 
 app.use('/api/clients', clientsRouter);
 app.use('/api/users', usersRouter);

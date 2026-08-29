@@ -444,7 +444,12 @@ revisionesEntregableRouter.get(
         metadatosSnapshot: row.metadatos_snapshot_json ? JSON.parse(row.metadatos_snapshot_json) : null,
         filas: filasResult.recordset.map((f: any) => ({
           item: f.item,
-          instrumentoId: String(f.instrumento_id),
+          // f.instrumento_id puede ser NULL: el instrumento original fue
+          // eliminado definitivamente del Master (ver migración 011 y
+          // DELETE /instruments/:id con eliminarDefinitivamente=true) —
+          // el snapshot (datos_snapshot) sigue intacto, solo se pierde el
+          // enlace en vivo.
+          instrumentoId: f.instrumento_id === null ? undefined : String(f.instrumento_id),
           snapshot: JSON.parse(f.datos_snapshot)
         }))
       });

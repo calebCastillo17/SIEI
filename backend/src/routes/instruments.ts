@@ -1014,10 +1014,21 @@ instrumentsRouter.patch(
 /*
  * DELETE /api/projects/:projectId/instruments/:instrumentId
  *
- * Desactivación lógica.
- * No elimina físicamente el instrumento.
- *
- * Requiere permiso DEACTIVATE.
+ * Dos comportamientos, igual que revisionesEntregable.ts:
+ *  - Sin `eliminarDefinitivamente` en el body (o body vacío): desactivación
+ *    lógica de siempre (activo=0). Ningún cambio de comportamiento acá.
+ *  - Con `eliminarDefinitivamente: true`: borrado físico REAL, pero
+ *    SOLO permitido cuando el estado P&ID del instrumento es exactamente
+ *    NO_EXISTE_EN_PNID (puerta de negocio angosta, pedido explícito del
+ *    usuario — nunca un "borrar cualquier instrumento"). Requiere permiso
+ *    'administer' del proyecto (más estricto que el 'deactivate' que ya
+ *    exige este router para todo el resto). Ver migración 011: la fila de
+ *    snapshot de una revisión LDI ya EMITIDA que referenciaba este
+ *    instrumento sobrevive con `instrumento_id = NULL` (su contenido
+ *    impreso, `datos_snapshot`, es autocontenido y no se toca) — el
+ *    UPDATE que la nulea, sobre una revisión ya EMITIDA, necesita el
+ *    mismo bypass de SESSION_CONTEXT que usa la eliminación definitiva
+ *    de revisiones (migración 009).
  */
 instrumentsRouter.delete(
   '/:instrumentId',
@@ -1026,6 +1037,7 @@ instrumentsRouter.delete(
     try {
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
+      const body = req.body ?? {};
 
       const instrumentId = normalizeParam(req.params.instrumentId);
 
@@ -1039,55 +1051,248 @@ instrumentsRouter.delete(
 
       const pool = await getDbPool();
 
-      const result = await pool
-        .request()
-        .input('proyecto_id', sql.NVarChar(30), projectId)
-        .input('instrumento_id', sql.NVarChar(30), instrumentId)
-        .input('updated_by', sql.NVarChar(30), userId)
-        .query(`
-          UPDATE nucleo.instrumento
-          SET
-            activo = 0,
-            updated_at = SYSUTCDATETIME(),
-            updated_by = TRY_CONVERT(BIGINT, @updated_by)
-          OUTPUT
-            INSERTED.id,
-            INSERTED.proyecto_id,
-            INSERTED.tag_instrumento,
-            INSERTED.activo,
-            INSERTED.updated_at,
-            INSERTED.updated_by
-          WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
-            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1;
-        `);
+      if (body.eliminarDefinitivamente !== true) {
+        // ==================== desactivación lógica (comportamiento de siempre) ====================
+        const result = await pool
+          .request()
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .input('updated_by', sql.NVarChar(30), userId)
+          .query(`
+            UPDATE nucleo.instrumento
+            SET
+              activo = 0,
+              updated_at = SYSUTCDATETIME(),
+              updated_by = TRY_CONVERT(BIGINT, @updated_by)
+            OUTPUT
+              INSERTED.id,
+              INSERTED.proyecto_id,
+              INSERTED.tag_instrumento,
+              INSERTED.activo,
+              INSERTED.updated_at,
+              INSERTED.updated_by
+            WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
+              AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND activo = 1;
+          `);
 
-      const row = result.recordset[0];
+        const row = result.recordset[0];
 
-      if (!row) {
-        res.status(404).json({
-          error: 'instrument_not_found',
-          message:
-            'Instrument does not exist in this project or is already inactive.'
+        if (!row) {
+          res.status(404).json({
+            error: 'instrument_not_found',
+            message:
+              'Instrument does not exist in this project or is already inactive.'
+          });
+          return;
+        }
+
+        res.status(200).json({
+          instrument: {
+            id: String(row.id),
+            projectId: String(row.proyecto_id),
+            tagInstrumento: row.tag_instrumento,
+            active: Boolean(row.activo),
+
+            updatedAt: row.updated_at,
+
+            updatedBy:
+              row.updated_by === null
+                ? null
+                : String(row.updated_by)
+          }
         });
         return;
       }
 
-      res.status(200).json({
-        instrument: {
-          id: String(row.id),
-          projectId: String(row.proyecto_id),
-          tagInstrumento: row.tag_instrumento,
-          active: Boolean(row.activo),
+      // ==================== eliminación definitiva ====================
 
-          updatedAt: row.updated_at,
+      if (!req.projectAccess!.permissions.administer) {
+        res.status(403).json({
+          error: 'forbidden',
+          message: 'Eliminar un instrumento definitivamente requiere permiso de administración en el proyecto.'
+        });
+        return;
+      }
 
-          updatedBy:
-            row.updated_by === null
-              ? null
-              : String(row.updated_by)
+      const actual = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('instrumento_id', sql.NVarChar(30), instrumentId)
+        .query(`
+          SELECT i.id, i.tag_instrumento, e.codigo AS estado_pnid_codigo
+          FROM nucleo.instrumento i
+          LEFT JOIN cat.cat_estado_pnid e ON e.id = i.estado_pnid_id
+          WHERE i.id = TRY_CONVERT(BIGINT, @instrumento_id)
+            AND i.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id);
+        `);
+
+      const instrumentoActual = actual.recordset[0];
+
+      if (!instrumentoActual) {
+        res.status(404).json({
+          error: 'instrument_not_found',
+          message: 'Instrument does not exist in this project.'
+        });
+        return;
+      }
+
+      if (instrumentoActual.estado_pnid_codigo !== 'NO_EXISTE_EN_PNID') {
+        res.status(409).json({
+          error: 'instrumento_no_elegible_para_eliminacion',
+          message:
+            'Solo se puede eliminar definitivamente un instrumento cuyo estado P&ID sea "No existe en P&ID". ' +
+            `Este instrumento tiene estado "${instrumentoActual.estado_pnid_codigo ?? 'sin estado'}".`
+        });
+        return;
+      }
+
+      // Recursos "duros" (nunca se cascadea un borrado sobre estos —
+      // el usuario tiene que resolverlos a mano primero, mismo principio
+      // de "resources in use cannot be deactivated" del resto de SIEI).
+      const usoReal = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('instrumento_id', sql.NVarChar(30), instrumentId)
+        .query(`
+          SELECT
+            (SELECT COUNT(*) FROM nucleo.senal WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND (instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id) OR instrumento_agrupador_id = TRY_CONVERT(BIGINT, @instrumento_id))) AS senales,
+            (SELECT COUNT(*) FROM nucleo.punto_conexion WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id)) AS puntos_conexion,
+            (SELECT COUNT(*) FROM nucleo.lazo WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id)) AS lazos,
+            (SELECT COUNT(*) FROM nucleo.enlace_com WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id)) AS enlaces_com;
+        `);
+
+      const { senales, puntos_conexion, lazos, enlaces_com } = usoReal.recordset[0];
+
+      if (senales > 0 || puntos_conexion > 0 || lazos > 0 || enlaces_com > 0) {
+        res.status(409).json({
+          error: 'instrument_in_use',
+          message: 'No se puede eliminar: el instrumento tiene señales, puntos de conexión, lazos o enlaces de comunicación asociados.',
+          detalle: {
+            senales: Number(senales),
+            puntosConexion: Number(puntos_conexion),
+            lazos: Number(lazos),
+            enlacesCom: Number(enlaces_com)
+          }
+        });
+        return;
+      }
+
+      let transaction: sql.Transaction | undefined;
+
+      try {
+        transaction = new sql.Transaction(pool);
+        await transaction.begin();
+
+        // Historial de importación P&ID (integracion.importacion_pnid_resultado):
+        // las filas SIN fila_id (NO_EXISTE_EN_PNID no viene de una fila del
+        // reporte, ver CLAUDE.md) pierden todo sentido sin el instrumento —
+        // se borran. Las que SÍ tienen fila_id conservan su identidad propia
+        // (la fila del archivo importado) y solo se les desvincula el
+        // instrumento (CK_importacion_pnid_resultado_origen exige que al
+        // menos uno de los dos siga NOT NULL).
+        const resultadosBorrados = await new sql.Request(transaction)
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .query(`
+            DELETE FROM integracion.importacion_pnid_resultado
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id)
+              AND fila_id IS NULL;
+          `);
+
+        const resultadosDesvinculados = await new sql.Request(transaction)
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .query(`
+            UPDATE integracion.importacion_pnid_resultado
+            SET instrumento_id = NULL
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id)
+              AND fila_id IS NOT NULL;
+          `);
+
+        // instrumento_asociado_id/_tag de OTROS instrumentos que apuntaban
+        // a este — es una asociación curada manualmente, no un recurso
+        // físico; se limpia en vez de bloquear el borrado (mismo criterio
+        // que ya se usa para equipo_asociado_id al reimportar P&ID, ver
+        // CLAUDE.md "Equipos").
+        const asociacionesLimpiadas = await new sql.Request(transaction)
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .input('updated_by', sql.NVarChar(30), userId)
+          .query(`
+            UPDATE nucleo.instrumento
+            SET instrumento_asociado_id = NULL,
+                instrumento_asociado_tag = NULL,
+                updated_at = SYSUTCDATETIME(),
+                updated_by = TRY_CONVERT(BIGINT, @updated_by)
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND instrumento_asociado_id = TRY_CONVERT(BIGINT, @instrumento_id);
+          `);
+
+        // Bypass de inmutabilidad (migración 009) — el UPDATE de abajo
+        // sobre revision_entregable_fila puede tocar una fila que
+        // pertenece a una revisión ya EMITIDA/DESCARTADA.
+        await new sql.Request(transaction).query(
+          `EXEC sp_set_session_context @key = N'siei_bypass_inmutabilidad_revision', @value = 1;`
+        );
+
+        const filasDesvinculadas = await new sql.Request(transaction)
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .query(`
+            UPDATE nucleo.revision_entregable_fila
+            SET instrumento_id = NULL
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id);
+          `);
+
+        const eliminado = await new sql.Request(transaction)
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .query(`
+            DELETE FROM nucleo.instrumento
+            WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
+              AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id);
+          `);
+
+        await new sql.Request(transaction).query(
+          `EXEC sp_set_session_context @key = N'siei_bypass_inmutabilidad_revision', @value = 0;`
+        );
+
+        if (eliminado.rowsAffected[0] === 0) {
+          await transaction.rollback();
+          res.status(404).json({
+            error: 'instrument_not_found',
+            message: 'Instrument does not exist in this project.'
+          });
+          return;
         }
-      });
+
+        await transaction.commit();
+
+        res.status(200).json({
+          eliminado: true,
+          instrumentId,
+          tagInstrumento: instrumentoActual.tag_instrumento,
+          limpieza: {
+            resultadosPnidBorrados: resultadosBorrados.rowsAffected[0],
+            resultadosPnidDesvinculados: resultadosDesvinculados.rowsAffected[0],
+            asociacionesInstrumentoAsociadoLimpiadas: asociacionesLimpiadas.rowsAffected[0],
+            filasRevisionEntregableDesvinculadas: filasDesvinculadas.rowsAffected[0]
+          }
+        });
+      } catch (error) {
+        if (transaction) {
+          try {
+            await transaction.rollback();
+          } catch {
+            // ya pudo haber quedado sin transacción viva
+          }
+        }
+        throw error;
+      }
 
     } catch (error) {
       next(error);

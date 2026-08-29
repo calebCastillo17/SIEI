@@ -118,6 +118,22 @@ export interface InstrumentMutationResponse {
   };
 }
 
+/** DELETE .../instruments/:id con `{ eliminarDefinitivamente: true }`
+ * (migración 011) — borrado físico real, solo permitido cuando el
+ * instrumento tiene estado P&ID = NO_EXISTE_EN_PNID. Nunca vuelve a
+ * existir. */
+export interface InstrumentEliminacionResponse {
+  eliminado: true;
+  instrumentId: string;
+  tagInstrumento: string;
+  limpieza: {
+    resultadosPnidBorrados: number;
+    resultadosPnidDesvinculados: number;
+    asociacionesInstrumentoAsociadoLimpiadas: number;
+    filasRevisionEntregableDesvinculadas: number;
+  };
+}
+
 /**
  * Campos que POST/PATCH de instrumentos aceptan (ver instruments.ts).
  * `pnpid`/`fuentePnpid` NO están acá a propósito: el backend rechaza con

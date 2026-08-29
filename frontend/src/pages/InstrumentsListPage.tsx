@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
-import { deactivateInstrument, listInstruments } from '../api/instruments';
+import { deactivateInstrument, deleteInstrumentDefinitivamente, listInstruments } from '../api/instruments';
 import { useAsyncData } from '../lib/useAsyncData';
 import type { Instrument } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
@@ -34,6 +34,7 @@ export function InstrumentsListPage() {
   const { itemsById: pnidEstadosById } = usePnidEstados(devUser.email);
 
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Error | null>(null);
 
   const [searchText, setSearchText] = useState('');
@@ -127,8 +128,33 @@ export function InstrumentsListPage() {
     }
   }
 
+  async function handleDeleteDefinitivamente(instrument: Instrument) {
+    if (!projectId) return;
+
+    const confirmed = window.confirm(
+      `¿Eliminar DEFINITIVAMENTE el instrumento "${instrument.tagInstrumento}"? ` +
+        'Esto lo borra por completo del Master — no queda como historial, no se puede deshacer. ' +
+        'Solo funciona porque su estado P&ID es "No existe en P&ID"; si tiene señales, puntos de conexión, ' +
+        'lazos o enlaces de comunicación reales, se va a rechazar.'
+    );
+    if (!confirmed) return;
+
+    setDeletingId(instrument.id);
+    setActionError(null);
+
+    try {
+      await deleteInstrumentDefinitivamente(projectId, instrument.id, devUser.email);
+      load();
+    } catch (err) {
+      setActionError(err instanceof Error ? err : new Error('Error desconocido.'));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const canWrite = project?.access.permissions.write ?? false;
   const canDeactivate = project?.access.permissions.deactivate ?? false;
+  const canAdminister = project?.access.permissions.administer ?? false;
   const error = actionError ?? loadError;
 
   return (
@@ -196,14 +222,16 @@ export function InstrumentsListPage() {
               />
             </label>
             <label className="form__field">
-              <span>Estado P&amp;ID</span>
+              <span>Estado P&amp;ID (última actualización)</span>
               <select value={estadoFilter} onChange={(event) => setEstadoFilter(event.target.value)}>
                 <option value="">Todos</option>
-                {Object.entries(PNID_ESTADO_LABELS).map(([codigo, label]) => (
-                  <option key={codigo} value={codigo}>
-                    {label}
-                  </option>
-                ))}
+                {Object.entries(PNID_ESTADO_LABELS)
+                  .filter(([codigo]) => codigo !== 'NO_LISTADO' && codigo !== 'TAG_VACIO')
+                  .map(([codigo, label]) => (
+                    <option key={codigo} value={codigo}>
+                      {label}
+                    </option>
+                  ))}
               </select>
             </label>
             <label className="form__field">
@@ -269,46 +297,70 @@ export function InstrumentsListPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredItems.map((instrument) => (
-                <tr key={instrument.id}>
-                  <td>
-                    <Link to={`/projects/${projectId}/instruments/${instrument.id}`}>
-                      {instrument.tagInstrumento}
-                    </Link>
-                  </td>
-                  <td>{instrument.tagAnterior ?? '—'}</td>
-                  <td>{instrument.tipoInstrumento ?? '—'}</td>
-                  <td>{instrument.servicio ?? '—'}</td>
-                  <td>{instrument.sistema ?? '—'}</td>
-                  <td>{instrument.nodo ?? '—'}</td>
-                  <td>{instrument.pnpid ?? '—'}</td>
-                  <td>{instrument.planoPnid ?? '—'}</td>
-                  <td>
-                    <PnidEstadoBadge
-                      codigo={
-                        instrument.estadoPnidId
-                          ? (pnidEstadosById.get(instrument.estadoPnidId)?.codigo ?? null)
-                          : null
-                      }
-                    />
-                  </td>
-                  <td className="table__row-actions">
-                    <button
-                      type="button"
-                      className="button button--danger button--small"
-                      disabled={!canDeactivate || deactivatingId === instrument.id}
-                      title={
-                        canDeactivate
-                          ? undefined
-                          : 'Tu rol no tiene permiso de desactivación en este proyecto.'
-                      }
-                      onClick={() => handleDeactivate(instrument)}
-                    >
-                      {deactivatingId === instrument.id ? 'Desactivando…' : 'Desactivar'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {filteredItems.map((instrument) => {
+                const estadoPnidCodigo = instrument.estadoPnidId
+                  ? (pnidEstadosById.get(instrument.estadoPnidId)?.codigo ?? null)
+                  : null;
+                const puedeEliminarDefinitivamente = estadoPnidCodigo === 'NO_EXISTE_EN_PNID';
+
+                return (
+                  <tr key={instrument.id}>
+                    <td>
+                      <Link to={`/projects/${projectId}/instruments/${instrument.id}`}>
+                        {instrument.tagInstrumento}
+                      </Link>
+                    </td>
+                    <td>{instrument.tagAnterior ?? '—'}</td>
+                    <td>{instrument.tipoInstrumento ?? '—'}</td>
+                    <td>{instrument.servicio ?? '—'}</td>
+                    <td>{instrument.sistema ?? '—'}</td>
+                    <td>{instrument.nodo ?? '—'}</td>
+                    <td>{instrument.pnpid ?? '—'}</td>
+                    <td>{instrument.planoPnid ?? '—'}</td>
+                    <td>
+                      <PnidEstadoBadge codigo={estadoPnidCodigo} />
+                    </td>
+                    <td className="table__row-actions">
+                      <button
+                        type="button"
+                        className="button button--danger button--small"
+                        disabled={!canDeactivate || deactivatingId === instrument.id}
+                        title={
+                          canDeactivate
+                            ? undefined
+                            : 'Tu rol no tiene permiso de desactivación en este proyecto.'
+                        }
+                        onClick={() => handleDeactivate(instrument)}
+                      >
+                        {deactivatingId === instrument.id ? 'Desactivando…' : 'Desactivar'}
+                      </button>
+                      {/*
+                        Solo aparece cuando el estado P&ID es exactamente
+                        "No existe en P&ID" — mismo criterio angosto que
+                        exige el backend (409 en cualquier otro caso), así
+                        que ni vale la pena ofrecer el botón fuera de ese
+                        estado. Ver migración 011 / CLAUDE.md "Eliminación
+                        definitiva de instrumentos".
+                      */}
+                      {puedeEliminarDefinitivamente && (
+                        <button
+                          type="button"
+                          className="button button--danger button--small"
+                          disabled={!canAdminister || deletingId === instrument.id}
+                          title={
+                            canAdminister
+                              ? 'Borra el instrumento por completo — no queda como historial.'
+                              : 'Eliminar definitivamente requiere permiso de administración en el proyecto.'
+                          }
+                          onClick={() => handleDeleteDefinitivamente(instrument)}
+                        >
+                          {deletingId === instrument.id ? 'Eliminando…' : 'Eliminar definitivamente'}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -289,6 +289,173 @@ async function main(): Promise<void> {
       badRef.json
     );
 
+    // ===================== 013: tag_senal opcional, codigo_senal, =====
+    // ===================== causa_alarma, tipo_dato_com_id,        =====
+    // ===================== es_loop_powered                        =====
+
+    const comDataTypes = await call('viewer', 'GET', '/api/catalogs/com-data-types');
+    const comDataTypeCodes = (comDataTypes.json?.items ?? []).map((i: any) => i.codigo).sort();
+    check(
+      'GET /catalogs/com-data-types trae exactamente los 7 códigos esperados',
+      comDataTypes.status === 200 &&
+        JSON.stringify(comDataTypeCodes) === JSON.stringify(['BIT', 'DINT', 'DWORD', 'REAL', 'UDINT', 'UINT', 'WORD']),
+      comDataTypes.json
+    );
+    const bitTypeId: string | undefined = (comDataTypes.json?.items ?? []).find((i: any) => i.codigo === 'BIT')?.id;
+
+    const controlSinTag = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '1', // CONTROL
+      instrumentoId,
+      tipoIoId: '1'
+    });
+    check(
+      'EDITOR crea CONTROL sin tagSenal (201, tagSenal null)',
+      controlSinTag.status === 201 && controlSinTag.json?.signal?.tagSenal === null,
+      controlSinTag.json
+    );
+    const controlSinTagId: string | undefined = controlSinTag.json?.signal?.id;
+    if (controlSinTagId) createdSignalIds.push(controlSinTagId);
+
+    const comSinTag = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '2', // COM
+      instrumentoId,
+      direccionComId: '1'
+    });
+    check(
+      'EDITOR crea COM sin tagSenal (201, tagSenal null)',
+      comSinTag.status === 201 && comSinTag.json?.signal?.tagSenal === null,
+      comSinTag.json
+    );
+    const comSinTagId: string | undefined = comSinTag.json?.signal?.id;
+    if (comSinTagId) createdSignalIds.push(comSinTagId);
+
+    check(
+      'API nunca inventa codigoSenal: viene null en ambas señales recién creadas',
+      controlSinTag.json?.signal?.codigoSenal === null && comSinTag.json?.signal?.codigoSenal === null,
+      { control: controlSinTag.json, com: comSinTag.json }
+    );
+
+    const clearTag = await call('editor', 'PATCH', `${SIGNALS}/${controlSignalId}`, { tagSenal: null });
+    check(
+      'EDITOR limpia tagSenal vía PATCH (200, tagSenal null)',
+      clearTag.status === 200 && clearTag.json?.signal?.tagSenal === null,
+      clearTag.json
+    );
+    // Se restaura el tag para no interferir con los checks de dupTag/dupCanal de abajo.
+    const restoreTag = await call('editor', 'PATCH', `${SIGNALS}/${controlSignalId}`, { tagSenal: tagControl });
+    check('EDITOR restaura tagSenal vía PATCH (200)', restoreTag.status === 200, restoreTag.json);
+
+    const comConTipoDato = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '2',
+      instrumentoId,
+      direccionComId: '1',
+      tipoDatoComId: bitTypeId
+    });
+    check(
+      'EDITOR crea COM con tipoDatoComId válido (201)',
+      comConTipoDato.status === 201 && comConTipoDato.json?.signal?.tipoDatoComCodigo === 'BIT',
+      comConTipoDato.json
+    );
+    const comConTipoDatoId: string | undefined = comConTipoDato.json?.signal?.id;
+    if (comConTipoDatoId) createdSignalIds.push(comConTipoDatoId);
+
+    const controlConTipoDato = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '1',
+      instrumentoId,
+      tipoDatoComId: bitTypeId
+    });
+    check(
+      'EDITOR: CONTROL con tipoDatoComId -> 400 validation_error',
+      controlConTipoDato.status === 400 && controlConTipoDato.json?.error === 'validation_error',
+      controlConTipoDato.json
+    );
+
+    const comConLoop = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '2',
+      instrumentoId,
+      direccionComId: '1',
+      esLoopPowered: true
+    });
+    check(
+      'EDITOR: COM con esLoopPowered -> 400 validation_error',
+      comConLoop.status === 400 && comConLoop.json?.error === 'validation_error',
+      comConLoop.json
+    );
+
+    const controlConLoop = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '1',
+      instrumentoId,
+      esLoopPowered: true
+    });
+    check(
+      'EDITOR crea CONTROL con esLoopPowered = true (201)',
+      controlConLoop.status === 201 && controlConLoop.json?.signal?.esLoopPowered === true,
+      controlConLoop.json
+    );
+    const controlConLoopId: string | undefined = controlConLoop.json?.signal?.id;
+    if (controlConLoopId) createdSignalIds.push(controlConLoopId);
+
+    const bothIncompatibles = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '1',
+      instrumentoId,
+      tipoDatoComId: bitTypeId,
+      esLoopPowered: true
+    });
+    check(
+      'EDITOR: tipoDatoComId + esLoopPowered juntos -> 400 (CK_senal_tipo_dato_com_loop_excl)',
+      bothIncompatibles.status === 400,
+      bothIncompatibles.json
+    );
+
+    const controlConCausa = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '1',
+      instrumentoId,
+      causaAlarma: true
+    });
+    const comConCausa = await call('editor', 'POST', SIGNALS, {
+      claseSenalId: '2',
+      instrumentoId,
+      direccionComId: '2',
+      causaAlarma: true
+    });
+    check(
+      'EDITOR: causaAlarma permitido tanto en CONTROL como en COM (201 ambos)',
+      controlConCausa.status === 201 &&
+        controlConCausa.json?.signal?.causaAlarma === true &&
+        comConCausa.status === 201 &&
+        comConCausa.json?.signal?.causaAlarma === true,
+      { control: controlConCausa.json, com: comConCausa.json }
+    );
+    if (controlConCausa.json?.signal?.id) createdSignalIds.push(controlConCausa.json.signal.id);
+    if (comConCausa.json?.signal?.id) createdSignalIds.push(comConCausa.json.signal.id);
+
+    // Cambio de clase sin limpiar los campos exclusivos de la clase anterior
+    // -> la base lo rechaza igual que en creación (mismo trigger evaluando
+    // el estado FINAL de la fila).
+    const switchWithoutClearing = await call('editor', 'PATCH', `${SIGNALS}/${controlConLoopId}`, {
+      claseSenalId: '2'
+    });
+    check(
+      'EDITOR: cambiar CONTROL->COM sin limpiar esLoopPowered -> 400/409 (trigger rechaza el estado final)',
+      [400, 409].includes(switchWithoutClearing.status),
+      switchWithoutClearing.json
+    );
+
+    // El mismo cambio, limpiando en el mismo PATCH el campo incompatible,
+    // sí debe funcionar.
+    const switchClearing = await call('editor', 'PATCH', `${SIGNALS}/${controlConLoopId}`, {
+      claseSenalId: '2',
+      esLoopPowered: null,
+      direccionComId: '1'
+    });
+    check(
+      'EDITOR: cambiar CONTROL->COM limpiando esLoopPowered en el mismo PATCH -> 200',
+      switchClearing.status === 200 &&
+        switchClearing.json?.signal?.claseSenalCodigo === 'COM' &&
+        switchClearing.json?.signal?.esLoopPowered === null,
+      switchClearing.json
+    );
+
     const patchOk = await call('editor', 'PATCH', `${SIGNALS}/${controlSignalId}`, {
       descripcion: 'Nivel de prueba actualizado'
     });

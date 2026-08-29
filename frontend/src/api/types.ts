@@ -287,7 +287,12 @@ export interface Signal {
   canalId: string | null;
   estadoRevisionId: string | null;
   prioridadAlarmaId: string | null;
-  tagSenal: string;
+  tagSenal: string | null;
+  codigoSenal: string | null;
+  causaAlarma: boolean | null;
+  tipoDatoComId: string | null;
+  tipoDatoComCodigo: string | null;
+  esLoopPowered: boolean | null;
   nombreCorto: string | null;
   descripcion: string | null;
   rangoMin: number | null;
@@ -335,7 +340,7 @@ export interface SignalMutationResponse {
  * al crear (lo exige CK_senal_origen_xor en la base).
  */
 export interface SignalInput {
-  tagSenal: string;
+  tagSenal: string | null;
   claseSenalId: string;
   instrumentoId: string | null;
   equipoId: string | null;
@@ -346,6 +351,10 @@ export interface SignalInput {
   canalId: string | null;
   estadoRevisionId: string | null;
   prioridadAlarmaId: string | null;
+  codigoSenal: string | null;
+  causaAlarma: boolean | null;
+  tipoDatoComId: string | null;
+  esLoopPowered: boolean | null;
   nombreCorto: string | null;
   descripcion: string | null;
   rangoMin: number | null;

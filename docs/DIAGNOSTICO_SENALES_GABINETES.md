@@ -1616,4 +1616,399 @@ Confirmado y documentado, **sin preparar su DDL en esta ronda** (pendiente de ap
 
 Los casos de prueba de la sección 32.8 (los 13 numerados) están implementados: 1–11 como pruebas de API (`physical-hierarchy.api.test.ts`, `physical-connections.api.test.ts`, `comm-links.api.test.ts`), 12 como `database/tests/024_smoke_gabinete_migracion.sql` (preservación de IDs + restricciones a nivel de motor), 13 reutilizando `database/tests/007_smoke_secuencia_ruta.sql` ya actualizado.
 
-**`013_senales.sql`, `014_planos.sql` y `015_terminaciones.sql` siguen sin diseño SQL** — la sección 32.9 arriba sigue vigente como está, no se avanzó sobre ellas en esta ronda.
+**`014_planos.sql` y `015_terminaciones.sql` siguen sin diseño SQL** — la sección 32.9 arriba sigue vigente para esas dos. `013_senales.sql` sí tiene diseño técnico exacto ahora — ver sección 34. **Sigue sin implementarse ninguna de las tres.**
+
+---
+
+## 34. DISEÑO TÉCNICO EXACTO DE `013_senales.sql` (propuesto, NO implementado)
+
+Verificación de repositorio antes de diseñar (re-hecha, no asumida del diagnóstico anterior): `git status` limpio, `git log -3` = `a33aba6` (011) → `019780e` (012) → `640b96d`, `ls database/migrations` confirma `013` como siguiente número libre. `ls database/tests` confirma `024` como el último smoke test — **el siguiente número libre para tests es `025`**, no `013` (`013_smoke_com_ruta.sql` ya existe con otro propósito; las dos numeraciones — migraciones y smoke tests — son independientes, ya establecido desde la fase de `012`).
+
+### 34.1 Estado real de `nucleo.senal` en SIEI_DEV (no fixtures del diagnóstico anterior, consulta directa)
+
+194 filas totales, **1 activa / 193 inactivas** (residuo acumulado de correr repetidamente `test:signals`/`test:connections`/`test:comm-links`/`test:loops` durante toda esta sesión — mismo patrón de crecimiento por soft-delete ya documentado para `nucleo.gabinete`). 98 CONTROL / 96 COM. **100% tienen `tag_senal`** porque hoy es `NOT NULL` — no hay excepción real que observar en la base, la evidencia de que COM normalmente no tiene tag viene del Excel, no de SIEI (ver 34.2). Todos los tags son fixtures con patrón `LT-<timestamp>-<random>`, `COM-<timestamp>-<random>`, `COM-EQ-...`, `LT-CONN-...` — **ninguno es un tag real de ingeniería**. Por dueño: 164 instrumento / 30 equipo. Por canal: 34 con canal / 160 sin canal. **Las 194 filas están en `TEST-001`; el proyecto real `22043` tiene 0 filas en `nucleo.senal`.** Igual que con `nucleo.rio` antes de la migración 012: **100% fixtures de test, cero dato real** — el cambio de nullability/índices de `013` no tiene ningún riesgo de dato real que migrar o perder.
+
+### 34.2 Esquema actual completo relevante (`001_initial_schema.sql`, líneas 489-539, sin tocar por 013 salvo lo indicado)
+
+```sql
+CREATE TABLE nucleo.senal (
+    id, proyecto_id, instrumento_id, equipo_id, instrumento_agrupador_id,
+    clase_senal_id BIGINT NOT NULL,
+    tipo_io_id, direccion_com_id, tipo_interfaz_id, canal_id,
+    estado_revision_id, prioridad_alarma_id,
+    tag_senal NVARCHAR(80) NOT NULL,          -- <- 013 lo vuelve NULL
+    nombre_corto NVARCHAR(30) NULL,           -- ya existe, sin cambio
+    descripcion NVARCHAR(300) NULL,
+    rango_min/rango_max FLOAT NULL,
+    alarma_hh/h/l/ll FLOAT NULL,
+    valor_normal NVARCHAR(50) NULL,
+    unidad_ingenieria NVARCHAR(20) NULL,
+    retardo NVARCHAR(50) NULL,
+    enclavamiento NVARCHAR(300) NULL,
+    observacion NVARCHAR(500) NULL,
+    activo, created_at, updated_at (+ created_by/updated_by de 003)
+    -- FKs: proyecto, instrumento, equipo, instrumento_agrupador, canal,
+    --      clase_senal, tipo_io, direccion_com, tipo_interfaz,
+    --      estado_revision, prioridad_alarma
+    -- CK_senal_origen_xor: instrumento_id XOR equipo_id
+    -- CK_senal_tipo_io_direccion_excl: NOT (tipo_io_id Y direccion_com_id juntos)
+);
+CREATE UNIQUE INDEX UX_senal_proyecto_tag ON nucleo.senal (proyecto_id, tag_senal) WHERE activo = 1;  -- <- 013 lo reemplaza
+CREATE UNIQUE INDEX UX_senal_canal_id ON nucleo.senal (canal_id) WHERE canal_id IS NOT NULL AND activo = 1;
+TR_senal_validar_clase (AFTER INSERT, UPDATE)  -- <- 013 lo EXTIENDE, no crea uno nuevo
+TR_senal_desactivar_ruta, TR_senal_validar_canal_ruta, TR_ruta_conexion_validar_clase_senal  -- sin cambio, no referencian tag_senal/columnas nuevas
+```
+
+**Tabla campo Excel → campo SIEI actual** (punto 22 — qué YA existe, qué falta de verdad):
+
+| Campo Excel (`MASTER_SENALES`/`SENALES_CONTROL`/`SENALES_COM`) | Campo actual SIEI | Existe | Necesita cambio |
+|---|---|---|---|
+| `ENCLAVAMIENTO` | `senal.enclavamiento` | Sí | No |
+| `ALARMA_HH`/`H`/`L`/`LL` | `senal.alarma_hh/h/l/ll` | Sí | No |
+| `RANGO_MIN`/`RANGO_MAX` | `senal.rango_min/rango_max` | Sí | No |
+| `UNIDAD_INGENIERIA` | `senal.unidad_ingenieria` | Sí | No |
+| `VALOR_NORMAL` | `senal.valor_normal` | Sí | No |
+| `PRIORIDAD_ALARMA` | `senal.prioridad_alarma_id` (FK a catálogo) | Sí | No |
+| `RETARDO` | `senal.retardo` | Sí | No |
+| `OBSERVACION` | `senal.observacion` | Sí | No |
+| `ESTADO_REVISION` | `senal.estado_revision_id` (FK a catálogo) | Sí | No |
+| `SENAL` (sufijo corto: PI/REM/HYC/…) | `senal.nombre_corto` | Sí | No — máx. real 3 car., NVARCHAR(30) ya sobra |
+| `TAG_SENAL` | `senal.tag_senal` | Sí | **Sí — nullable + índice** |
+| `OBSERVACION_REVISION` | *(sin mapeo)* | No | Fuera de alcance de 013 — 0% con contenido real distinto de `"-"` en todo el archivo; no hay evidencia de qué se diferenciaría de `observacion`, se documenta como pendiente, no se inventa una columna |
+| `COMPLETITUD` | *(sin mapeo)* | No | Fuera de alcance — no es un dato de ingeniería, es un indicador de avance del propio Excel; no aplica en SIEI |
+| `ID_SENAL` | *(sin mapeo)* | No | **Sí — nueva columna `codigo_senal`** |
+| `TIPO_DATO` (solo `SENALES_COM`) | *(sin mapeo)* | No | **Sí — nueva columna `tipo_dato_com_id` + catálogo** |
+| `CAUSA_ALARMA` | *(sin mapeo)* | No | **Ver 34.3 — corrección de premisa, no se implementa como se pidió literalmente** |
+| `CONEX_TIPO` (solo `SENALES_CONTROL`) | *(sin mapeo)* | No | Parcialmente — ver 34.6. Solo el valor `LP` aporta algo derivable (`es_loop_powered`); `BOT_S`/`BOT_D` es un concepto distinto, no se modela en 013 |
+
+### 34.3 `causa_alarma` — hallazgo sobre el Excel y decisión final (RESUELTO)
+
+**Hallazgo que cambia el punto 11 del pedido.** Se inspeccionó la celda real de `MASTER_SENALES.CAUSA_ALARMA` (no solo su tasa de población, que ya se sabía 100% desde el diagnóstico anterior) — su **fórmula real** es:
+
+```
+=OR($C2="AI",$C2="DI",$C2="RTD",$C2="IN")
+```
+
+Es decir: **`CAUSA_ALARMA` es un valor booleano calculado** ("¿el tipo de I/O de esta fila es AI, DI, RTD o IN?"), confirmado sobre 1031 filas (`bool` en el 100% de los casos, `True`×919 / `False`×112). **No es una descripción textual de la causa de una alarma** (algo como "Alta presión en línea" o "Falla de comunicación con PLC") — ese campo, con ese significado, **no existe en ninguna hoja del workbook** (se buscó explícitamente cualquier columna con "ALARMA" o "CAUSA" en su nombre en las 13 hojas; las únicas son `ALARMA_HH/H/L/LL`, `CLASE_ALARMA`/`CAUSA_ALARMA` — el mismo booleano con dos nombres distintos entre hojas, ya documentado como bug de Power Query — y `PRIORIDAD_ALARMA`).
+
+**Decisión del usuario (cierra la pregunta abierta de la ronda anterior):** a pesar de que el Excel actual solo tiene una fórmula booleana derivada de `TIPO_IO` bajo ese nombre, en SIEI `causa_alarma` será un **atributo independiente de la señal, desacoplado deliberadamente de esa fórmula** — no una importación literal de la columna del Excel, sino un campo propio de SIEI que podrá refinarse más adelante sin bloquear 013.
+
+```sql
+ALTER TABLE nucleo.senal ADD causa_alarma BIT NULL;
+```
+
+Semántica: `NULL` = no definido, `0` = no, `1` = sí. **Sin FK, sin catálogo, sin `CHECK` relacionado con `tipo_io_id`, sin trigger de derivación, sin generación automática** — es un campo plano, exactamente como `es_loop_powered` en su forma (`BIT NULL`), pero **sin ninguna restricción de exclusividad por clase**: a diferencia de `tipo_dato_com_id` (exclusivo COM) y `es_loop_powered` (exclusivo CONTROL), `causa_alarma` puede tener valor tanto en señales CONTROL como COM — no se agrega ninguna cláusula a `TR_senal_validar_clase` para este campo. Para señales existentes: `causa_alarma = NULL`, sin backfill (ni siquiera derivado de `tipo_io_id`, aunque técnicamente se podría — se decide no hacerlo porque el campo ya no representa ese concepto).
+
+### 34.4 `tag_senal` → NULLABLE
+
+```sql
+ALTER TABLE nucleo.senal ALTER COLUMN tag_senal NVARCHAR(80) NULL;
+```
+Motivo: 269/269 CONTROL tienen `TAG_SENAL` derivable (100%) pero 762 COM solo 46 (6%) — la mayoría son registros PLC sin tag de ingeniería real (`PALABRA DE ALARMAS 1`, `HEARTBEAT`, etc., ya documentado en rondas anteriores). Impacto en datos existentes: ninguno — las 194 filas de SIEI_DEV son fixtures con tag no vacío, `ALTER COLUMN ... NULL` no reescribe valores, solo relaja la restricción.
+
+### 34.5 Índice de `tag_senal`
+
+Actual: `UX_senal_proyecto_tag ON nucleo.senal (proyecto_id, tag_senal) WHERE activo = 1`. Con `tag_senal` nullable, SQL Server trata cada `NULL` como distinto en un índice único filtrado **siempre que el filtro no lo excluya explícitamente** — pero el filtro actual (`WHERE activo = 1`) sí dejaría que dos filas activas con `tag_senal = NULL` colisionaran si no se agrega la exclusión (comportamiento distinto al de una `UNIQUE CONSTRAINT` plana, que solo tolera un `NULL`; un índice único **filtrado** de SQL Server excluye directamente las filas que no cumplen el predicado, así que agregar `AND tag_senal IS NOT NULL` al predicado saca a TODAS las filas con `tag_senal = NULL` de la comprobación de unicidad, sin importar cuántas sean — verificado ya con el mismo patrón exacto en `UX_gabinete_...`/`UX_revision_entregable_fila_instrumento` de migraciones anteriores).
+
+```sql
+DROP INDEX UX_senal_proyecto_tag ON nucleo.senal;
+CREATE UNIQUE INDEX UX_senal_proyecto_tag
+    ON nucleo.senal (proyecto_id, tag_senal)
+    WHERE tag_senal IS NOT NULL AND activo = 1;
+```
+Múltiples `NULL` (activos o no) conviven libremente — exactamente el mismo mecanismo ya probado en `024_smoke_gabinete_migracion.sql` CASO 6 y en `023_smoke_...` CASO 2 para `revision_entregable_fila.instrumento_id`.
+
+### 34.6 `codigo_senal` — diseño y política (RESUELTO: sin UNIQUE)
+
+```sql
+ALTER TABLE nucleo.senal ADD codigo_senal NVARCHAR(20) NULL;
+```
+`NVARCHAR(20)`, no `NVARCHAR(50)` ni `MAX`: evidencia real — 1031/1031 valores de `ID_SENAL` en `MASTER_SENALES` (unión exacta de `SENALES_CONTROL` 269 + `SENALES_COM` 762) tienen longitud **uniforme de 14 caracteres**, formato `###-SIG-######` (prefijo de proyecto + `-SIG-` + 6 dígitos). 20 deja margen para un prefijo de proyecto más largo que "620" sin ser un `NVARCHAR(50)` desperdiciado como el resto de tags. Es exclusivamente una **referencia legacy/importada**, nunca identidad de SIEI: nullable, sin PK, sin FK, sin generación automática, sin secuencia propia, nunca recalculado ni renumerado — un valor importado se preserva literal; para señales nuevas creadas en SIEI, `codigo_senal = NULL` siempre.
+
+**Duplicados en el dataset analizado: cero.** `ID_SENAL` no tiene duplicados dentro de `SENALES_CONTROL` (269 únicos), ni dentro de `SENALES_COM` (762 únicos), ni overlap entre ambas hojas (`MASTER_SENALES` es literalmente su unión, 269+762=1031 exacto). Formato 100% consistente, sin variantes de mayúscula/espacio.
+
+**Decisión del usuario: NO UNIQUE.** Esa evidencia proviene de un único dataset/proyecto — bastaría un segundo Excel legacy con un duplicado real de `ID_SENAL` (no observado aquí, pero tampoco descartable con una sola muestra) para que un índice único bloquee una importación legítima. Se prefiere no arriesgar eso por una garantía que ningún requisito de negocio pidió explícitamente. En su lugar, un índice **no único, filtrado**, que sí aporta valor real de consulta (`WHERE codigo_senal = ?` para ubicar una señal por su referencia legacy al importar, sin escanear toda la tabla) sin imponer ninguna restricción:
+
+```sql
+CREATE INDEX IX_senal_proyecto_codigo
+    ON nucleo.senal (proyecto_id, codigo_senal)
+    WHERE codigo_senal IS NOT NULL;
+```
+Filtrado (no incluye las filas con `codigo_senal IS NULL`, que serán la mayoría — toda señal nueva creada en SIEI) para no desperdiciar espacio de índice en el caso más común. No se filtra además por `activo = 1` como en los índices `UX_*`: al no ser un índice de unicidad, no hay razón para excluir inactivas de una búsqueda por código legacy (una señal desactivada conserva su referencia legacy igual que su historial).
+
+### 34.6b Cuatro identidades distintas, una sola real (confirmado, sin cambios de diseño — documentación explícita)
+
+Tras 013, `nucleo.senal` tiene cuatro campos que podrían confundirse con "el identificador de la señal". Solo uno lo es:
+
+| Campo | Rol | ¿Sustituye a `senal.id`? |
+|---|---|---|
+| `senal.id` | **Identidad interna real.** Toda relación de SIEI (`ruta_conexion.senal_id`, FKs, etc.) usa esto. | — |
+| `tag_senal` | Identificador de **ingeniería**, opcional (013). Legible para humanos, puede repetirse `NULL`, puede cambiar. | No |
+| `codigo_senal` | Referencia **legacy/importada**, opcional. Solo existe si vino de una carga externa. | No |
+| `nombre_corto` | Nombre/sufijo **funcional** (PI, REM, HYC…), opcional, ya existente desde antes de 013. | No |
+
+Ninguno de los tres últimos participa en ningún FK ni en el `CK_senal_origen_xor`; son atributos descriptivos, nunca claves.
+
+### 34.7 `cat.cat_tipo_dato_com` — catálogo nuevo
+
+Confirmado contra `SENALES_COM.TIPO_DATO` (716/770 filas pobladas, 54 en blanco): **exactamente 7 valores, sin variantes de mayúscula/espacio, sin errores de escritura** — `BIT` (519), `REAL` (89), `DINT` (28), `WORD` (28), `UDINT` (24), `UINT` (16), `DWORD` (12). Mismo patrón que `cat.cat_tipo_io`/`cat.cat_direccion_com` (id, codigo NVARCHAR(30), descripcion NVARCHAR(200), created_at, updated_at — sin `activo`, sin trigger propio):
+
+```sql
+CREATE TABLE cat.cat_tipo_dato_com (
+    id          BIGINT IDENTITY(1,1) NOT NULL,
+    codigo      NVARCHAR(30)         NOT NULL,
+    descripcion NVARCHAR(200)        NULL,
+    created_at  DATETIME2            NOT NULL CONSTRAINT DF_cat_tipo_dato_com_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at  DATETIME2            NULL,
+    CONSTRAINT PK_cat_tipo_dato_com PRIMARY KEY (id),
+    CONSTRAINT UQ_cat_tipo_dato_com_codigo UNIQUE (codigo)
+);
+
+INSERT INTO cat.cat_tipo_dato_com (codigo, descripcion) VALUES
+    (N'BIT',   N'Un bit (booleano)'),
+    (N'WORD',  N'Palabra sin signo de 16 bits'),
+    (N'DWORD', N'Palabra sin signo de 32 bits'),
+    (N'UINT',  N'Entero sin signo de 16 bits'),
+    (N'UDINT', N'Entero sin signo de 32 bits'),
+    (N'DINT',  N'Entero con signo de 32 bits'),
+    (N'REAL',  N'Punto flotante de 32 bits');
+```
+Lista **cerrada** (evidencia real lo confirma, sin ambigüedad) — mismo criterio que `cat_clase_senal`/`cat_direccion_com`, no el de dominio abierto de `cat_tipo_com`/`cat_tipo_medio_com`.
+
+### 34.8 `tipo_dato_com_id`
+
+```sql
+ALTER TABLE nucleo.senal ADD tipo_dato_com_id BIGINT NULL;
+ALTER TABLE nucleo.senal ADD CONSTRAINT FK_senal_tipo_dato_com FOREIGN KEY (tipo_dato_com_id) REFERENCES cat.cat_tipo_dato_com (id);
+```
+
+### 34.9 `tipo_dato_com` exclusivo de COM — extender `TR_senal_validar_clase`, no crear trigger nuevo
+
+Confirmado: `TR_senal_validar_clase` (líneas 1171-1220 de `001_initial_schema.sql`) ya es el trigger que decide qué combinaciones son válidas según `cat_clase_senal.codigo` — es el lugar correcto para extender, no uno nuevo. Cambios exactos propuestos (diff conceptual, cuerpo existente sin reescritura salvo lo señalado):
+
+1. Guarda de entrada (línea 1176): agregar las dos columnas nuevas para que el trigger también dispare cuando solo cambian ellas:
+   ```sql
+   IF NOT (UPDATE(clase_senal_id) OR UPDATE(tipo_io_id) OR UPDATE(canal_id) OR UPDATE(direccion_com_id)
+           OR UPDATE(tipo_dato_com_id) OR UPDATE(es_loop_powered)) RETURN;
+   ```
+2. Primer bloque (COM prohibido — línea 1178-1186): agregar `es_loop_powered` a la lista de campos que COM no puede tener:
+   ```sql
+   WHERE c.codigo = N'COM' AND (i.tipo_io_id IS NOT NULL OR i.canal_id IS NOT NULL OR i.es_loop_powered IS NOT NULL)
+   ```
+   mismo `THROW 51008`, mensaje ampliado: `'Una senal COM no puede tener tipo_io_id, canal_id ni es_loop_powered.'`
+3. Segundo bloque (CONTROL prohibido — línea 1188-1196): agregar `tipo_dato_com_id`:
+   ```sql
+   WHERE c.codigo = N'CONTROL' AND (i.direccion_com_id IS NOT NULL OR i.tipo_dato_com_id IS NOT NULL)
+   ```
+   mismo `THROW 51009`, mensaje ampliado: `'Una senal CONTROL no puede tener direccion_com_id ni tipo_dato_com_id.'`
+4. Tercer bloque (COM con ruta activa) — sin cambio, no involucra estas columnas.
+
+Además, un `CHECK` simple (no necesita JOIN a catálogo, mismo patrón que `CK_senal_tipo_io_direccion_excl`) como defensa adicional a nivel de fila:
+```sql
+ALTER TABLE nucleo.senal ADD CONSTRAINT CK_senal_tipo_dato_com_loop_excl
+    CHECK (NOT (tipo_dato_com_id IS NOT NULL AND es_loop_powered IS NOT NULL));
+```
+No se hace obligatorio para toda señal COM (54/770 sin `TIPO_DATO` en el dataset real — dato incompleto real, no se debe bloquear la creación de una señal COM sin ese valor).
+
+### 34.10 `es_loop_powered`
+
+```sql
+ALTER TABLE nucleo.senal ADD es_loop_powered BIT NULL;
+```
+`instrumento.alimentacion_instrumento` (fuente de alimentación general del instrumento) **no existe hoy** en `nucleo.instrumento` — es una columna distinta, futura, de Instrumentos, fuera de 013 (ver 34.13). `es_loop_powered` describe específicamente el conexionado de la señal CONTROL. No se restringe a `AI` únicamente: la evidencia (34.11) muestra `LP` siempre en filas con módulo tipo entrada (transmisores PI/LI/ZI/LIC), pero no hay una regla de negocio inequívoca que excluya, por ejemplo, un `RTD` loop-powered — se deja `BIT NULL` sin `CHECK` de tipo_io, exactamente como se pidió.
+
+### 34.11 Análisis completo de `CONEX_TIPO`
+
+Columna solo en `SENALES_CONTROL`, 100/488 filas pobladas (20%). **Tres valores reales, ningún otro**:
+
+| Valor | Frecuencia | Relación con módulo (`T_MODULO`) | Relación con `SENAL` (nombre corto) | Significado |
+|---|---|---|---|---|
+| `LP` | 61 | Siempre `IN*`/`IOUT*` (canal de entrada) | `PI`, `LI`, `ZI`, `LIC` — transmisores | **Confirmado: loop-powered** → deriva `es_loop_powered = 1` en importación futura |
+| `BOT_S` | 31 | Siempre `OUT-*` (canal de salida) | `HYO`/`HYC`/`HY` — mando de válvula (open/close) | **Confirmado: estación de botonera SIMPLE** (un solo pulsador) — concepto de hardware de la estación de mando, no relacionado con alimentación |
+| `BOT_D` | 8 | Siempre `OUT-*` (canal de salida) | `HYO`/`HYC` — mando de válvula (open/close) | **Confirmado: estación de botonera DOBLE** (par abrir/cerrar) — mismo concepto que `BOT_S`, variante de hardware |
+
+**Confirma la sospecha del punto 15: `CONEX_TIPO` mezcla dos conceptos distintos.** `LP` es la única fuente real de `es_loop_powered` — se documenta como **derivación de importación** (una futura carga de `SENALES_CONTROL` traduce `CONEX_TIPO = 'LP'` → `es_loop_powered = 1`; ausencia o cualquier otro valor → se deja `NULL`, nunca se infiere `0` porque ausencia de `LP` no prueba "no es loop-powered", solo que no se marcó).
+
+**Decisión del usuario (RESUELTO): `BOT_S`/`BOT_D` quedan explícitamente FUERA de 013.** No se sabe todavía si corresponden a `instrumento`, a `senal`, a un dominio de "estación de botonera" propio, o a otra cosa — no se crea columna, catálogo, FK ni `CHECK` para ellos. Quedan documentados como **deuda de modelado pendiente**, sin fecha ni migración asignada. Regla explícita, sin ambigüedad: `CONEX_TIPO = 'LP'` puede interpretarse en una futura importación como `es_loop_powered = 1`, pero **`BOT_S`/`BOT_D` nunca deben convertirse en `es_loop_powered`** — son un concepto distinto (tipo de estación de mando de una salida discreta a válvula, no alimentación de una entrada de transmisor) y mezclarlos sería incorrecto incluso si técnicamente "cupieran" en el mismo campo `BIT`. No se crea `senal.conex_tipo` como columna — punto 15 cumplido literalmente.
+
+### 34.12 Matriz de validación CONTROL / COM (estado tras 013)
+
+| Campo | CONTROL | COM |
+|---|---|---|
+| `instrumento_id` XOR `equipo_id` | Obligatorio (uno de los dos) | Obligatorio (uno de los dos) — sin cambio |
+| `tipo_io_id` | Opcional | **PROHIBIDO** (`NULL` forzado por trigger) |
+| `canal_id` | Opcional | **PROHIBIDO** (`NULL` forzado por trigger) |
+| `direccion_com_id` | **PROHIBIDO** (`NULL` forzado por trigger) | Opcional |
+| `tipo_dato_com_id` (nuevo) | **PROHIBIDO** (`NULL` forzado por trigger extendido) | Opcional |
+| `es_loop_powered` (nuevo) | Opcional (`TRUE`/`FALSE`/`NULL`) | **PROHIBIDO** (`NULL` forzado por trigger extendido) |
+| `tag_senal` | Opcional (nullable, 013) | Opcional (nullable, 013) |
+| `codigo_senal` (nuevo) | Opcional, legacy/importado, **sin UNIQUE** | Opcional, legacy/importado, **sin UNIQUE** |
+| `causa_alarma` (nuevo) | Opcional (`NULL`/`0`/`1`) — **no exclusivo, permitido en ambas clases** | Opcional (`NULL`/`0`/`1`) — **no exclusivo, permitido en ambas clases** |
+| `nombre_corto` | Opcional (sin cambio) | Opcional (sin cambio) |
+| `tipo_interfaz_id`, `estado_revision_id`, `prioridad_alarma_id`, alarmas, rangos, etc. | Opcional (sin cambio) | Opcional (sin cambio) |
+
+### 34.13 Fuera de alcance de 013 (deuda documentada, no diseñada aquí)
+
+`instrumento.posicion_normal`, `instrumento.posicion_falla`, `instrumento.alimentacion_instrumento` — conceptualmente pertenecen a `nucleo.instrumento`, descubiertos durante el análisis de Señales pero **no se diseña su DDL en esta ronda**; quedan como evolución futura de Instrumentos, en una migración propia cuando corresponda (no `013`, no `014`, no `015`).
+
+### 34.14 Backfill — exacto, sin inventar
+
+| Cambio | Backfill sobre las 194 filas existentes |
+|---|---|
+| `tag_senal` → nullable | Ninguno — conserva el valor actual de las 194 filas (`ALTER COLUMN` no reescribe datos) |
+| `codigo_senal` (nueva) | `NULL` en las 194 — no hay ninguna fuente hoy en SIEI de la que derivarlo; una futura importación del Excel lo poblaría con `ID_SENAL` literal |
+| `tipo_dato_com_id` (nueva) | `NULL` en las 194 — no hay `TIPO_DATO` capturado hoy en ningún lado de SIEI |
+| `es_loop_powered` (nueva) | `NULL` en las 194 — **no se infiere de `tag_senal`** (violaría el punto 27 explícito de no inventar backfill desde texto de tags); solo una futura importación de `CONEX_TIPO='LP'` lo pobla |
+| `causa_alarma` (nueva) | `NULL` en las 194 — **sin backfill**, tampoco derivado de `tipo_io_id` aunque técnicamente se podría (34.3: el campo ya no representa esa fórmula en SIEI) |
+
+### 34.15 Impacto backend (diseño, sin tocar código)
+
+`backend/src/routes/signals.ts`:
+- `REQUIRED_ON_CREATE = ['tagSenal', 'claseSenalId']` → **`['claseSenalId']`** (quitar `tagSenal`). El `if (typeof body.tagSenal === 'string') { trim(); if empty -> 400 }` de POST se mantiene solo si `tagSenal` viene presente (ya lo hace, no valida required); en PATCH, el bloque que hoy rechaza `tagSenal: null` (`'tagSenal cannot be empty or null'`) debe **permitir `null`** (limpiar el tag), igual que cualquier otro campo opcional — hoy es la única excepción codificada como obligatoria en PATCH.
+- `SIGNAL_FIELDS`: agregar `codigoSenal: { column: 'codigo_senal', kind: 'string', max: 20, sqlType: sql.NVarChar(20) }`, `tipoDatoComId: { column: 'tipo_dato_com_id', kind: 'bigintId', sqlType: sql.NVarChar(30) }`, `esLoopPowered: { column: 'es_loop_powered', kind: 'boolean' (nuevo FieldKind), sqlType: sql.Bit }`, `causaAlarma: { column: 'causa_alarma', kind: 'boolean', sqlType: sql.Bit }` — sin restricción de clase en su validación de forma (a diferencia de `tipoDatoComId`/`esLoopPowered`, cuya exclusividad por clase la decide el trigger, no el `FieldSpec`).
+- `SIGNAL_SELECT_COLUMNS`/`SIGNAL_FROM_CLAUSE`/`serializeSignal`: agregar `s.codigo_senal`, `s.causa_alarma` (serializado `boolean | null`), `s.tipo_dato_com_id` (+ `LEFT JOIN cat.cat_tipo_dato_com tdc ON tdc.id = s.tipo_dato_com_id` + `tdc.codigo AS tipo_dato_com_codigo`), `s.es_loop_powered` (serializado como `boolean | null`, no `0/1`).
+- `FK_FIELD_BY_CONSTRAINT`: agregar `FK_senal_tipo_dato_com: 'tipoDatoComId'`.
+- `mapSignalSqlError`: agregar mapeo para `CK_senal_tipo_dato_com_loop_excl` (400) y ampliar los mensajes 51008/51009 ya existentes para mencionar los campos nuevos.
+- Ningún filtro de querystring existe hoy en `GET /signals` (se lista todo el proyecto) — no hay diseño de filtros que ajustar.
+- **No se genera `tagSenal` ni `codigoSenal` automáticamente en ningún punto** — cumple el punto 23 explícitamente.
+
+`frontend/src/api/types.ts`: `Signal.tagSenal: string` → `string | null`; agregar `codigoSenal: string | null`, `causaAlarma: boolean | null`, `tipoDatoComId: string | null`, `tipoDatoComCodigo: string | null`, `esLoopPowered: boolean | null` a `Signal` y a `SignalInput` (sin `tipoDatoComCodigo`, que es solo de lectura).
+
+`frontend/src/api/catalogs.ts`: agregar `listComDataTypes = (devUserEmail) => listCatalog('/api/catalogs/com-data-types', devUserEmail)` — mismo patrón genérico ya usado para `io-types`/`com-directions`, no una función nueva de forma distinta.
+
+### 34.16 Diseño del catálogo backend — reusar `simpleCatalogRouter`, no crear arquitectura nueva
+
+`cat.cat_tipo_dato_com` tiene exactamente la forma `{id, codigo, descripcion, created_at, updated_at}` que ya sirve `backend/src/lib/simpleCatalogRouter.ts` (la misma factory que ya expone `cat_clase_senal`, `cat_tipo_io`, `cat_direccion_com` — no `tiposGabinete.ts`/`tiposEquipo.ts`, que existen aparte solo porque esas tablas usan `nombre` en vez de `descripcion`). Diseño exacto en `server.ts`, junto al bloque ya comentado *"Estos 3 los usa directamente nucleo.senal..."* (ampliar el comentario a "Estos 4..."):
+
+```ts
+app.use(
+  '/api/catalogs/com-data-types',
+  createSimpleCatalogRouter('cat.cat_tipo_dato_com', false)
+);
+```
+`writable: false` — lista cerrada confirmada por evidencia real (34.7), mismo criterio que `signal-classes`/`io-types`/`com-directions`. Ruta en inglés (`com-data-types`), consistente con esas tres, no con el patrón español de `tipos-equipo`/`tipos-gabinete` (esas nacieron después y siguen otro precedente; `cat_tipo_dato_com` pertenece a la familia de catálogos de validación de señal, no a la de catálogos de entidad).
+
+### 34.17 Diseño frontend
+
+`SignalForm.tsx`: el fieldset `CONTROL` (línea 181-205) gana un campo "Loop powered" **tri-estado** (34.19); el fieldset `COM` (línea 207-221) gana un `CatalogSelect` de "Tipo de dato" (`options.comDataTypes`). El campo `TAG *` (línea 99-109) pierde el asterisco y el atributo `required` — pasa a opcional en ambas clases, nunca marcado como obligatorio visualmente. `causaAlarma` **no va en ninguno de los dos fieldsets exclusivos** (no es exclusivo de clase, 34.3/34.12) — va en el fieldset común `Ingeniería` (línea 223+, junto a `estadoRevisionId`/`prioridadAlarmaId`), mismo control tri-estado que `esLoopPowered` (34.19). `useSignalFormOptions.ts` agrega `listComDataTypes` al `Promise.all` ya existente (mismo patrón de fetch combinado). `signalFormDefaults.ts` agrega `codigoSenal: null, causaAlarma: null, tipoDatoComId: null, esLoopPowered: null` a `emptySignalInput()`.
+
+### 34.18 Tratamiento UI de `codigo_senal`
+
+Recomendación: **campo avanzado, oculto por defecto, solo lectura cuando viene poblado**. No es un dato que alguien cree a mano en SIEI (nunca se genera ni se pide al usuario) — solo existe si vino de una importación futura del Excel legacy. Mostrarlo como protagonista (visible siempre, editable) sugeriría falsamente que es parte del flujo normal de alta de señales. Un `<details>`/sección "Avanzado" colapsada por defecto que lo muestra de solo lectura cuando `value.codigoSenal` no es `null`, y ni siquiera renderiza el campo si es `null` y la señal es nueva (nada que mostrar), es la opción más limpia — mismo espíritu que `instrumento.tag_anterior`, que tampoco es protagonista del formulario de Instrumentos.
+
+### 34.19 UI tri-estado de `es_loop_powered` (y `causa_alarma`, mismo control)
+
+Un checkbox HTML nativo no tiene tercer estado persistente utilizable en un formulario controlado (el estado `indeterminate` es solo visual, no seleccionable por el usuario). Recomendación: **un `<select>` de 3 opciones** (mismo componente `CatalogSelect`-like ya usado en el resto del formulario, o uno ad hoc con las opciones fijas "No definido" / "Sí" / "No") mapeado a `null` / `true` / `false` — consistente con el resto de la UI de Señales, que ya usa `CatalogSelect` con `emptyLabel="— elegir —"` para todo lo opcional, en vez de introducir un componente de checkbox suelto que sería el único de su tipo en este formulario. `causa_alarma` reutiliza exactamente el mismo control (es `BIT NULL` con la misma semántica de tres estados), solo que ubicado en el fieldset común en vez de en uno exclusivo de clase.
+
+### 34.20 Tests SQL (`database/tests/`, próximo número real: **025**, no 013)
+
+Casos mínimos, todos ejecutables con el patrón `BEGIN TRY/BEGIN TRANSACTION/ROLLBACK` ya usado en el resto de la suite:
+1. Crear CONTROL sin `tag_senal` → 201/aceptado a nivel de motor.
+2. Crear COM sin `tag_senal` → aceptado.
+3. Múltiples señales con `tag_senal = NULL` en el mismo proyecto → conviven sin violar `UX_senal_proyecto_tag`.
+4. Dos señales activas con el mismo `tag_senal` en el mismo proyecto → rechazado (índice ya existente, solo re-confirmar con `tag_senal` no nulo).
+5. Mismo `tag_senal` en proyectos diferentes → permitido (aislamiento multiproyecto, patrón ya probado en `010_smoke_multiproyecto.sql`).
+6. `tag_senal` existente antes de aplicar 013 → preservado exacto (mismo patrón de preservación que `024` CASO 1, con una tabla descartable propia, no contra un timestamp fijo de SIEI_DEV — lección ya aprendida).
+7. COM con `tipo_dato_com_id` válido → 201.
+8. CONTROL con `tipo_dato_com_id` → rechazado (trigger extendido).
+9. COM con `es_loop_powered` (`true` o `false`) → rechazado (trigger extendido).
+10. CONTROL con `es_loop_powered = NULL` → permitido.
+11. CONTROL con `es_loop_powered = true`/`false` → permitido.
+12. `codigo_senal = NULL` → permitido.
+13. `codigo_senal` con valor "legacy" (`620-SIG-000259`) → preservado literal, sin normalización.
+14. **Dos señales activas con el mismo `codigo_senal` en el mismo proyecto → PERMITIDO** (sin UNIQUE, decisión 34.6 — caso explícito para no dejarlo sin cubrir, ya que invierte la expectativa "natural" del resto del modelo).
+15. `IX_senal_proyecto_codigo` sigue resolviendo `WHERE codigo_senal = ?` correctamente aunque no sea único (verificar plan/uso del índice, no solo el resultado).
+16. `CK_senal_origen_xor` (instrumento/equipo) sigue funcionando sin cambio — regresión.
+17. COM sin canal / CONTROL con canal — regresión de reglas ya existentes, sin cambio esperado.
+18. `tipo_dato_com_id` inexistente → 400 a nivel de FK (`FK_senal_tipo_dato_com`).
+19. CONTROL con `causa_alarma = 1` → permitido.
+20. COM con `causa_alarma = 1` → permitido (a diferencia de `tipoDatoComId`/`esLoopPowered`, ningún trigger lo rechaza en ninguna clase).
+21. `causa_alarma = NULL` en una señal existente y en una nueva → permitido en ambos casos.
+
+### 34.21 Tests API (`backend/tests/signals.api.test.ts`, extender el existente)
+
+Espejo de los casos SQL relevantes a nivel HTTP: POST CONTROL sin `tagSenal` → 201; POST COM sin `tagSenal` → 201; PATCH con `tagSenal: null` → 200 (hoy rechazado, cambio de comportamiento a probar explícitamente); GET `/catalogs/com-data-types` trae los 7 códigos; POST COM con `tipoDatoComId` válido → 201; POST CONTROL con `tipoDatoComId` → 400 (mensaje ampliado); POST COM con `esLoopPowered` → 400; POST CONTROL con `esLoopPowered: true/false/null` → 201; POST CONTROL **y** POST COM con `causaAlarma: true` → 201 en ambos casos (única combinación de los 3 campos nuevos que no depende de la clase); GET de una señal devuelve `codigoSenal`/`causaAlarma`/`tipoDatoComId`/`tipoDatoComCodigo`/`esLoopPowered` en su forma serializada.
+
+### 34.22 Regresiones necesarias
+
+`test:signals` (directo), `test:connections` y `test:comm-links` (usan `nucleo.senal` como parte de rutas/enlaces, no deberían verse afectados pero deben re-confirmarse), `test:loops` (usa instrumentos con señales). Si el trigger extendido introduce algún error de sintaxis, cualquier INSERT/UPDATE de señal en cualquier suite lo revelaría de inmediato (falla dura, no silenciosa). Frontend: `tsc -b`, `vite build`, `oxlint` tras tocar `SignalForm.tsx`/`types.ts`/`catalogs.ts`.
+
+### 34.23 Instalación limpia (diseño de cómo se validará, no ejecutado)
+
+Mismo procedimiento que se usó y documentó para `012`: BD temporal descartable → aplicar `001`...`012` (ya congeladas) → aplicar `013_senales.sql` recién creado → `database/tests/001_smoke_modulo.sql` (fixture base) → `025_smoke_senales_opcionales.sql` (o el nombre real que se le dé) → BD destruida al final. No ejecutado en esta ronda (solo diseño, per instrucción explícita).
+
+### 34.24 Draft técnico FINAL consolidado de `013_senales.sql` (NO creado como archivo)
+
+```sql
+-- =============================================================================
+-- 013_senales.sql — SIEI (DRAFT FINAL, sin implementar)
+-- =============================================================================
+
+-- 1. tag_senal: obligatorio -> opcional
+ALTER TABLE nucleo.senal ALTER COLUMN tag_senal NVARCHAR(80) NULL;
+
+-- 2. Reemplazar el índice único de tag_senal para excluir NULL explícitamente
+DROP INDEX UX_senal_proyecto_tag ON nucleo.senal;
+CREATE UNIQUE INDEX UX_senal_proyecto_tag
+    ON nucleo.senal (proyecto_id, tag_senal)
+    WHERE tag_senal IS NOT NULL AND activo = 1;
+
+-- 3. codigo_senal: referencia legacy/importada, opcional, SIN unicidad
+ALTER TABLE nucleo.senal ADD codigo_senal NVARCHAR(20) NULL;
+CREATE INDEX IX_senal_proyecto_codigo
+    ON nucleo.senal (proyecto_id, codigo_senal)
+    WHERE codigo_senal IS NOT NULL;
+
+-- 4. causa_alarma: atributo propio de SIEI, independiente del Excel,
+--    sin FK, sin catálogo, sin CHECK, sin restricción de clase
+ALTER TABLE nucleo.senal ADD causa_alarma BIT NULL;
+
+-- 5. Catálogo cat.cat_tipo_dato_com (lista cerrada, evidencia real, 34.7)
+CREATE TABLE cat.cat_tipo_dato_com (
+    id          BIGINT IDENTITY(1,1) NOT NULL,
+    codigo      NVARCHAR(30)         NOT NULL,
+    descripcion NVARCHAR(200)        NULL,
+    created_at  DATETIME2            NOT NULL CONSTRAINT DF_cat_tipo_dato_com_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at  DATETIME2            NULL,
+    CONSTRAINT PK_cat_tipo_dato_com PRIMARY KEY (id),
+    CONSTRAINT UQ_cat_tipo_dato_com_codigo UNIQUE (codigo)
+);
+
+INSERT INTO cat.cat_tipo_dato_com (codigo, descripcion) VALUES
+    (N'BIT',   N'Un bit (booleano)'),
+    (N'WORD',  N'Palabra sin signo de 16 bits'),
+    (N'DWORD', N'Palabra sin signo de 32 bits'),
+    (N'UINT',  N'Entero sin signo de 16 bits'),
+    (N'UDINT', N'Entero sin signo de 32 bits'),
+    (N'DINT',  N'Entero con signo de 32 bits'),
+    (N'REAL',  N'Punto flotante de 32 bits');
+
+-- 6. tipo_dato_com_id: FK opcional, exclusivo de COM (regla en el trigger, paso 8)
+ALTER TABLE nucleo.senal ADD tipo_dato_com_id BIGINT NULL;
+ALTER TABLE nucleo.senal ADD CONSTRAINT FK_senal_tipo_dato_com
+    FOREIGN KEY (tipo_dato_com_id) REFERENCES cat.cat_tipo_dato_com (id);
+
+-- 7. es_loop_powered: opcional, exclusivo de CONTROL (regla en el trigger, paso 8)
+ALTER TABLE nucleo.senal ADD es_loop_powered BIT NULL;
+
+-- 8. CHECK de exclusividad simple entre los dos campos de clase (sin JOIN a
+--    catálogo, mismo patrón que CK_senal_tipo_io_direccion_excl) — defensa
+--    adicional, no reemplaza la validación semántica del trigger de abajo
+ALTER TABLE nucleo.senal ADD CONSTRAINT CK_senal_tipo_dato_com_loop_excl
+    CHECK (NOT (tipo_dato_com_id IS NOT NULL AND es_loop_powered IS NOT NULL));
+
+-- 9. Extender TR_senal_validar_clase (DROP + CREATE, cuerpo existente de
+--    001_initial_schema.sql intacto salvo estos 3 cambios puntuales):
+--    a) guarda de entrada: agregar OR UPDATE(tipo_dato_com_id) OR UPDATE(es_loop_powered)
+--    b) bloque COM-prohibido: agregar "OR i.es_loop_powered IS NOT NULL" a la condición,
+--       mensaje ampliado "Una senal COM no puede tener tipo_io_id, canal_id ni es_loop_powered."
+--    c) bloque CONTROL-prohibido: agregar "OR i.tipo_dato_com_id IS NOT NULL" a la condición,
+--       mensaje ampliado "Una senal CONTROL no puede tener direccion_com_id ni tipo_dato_com_id."
+--    causa_alarma NO se toca en este trigger — no tiene restricción de clase.
+```
+
+**Confirmado que NO se incluye**: `senal.conex_tipo` (34.11, explícitamente rechazado — `BOT_S`/`BOT_D` quedan como deuda de modelado sin destino todavía), cualquier cambio a `instrumento` (34.13, fuera de alcance), `UX_senal_proyecto_codigo` como UNIQUE (34.6, decisión final: no UNIQUE), cualquier CHECK/trigger/FK que involucre `causa_alarma` (34.3, decisión final: campo plano sin restricciones).
+
+### 34.25 Preguntas bloqueantes para 013
+
+**Ninguna.** Las 3 preguntas de la ronda anterior quedaron resueltas: `causa_alarma` se implementa como `BIT NULL` independiente (34.3), `BOT_S`/`BOT_D` quedan fuera de 013 como deuda de modelado documentada sin bloquear nada (34.11), `codigo_senal` no lleva índice único (34.6). El diseño de `013_senales` está completo y consolidado en 34.24, listo para implementar cuando el usuario lo apruebe.

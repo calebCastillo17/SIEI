@@ -235,10 +235,10 @@ app.use(
 );
 /*
  * Estos 3 los usa directamente nucleo.senal (clase CONTROL/COM, tipo de
- * E/S, dirección de comunicación) — son parte del modelo de validación de
- * TR_senal_validar_clase, no un dominio abierto: agregar un tercer código
- * a clase_senal, por ejemplo, no tendría sentido semántico para esa
- * lógica. Igual que los tres de arriba, solo lectura.
+ * E/S, dirección de comunicación, tipo de dato COM) — son parte del modelo
+ * de validación de TR_senal_validar_clase, no un dominio abierto: agregar
+ * un tercer código a clase_senal, por ejemplo, no tendría sentido
+ * semántico para esa lógica. Solo lectura.
  */
 app.use(
   '/api/catalogs/signal-classes',
@@ -251,6 +251,10 @@ app.use(
 app.use(
   '/api/catalogs/com-directions',
   createSimpleCatalogRouter('cat.cat_direccion_com', false)
+);
+app.use(
+  '/api/catalogs/com-data-types',
+  createSimpleCatalogRouter('cat.cat_tipo_dato_com', false)
 );
 
 app.use('/api/catalogs/tipos-entregable', tiposEntregableRouter);

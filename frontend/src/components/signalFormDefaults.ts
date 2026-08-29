@@ -2,7 +2,7 @@ import type { SignalInput } from '../api/types';
 
 export function emptySignalInput(): SignalInput {
   return {
-    tagSenal: '',
+    tagSenal: null,
     claseSenalId: '',
     instrumentoId: null,
     equipoId: null,
@@ -13,6 +13,10 @@ export function emptySignalInput(): SignalInput {
     canalId: null,
     estadoRevisionId: null,
     prioridadAlarmaId: null,
+    codigoSenal: null,
+    causaAlarma: null,
+    tipoDatoComId: null,
+    esLoopPowered: null,
     nombreCorto: null,
     descripcion: null,
     rangoMin: null,

@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 
 import {
   listAlarmPriorities,
+  listComDataTypes,
   listComDirections,
   listInterfaceTypes,
   listIoTypes,
@@ -17,6 +18,7 @@ export interface SignalFormOptions {
   signalClasses: CatalogItem[];
   ioTypes: CatalogItem[];
   comDirections: CatalogItem[];
+  comDataTypes: CatalogItem[];
   revisionStates: CatalogItem[];
   alarmPriorities: CatalogItem[];
   interfaceTypes: CatalogItem[];
@@ -35,6 +37,7 @@ export function useSignalFormOptions(projectId: string, devUserEmail: string) {
       signalClasses,
       ioTypes,
       comDirections,
+      comDataTypes,
       revisionStates,
       alarmPriorities,
       interfaceTypes,
@@ -44,6 +47,7 @@ export function useSignalFormOptions(projectId: string, devUserEmail: string) {
       listSignalClasses(devUserEmail),
       listIoTypes(devUserEmail),
       listComDirections(devUserEmail),
+      listComDataTypes(devUserEmail),
       listRevisionStates(devUserEmail),
       listAlarmPriorities(devUserEmail),
       listInterfaceTypes(devUserEmail),
@@ -55,6 +59,7 @@ export function useSignalFormOptions(projectId: string, devUserEmail: string) {
       signalClasses: signalClasses.items,
       ioTypes: ioTypes.items,
       comDirections: comDirections.items,
+      comDataTypes: comDataTypes.items,
       revisionStates: revisionStates.items,
       alarmPriorities: alarmPriorities.items,
       interfaceTypes: interfaceTypes.items,

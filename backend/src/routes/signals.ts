@@ -64,7 +64,8 @@ const FK_FIELD_BY_CONSTRAINT: Record<string, string> = {
   FK_senal_direccion_com: 'direccionComId',
   FK_senal_tipo_interfaz: 'tipoInterfazId',
   FK_senal_estado_revision: 'estadoRevisionId',
-  FK_senal_prioridad_alarma: 'prioridadAlarmaId'
+  FK_senal_prioridad_alarma: 'prioridadAlarmaId',
+  FK_senal_tipo_dato_com: 'tipoDatoComId'
 };
 
 function mapSignalSqlError(
@@ -130,13 +131,26 @@ function mapSignalSqlError(
     };
   }
 
+  // CK_senal_tipo_dato_com_loop_excl: tipo_dato_com_id y es_loop_powered son
+  // excluyentes a nivel de fila (defensa simple, la exclusividad real por
+  // clase la decide TR_senal_validar_clase, ver 51008/51009 abajo).
+  if (message.includes('CK_senal_tipo_dato_com_loop_excl')) {
+    return {
+      status: 400,
+      body: {
+        error: 'validation_error',
+        message: 'tipoDatoComId y esLoopPowered no pueden coexistir en la misma señal.'
+      }
+    };
+  }
+
   // TR_senal_validar_clase: reglas CONTROL/COM segun el codigo real del catalogo.
   if (number === 51008) {
     return {
       status: 400,
       body: {
         error: 'validation_error',
-        message: 'Una señal COM no puede tener tipoIoId ni canalId.'
+        message: 'Una señal COM no puede tener tipoIoId, canalId ni esLoopPowered.'
       }
     };
   }
@@ -146,7 +160,7 @@ function mapSignalSqlError(
       status: 400,
       body: {
         error: 'validation_error',
-        message: 'Una señal CONTROL no puede tener direccionComId.'
+        message: 'Una señal CONTROL no puede tener direccionComId ni tipoDatoComId.'
       }
     };
   }
@@ -208,6 +222,11 @@ const SIGNAL_SELECT_COLUMNS = `
   s.estado_revision_id,
   s.prioridad_alarma_id,
   s.tag_senal,
+  s.codigo_senal,
+  s.causa_alarma,
+  s.tipo_dato_com_id,
+  tdc.codigo AS tipo_dato_com_codigo,
+  s.es_loop_powered,
   s.nombre_corto,
   s.descripcion,
   s.rango_min,
@@ -233,6 +252,7 @@ const SIGNAL_FROM_CLAUSE = `
   JOIN cat.cat_clase_senal cs ON cs.id = s.clase_senal_id
   LEFT JOIN cat.cat_tipo_io tio ON tio.id = s.tipo_io_id
   LEFT JOIN cat.cat_direccion_com dc ON dc.id = s.direccion_com_id
+  LEFT JOIN cat.cat_tipo_dato_com tdc ON tdc.id = s.tipo_dato_com_id
 `;
 
 
@@ -263,6 +283,13 @@ function serializeSignal(row: Record<string, any>) {
     prioridadAlarmaId: nullableId(row.prioridad_alarma_id),
 
     tagSenal: row.tag_senal,
+    codigoSenal: row.codigo_senal,
+    causaAlarma: row.causa_alarma === null ? null : Boolean(row.causa_alarma),
+
+    tipoDatoComId: nullableId(row.tipo_dato_com_id),
+    tipoDatoComCodigo: row.tipo_dato_com_codigo ?? null,
+    esLoopPowered: row.es_loop_powered === null ? null : Boolean(row.es_loop_powered),
+
     nombreCorto: row.nombre_corto,
     descripcion: row.descripcion,
 
@@ -296,7 +323,7 @@ function serializeSignal(row: Record<string, any>) {
  * validas) la decide la base via TR_senal_validar_clase + los CHECK — aqui
  * solo se validan forma/tipo/tamaño para poder devolver 400 claros.
  */
-type FieldKind = 'string' | 'bigintId' | 'float';
+type FieldKind = 'string' | 'bigintId' | 'float' | 'boolean';
 
 interface FieldSpec {
   column: string;
@@ -318,6 +345,10 @@ const SIGNAL_FIELDS: Record<string, FieldSpec> = {
   prioridadAlarmaId: { column: 'prioridad_alarma_id', kind: 'bigintId', sqlType: sql.NVarChar(30) },
 
   tagSenal: { column: 'tag_senal', kind: 'string', max: 80, sqlType: sql.NVarChar(80) },
+  codigoSenal: { column: 'codigo_senal', kind: 'string', max: 20, sqlType: sql.NVarChar(20) },
+  causaAlarma: { column: 'causa_alarma', kind: 'boolean', sqlType: sql.Bit },
+  tipoDatoComId: { column: 'tipo_dato_com_id', kind: 'bigintId', sqlType: sql.NVarChar(30) },
+  esLoopPowered: { column: 'es_loop_powered', kind: 'boolean', sqlType: sql.Bit },
   nombreCorto: { column: 'nombre_corto', kind: 'string', max: 30, sqlType: sql.NVarChar(30) },
   descripcion: { column: 'descripcion', kind: 'string', max: 300, sqlType: sql.NVarChar(300) },
 
@@ -335,7 +366,14 @@ const SIGNAL_FIELDS: Record<string, FieldSpec> = {
   observacion: { column: 'observacion', kind: 'string', max: 500, sqlType: sql.NVarChar(500) }
 };
 
-const REQUIRED_ON_CREATE = ['tagSenal', 'claseSenalId'] as const;
+/*
+ * tagSenal ya NO es obligatorio (migracion 013) — el analisis del Excel de
+ * referencia mostro que la mayoria de las señales COM no tienen un TAG de
+ * ingenieria real (registros PLC identificados solo por su dueño +
+ * descripcion). claseSenalId sigue siendo el unico campo verdaderamente
+ * obligatorio al crear.
+ */
+const REQUIRED_ON_CREATE = ['claseSenalId'] as const;
 
 /*
  * Valida un unico campo segun su FieldSpec. `allowNull` permite explicitamente
@@ -371,6 +409,13 @@ function validateField(
   if (spec.kind === 'float') {
     if (typeof value !== 'number' || Number.isNaN(value)) {
       return `${key} debe ser un número o null.`;
+    }
+    return null;
+  }
+
+  if (spec.kind === 'boolean') {
+    if (typeof value !== 'boolean') {
+      return `${key} debe ser true, false o null.`;
     }
     return null;
   }
@@ -522,7 +567,8 @@ signalsRouter.post(
 
       for (const key of keys) {
         const spec = SIGNAL_FIELDS[key]!;
-        const error = validateField(key, spec, body[key], false);
+        const isRequiredField = (REQUIRED_ON_CREATE as readonly string[]).includes(key);
+        const error = validateField(key, spec, body[key], !isRequiredField);
 
         if (error) {
           res.status(400).json({ error: 'validation_error', message: error });
@@ -536,7 +582,7 @@ signalsRouter.post(
       request
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('created_by', sql.NVarChar(30), userId)
-        .input('tag_senal', sql.NVarChar(80), body.tagSenal);
+        .input('tag_senal', sql.NVarChar(80), body.tagSenal === undefined ? null : body.tagSenal);
 
       const columns = ['proyecto_id', 'tag_senal'];
       const paramNames = ['@proyecto_id', '@tag_senal'];
@@ -647,19 +693,22 @@ signalsRouter.patch(
         return;
       }
 
+      /*
+       * tagSenal ya es opcional (migracion 013) — a diferencia de antes,
+       * `null` es un valor valido en PATCH (limpia el tag). Una cadena
+       * vacia se trata igual que null (limpiar), no como error.
+       */
       if ('tagSenal' in body) {
         if (typeof body.tagSenal === 'string') {
           body.tagSenal = body.tagSenal.trim();
-        }
 
-        if (
-          body.tagSenal === null ||
-          typeof body.tagSenal !== 'string' ||
-          body.tagSenal.length === 0
-        ) {
+          if (body.tagSenal.length === 0) {
+            body.tagSenal = null;
+          }
+        } else if (body.tagSenal !== null) {
           res.status(400).json({
             error: 'validation_error',
-            message: 'tagSenal cannot be empty or null.'
+            message: 'tagSenal debe ser una cadena de texto o null.'
           });
           return;
         }

@@ -33,6 +33,11 @@ export const listIoTypes = (devUserEmail: string) =>
 export const listComDirections = (devUserEmail: string) =>
   listCatalog('/api/catalogs/com-directions', devUserEmail);
 
+/** cat.cat_tipo_dato_com (migración 013) — lista cerrada (BIT/WORD/DWORD/
+ * UINT/UDINT/DINT/REAL), exclusiva de señales COM. */
+export const listComDataTypes = (devUserEmail: string) =>
+  listCatalog('/api/catalogs/com-data-types', devUserEmail);
+
 export const listRevisionStates = (devUserEmail: string) =>
   listCatalog('/api/catalogs/revision-states', devUserEmail);
 

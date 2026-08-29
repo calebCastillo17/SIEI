@@ -64,7 +64,12 @@ export function RouteFormPage() {
     }
   }
 
-  const signalOptions = (options?.signals ?? []).map((s) => ({ id: s.id, label: s.tagSenal }));
+  // tagSenal es opcional desde la migración 013 — una señal sin tag (común
+  // en COM) se identifica por su id en vez de dejar la opción sin etiqueta.
+  const signalOptions = (options?.signals ?? []).map((s) => ({
+    id: s.id,
+    label: s.tagSenal ?? `Señal #${s.id}`
+  }));
 
   const pairOptions = (options?.conductorPairs ?? []).map((pair) => {
     const cable = options?.cables.find((c) => c.id === pair.cableId);

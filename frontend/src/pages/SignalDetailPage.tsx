@@ -23,6 +23,10 @@ function toInput(signal: Signal): SignalInput {
     canalId: signal.canalId,
     estadoRevisionId: signal.estadoRevisionId,
     prioridadAlarmaId: signal.prioridadAlarmaId,
+    codigoSenal: signal.codigoSenal,
+    causaAlarma: signal.causaAlarma,
+    tipoDatoComId: signal.tipoDatoComId,
+    esLoopPowered: signal.esLoopPowered,
     nombreCorto: signal.nombreCorto,
     descripcion: signal.descripcion,
     rangoMin: signal.rangoMin,
@@ -93,7 +97,7 @@ export function SignalDetailPage() {
   async function handleDeactivate() {
     if (!signal) return;
 
-    const confirmed = window.confirm(`¿Desactivar la señal "${signal.tagSenal}"?`);
+    const confirmed = window.confirm(`¿Desactivar la señal "${signal.tagSenal ?? `#${signal.id}`}"?`);
     if (!confirmed) return;
 
     setDeactivating(true);
@@ -113,7 +117,7 @@ export function SignalDetailPage() {
   return (
     <section>
       <div className="page-header">
-        <h1>{signal ? signal.tagSenal : 'Señal'}</h1>
+        <h1>{signal ? (signal.tagSenal ?? `Señal #${signal.id}`) : 'Señal'}</h1>
 
         {signal && !editing && (
           <div className="page-header__actions">

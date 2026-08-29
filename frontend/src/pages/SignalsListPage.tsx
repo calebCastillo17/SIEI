@@ -38,7 +38,7 @@ export function SignalsListPage() {
   async function handleDeactivate(signal: Signal) {
     if (!projectId) return;
 
-    const confirmed = window.confirm(`¿Desactivar la señal "${signal.tagSenal}"?`);
+    const confirmed = window.confirm(`¿Desactivar la señal "${signal.tagSenal ?? `#${signal.id}`}"?`);
     if (!confirmed) return;
 
     setDeactivatingId(signal.id);
@@ -110,7 +110,9 @@ export function SignalsListPage() {
             {items.map((signal) => (
               <tr key={signal.id}>
                 <td>
-                  <Link to={`/projects/${projectId}/signals/${signal.id}`}>{signal.tagSenal}</Link>
+                  <Link to={`/projects/${projectId}/signals/${signal.id}`}>
+                    {signal.tagSenal ?? <em>— sin tag —</em>}
+                  </Link>
                 </td>
                 <td>
                   <span

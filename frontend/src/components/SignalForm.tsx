@@ -7,6 +7,38 @@ import { CatalogSelect } from './CatalogSelect';
 
 type OwnerType = 'instrumento' | 'equipo';
 
+/**
+ * `causaAlarma`/`esLoopPowered` son BIT NULL con 3 estados reales (no
+ * definido / sí / no) — un checkbox nativo no tiene un tercer estado
+ * seleccionable por el usuario (`indeterminate` es solo visual), así que
+ * se usa un `<select>` de 3 opciones, mismo espíritu que `CatalogSelect`
+ * pero para un booleano en vez de un id de catálogo.
+ */
+function TriStateSelect({
+  value,
+  onChange,
+  disabled
+}: {
+  value: boolean | null;
+  onChange: (next: boolean | null) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <select
+      disabled={disabled}
+      value={value === null ? '' : value ? 'true' : 'false'}
+      onChange={(event) => {
+        const raw = event.target.value;
+        onChange(raw === '' ? null : raw === 'true');
+      }}
+    >
+      <option value="">No definido</option>
+      <option value="true">Sí</option>
+      <option value="false">No</option>
+    </select>
+  );
+}
+
 const TEXT_FIELDS: Array<{ key: keyof SignalInput; label: string; max: number }> = [
   { key: 'nombreCorto', label: 'Nombre corto', max: 30 },
   { key: 'valorNormal', label: 'Valor normal', max: 50 },
@@ -72,6 +104,33 @@ export function SignalForm({
     }
   }
 
+  /*
+   * Cambiar de clase limpia los campos exclusivos de la clase que se
+   * abandona — sin esto, un campo CONTROL (tipoIoId/canalId/esLoopPowered)
+   * quedaría oculto pero con valor al pasar a COM (o viceversa con
+   * direccionComId/tipoDatoComId), y se enviaría igual en el submit,
+   * chocando con TR_senal_validar_clase (51008/51009). causaAlarma no se
+   * toca: no es exclusivo de ninguna clase (migración 013).
+   */
+  function setClase(nextClaseId: string | null) {
+    const nextCodigo = options.signalClasses.find((c) => c.id === nextClaseId)?.codigo;
+
+    setValue((prev) => {
+      const next = { ...prev, claseSenalId: nextClaseId ?? '' };
+
+      if (nextCodigo === 'COM') {
+        next.tipoIoId = null;
+        next.canalId = null;
+        next.esLoopPowered = null;
+      } else if (nextCodigo === 'CONTROL') {
+        next.direccionComId = null;
+        next.tipoDatoComId = null;
+      }
+
+      return next;
+    });
+  }
+
   function setText(key: keyof SignalInput, raw: string) {
     set(key, (raw.length === 0 ? null : raw) as SignalInput[typeof key]);
   }
@@ -82,7 +141,10 @@ export function SignalForm({
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    onSubmit({ ...value, tagSenal: value.tagSenal.trim() });
+    // tagSenal es opcional (migración 013): una cadena vacía se envía como
+    // null, nunca como '' — no se inventa ni se fuerza ningún valor.
+    const trimmedTag = value.tagSenal?.trim() ?? null;
+    onSubmit({ ...value, tagSenal: trimmedTag && trimmedTag.length > 0 ? trimmedTag : null });
   }
 
   const instrumentOptions = options.instruments.map((i) => ({
@@ -97,13 +159,12 @@ export function SignalForm({
         <legend>Identificación</legend>
 
         <label className="form__field">
-          <span>TAG *</span>
+          <span>TAG</span>
           <input
             type="text"
             maxLength={80}
-            required
             disabled={disabled || submitting}
-            value={value.tagSenal}
+            value={value.tagSenal ?? ''}
             onChange={(event) => setText('tagSenal', event.target.value)}
           />
         </label>
@@ -114,11 +175,21 @@ export function SignalForm({
             required
             disabled={disabled || submitting}
             value={value.claseSenalId || null}
-            onChange={(next) => set('claseSenalId', next ?? '')}
+            onChange={setClase}
             options={options.signalClasses.map((c) => ({ id: c.id, label: c.codigo }))}
             emptyLabel="— elegir —"
           />
         </label>
+
+        {value.codigoSenal !== null && (
+          <details className="form__field form__field--wide">
+            <summary>Avanzado</summary>
+            <label className="form__field">
+              <span>Código legacy (solo lectura, viene de una importación)</span>
+              <input type="text" value={value.codigoSenal} disabled readOnly />
+            </label>
+          </details>
+        )}
       </fieldset>
 
       <fieldset className="form__section">
@@ -201,6 +272,15 @@ export function SignalForm({
               onChange={(event) => setText('canalId', event.target.value)}
             />
           </label>
+
+          <label className="form__field">
+            <span>Loop powered</span>
+            <TriStateSelect
+              disabled={disabled || submitting}
+              value={value.esLoopPowered}
+              onChange={(next) => set('esLoopPowered', next)}
+            />
+          </label>
         </fieldset>
       )}
 
@@ -215,6 +295,16 @@ export function SignalForm({
               value={value.direccionComId}
               onChange={(next) => set('direccionComId', next)}
               options={options.comDirections.map((d) => ({ id: d.id, label: d.codigo }))}
+            />
+          </label>
+
+          <label className="form__field">
+            <span>Tipo de dato</span>
+            <CatalogSelect
+              disabled={disabled || submitting}
+              value={value.tipoDatoComId}
+              onChange={(next) => set('tipoDatoComId', next)}
+              options={options.comDataTypes.map((t) => ({ id: t.id, label: t.codigo }))}
             />
           </label>
         </fieldset>
@@ -240,6 +330,15 @@ export function SignalForm({
             value={value.prioridadAlarmaId}
             onChange={(next) => set('prioridadAlarmaId', next)}
             options={options.alarmPriorities.map((p) => ({ id: p.id, label: p.codigo }))}
+          />
+        </label>
+
+        <label className="form__field">
+          <span>Causa de alarma</span>
+          <TriStateSelect
+            disabled={disabled || submitting}
+            value={value.causaAlarma}
+            onChange={(next) => set('causaAlarma', next)}
           />
         </label>
 

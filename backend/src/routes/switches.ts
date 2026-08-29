@@ -15,6 +15,12 @@ import { getDbPool } from '../db/sql.js';
  * nucleo.switch — raíz de comunicaciones (SWITCH -> PUERTO -> ENLACE_COM).
  * Sin CHECK ni triggers propios, solo el índice único filtrado de TAG por
  * proyecto activo. Mismo patrón que equipment.ts.
+ *
+ * gabinete_id (migración 012) es una relación OPCIONAL: un switch puede
+ * o no estar físicamente contenido en un gabinete modelado — un gabinete
+ * tipo COMUNICACION no reemplaza al switch, son entidades distintas que
+ * coexisten (ver docs/DIAGNOSTICO_SENALES_GABINETES.md sección 32/punto 8
+ * de la aprobación del usuario).
  */
 export const switchesRouter = Router({ mergeParams: true });
 
@@ -44,6 +50,7 @@ function serialize(row: Record<string, any>) {
     tagSwitch: row.tag_switch,
     descripcion: row.descripcion,
     marcaModelo: row.marca_modelo,
+    gabineteId: row.gabinete_id === null ? null : String(row.gabinete_id),
     active: Boolean(row.activo),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -53,7 +60,7 @@ function serialize(row: Record<string, any>) {
 }
 
 const COLUMNS = [
-  'id', 'proyecto_id', 'tag_switch', 'descripcion', 'marca_modelo', 'activo',
+  'id', 'proyecto_id', 'tag_switch', 'descripcion', 'marca_modelo', 'gabinete_id', 'activo',
   'created_at', 'updated_at', 'created_by', 'updated_by'
 ].join(', ');
 
@@ -145,7 +152,7 @@ switchesRouter.post(
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
 
-      const { tagSwitch, descripcion = null, marcaModelo = null } = req.body ?? {};
+      const { tagSwitch, descripcion = null, marcaModelo = null, gabineteId = null } = req.body ?? {};
 
       if (typeof tagSwitch !== 'string' || tagSwitch.trim().length === 0) {
         res.status(400).json({ error: 'validation_error', message: 'tagSwitch is required.' });
@@ -175,6 +182,11 @@ switchesRouter.post(
         }
       }
 
+      if (gabineteId !== null && gabineteId !== undefined && !/^\d+$/.test(String(gabineteId))) {
+        res.status(400).json({ error: 'validation_error', message: 'gabineteId must be a numeric id or null.' });
+        return;
+      }
+
       const pool = await getDbPool();
       const result = await pool
         .request()
@@ -183,6 +195,7 @@ switchesRouter.post(
         .input('tag_switch', sql.NVarChar(50), tag)
         .input('descripcion', sql.NVarChar(300), descripcion)
         .input('marca_modelo', sql.NVarChar(100), marcaModelo)
+        .input('gabinete_id', sql.NVarChar(30), gabineteId)
         .query(`
           IF EXISTS (
             SELECT 1 FROM nucleo.switch
@@ -193,11 +206,9 @@ switchesRouter.post(
             THROW 54701, 'Ya existe un switch activo con ese TAG en el proyecto.', 1;
           END;
 
-          INSERT INTO nucleo.switch (proyecto_id, tag_switch, descripcion, marca_modelo, activo, created_at, created_by)
-          OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_switch, INSERTED.descripcion,
-                 INSERTED.marca_modelo, INSERTED.activo, INSERTED.created_at, INSERTED.created_by,
-                 INSERTED.updated_at, INSERTED.updated_by
-          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), @tag_switch, @descripcion, @marca_modelo, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
+          INSERT INTO nucleo.switch (proyecto_id, tag_switch, descripcion, marca_modelo, gabinete_id, activo, created_at, created_by)
+          OUTPUT ${COLUMNS.split(', ').map((c) => `INSERTED.${c}`).join(', ')}
+          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), @tag_switch, @descripcion, @marca_modelo, TRY_CONVERT(BIGINT, @gabinete_id), 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 
       const row = result.recordset[0];
@@ -212,6 +223,11 @@ switchesRouter.post(
 
       if (number === 54701 || number === 2601 || number === 2627) {
         res.status(409).json({ error: 'switch_tag_conflict', message: 'An active switch with this TAG already exists in the project.' });
+        return;
+      }
+
+      if (number === 547) {
+        res.status(400).json({ error: 'invalid_reference', message: 'gabineteId does not exist, is inactive, or does not belong to this project.' });
         return;
       }
 
@@ -241,7 +257,8 @@ switchesRouter.patch(
       const allowedFields = {
         tagSwitch: { column: 'tag_switch', sqlType: sql.NVarChar(50), max: 50 },
         descripcion: { column: 'descripcion', sqlType: sql.NVarChar(300), max: 300 },
-        marcaModelo: { column: 'marca_modelo', sqlType: sql.NVarChar(100), max: 100 }
+        marcaModelo: { column: 'marca_modelo', sqlType: sql.NVarChar(100), max: 100 },
+        gabineteId: { column: 'gabinete_id', sqlType: sql.NVarChar(30), max: Infinity }
       } as const;
 
       const body = req.body ?? {};
@@ -260,7 +277,13 @@ switchesRouter.patch(
         body.tagSwitch = body.tagSwitch.trim();
       }
 
+      if ('gabineteId' in body && body.gabineteId !== null && !/^\d+$/.test(String(body.gabineteId))) {
+        res.status(400).json({ error: 'validation_error', message: 'gabineteId must be a numeric id or null.' });
+        return;
+      }
+
       for (const key of keys) {
+        if (key === 'gabineteId') continue;
         const value = body[key];
         const config = allowedFields[key];
 
@@ -287,7 +310,11 @@ switchesRouter.patch(
         const config = allowedFields[key];
         const parameter = `field_${index}`;
         request.input(parameter, config.sqlType, body[key]);
-        assignments.push(`${config.column} = @${parameter}`);
+        assignments.push(
+          key === 'gabineteId'
+            ? `${config.column} = TRY_CONVERT(BIGINT, @${parameter})`
+            : `${config.column} = @${parameter}`
+        );
       });
 
       if ('tagSwitch' in body) {
@@ -325,10 +352,7 @@ switchesRouter.patch(
         SET ${assignments.join(',\n          ')},
           updated_at = SYSUTCDATETIME(),
           updated_by = TRY_CONVERT(BIGINT, @updated_by)
-        OUTPUT
-          INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_switch, INSERTED.descripcion,
-          INSERTED.marca_modelo, INSERTED.activo, INSERTED.created_at, INSERTED.updated_at,
-          INSERTED.created_by, INSERTED.updated_by
+        OUTPUT ${COLUMNS.split(', ').map((c) => `INSERTED.${c}`).join(', ')}
         WHERE id = TRY_CONVERT(BIGINT, @switch_id)
           AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
           AND activo = 1;
@@ -345,6 +369,10 @@ switchesRouter.patch(
       }
       if (number === 54702) {
         res.status(404).json({ error: 'switch_not_found', message: 'Switch does not exist in this project or is inactive.' });
+        return;
+      }
+      if (number === 547) {
+        res.status(400).json({ error: 'invalid_reference', message: 'gabineteId does not exist, is inactive, or does not belong to this project.' });
         return;
       }
 

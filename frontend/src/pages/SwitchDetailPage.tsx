@@ -17,7 +17,12 @@ import { emptyCommLinkInput } from '../components/commLinkFormDefaults';
 import { ErrorMessage } from '../components/ErrorMessage';
 
 function toInput(sw: SwitchEntity): SwitchInput {
-  return { tagSwitch: sw.tagSwitch, descripcion: sw.descripcion, marcaModelo: sw.marcaModelo };
+  return {
+    tagSwitch: sw.tagSwitch,
+    descripcion: sw.descripcion,
+    marcaModelo: sw.marcaModelo,
+    gabineteId: sw.gabineteId
+  };
 }
 
 interface PermissionFlags {

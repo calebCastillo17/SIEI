@@ -5,13 +5,13 @@ import type { ConnectionPointInput, ConnectionPointOwnerField } from '../api/typ
 import type { ConnectionPointFormOptions } from './useConnectionPointFormOptions';
 import { CatalogSelect } from './CatalogSelect';
 
-type OwnerType = 'instrumento' | 'equipo' | 'caja' | 'rio' | 'modulo';
+type OwnerType = 'instrumento' | 'equipo' | 'caja' | 'gabinete' | 'modulo';
 
 const OWNER_FIELD: Record<OwnerType, ConnectionPointOwnerField> = {
   instrumento: 'instrumentoId',
   equipo: 'equipoId',
   caja: 'cajaId',
-  rio: 'rioId',
+  gabinete: 'gabineteId',
   modulo: 'moduloId'
 };
 
@@ -19,7 +19,7 @@ const OWNER_LABEL: Record<OwnerType, string> = {
   instrumento: 'Instrumento',
   equipo: 'Equipo',
   caja: 'Caja',
-  rio: 'RIO',
+  gabinete: 'Gabinete',
   modulo: 'Módulo'
 };
 
@@ -89,7 +89,7 @@ export function ConnectionPointForm({
     instrumento: options.instruments.map((i) => ({ id: i.id, label: i.tagInstrumento })),
     equipo: options.equipment.map((e) => ({ id: e.id, label: e.tagEquipo })),
     caja: options.boxes.map((b) => ({ id: b.id, label: b.tagCaja })),
-    rio: options.rios.map((r) => ({ id: r.id, label: r.tagRio })),
+    gabinete: options.gabinetes.map((g) => ({ id: g.id, label: g.tagGabinete })),
     modulo: options.modules.map((m) => ({ id: m.id, label: `${m.fabricante} ${m.modelo}` }))
   };
 

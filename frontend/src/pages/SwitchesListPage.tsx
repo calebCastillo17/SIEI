@@ -47,7 +47,8 @@ export function SwitchesListPage() {
         {
           tagSwitch: tagSwitch.trim(),
           marcaModelo: marcaModelo.trim().length > 0 ? marcaModelo.trim() : null,
-          descripcion: descripcion.trim().length > 0 ? descripcion.trim() : null
+          descripcion: descripcion.trim().length > 0 ? descripcion.trim() : null,
+          gabineteId: null
         },
         devUser.email
       );

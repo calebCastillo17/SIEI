@@ -8,7 +8,7 @@ import { projectsRouter } from './routes/projects.js';
 import { instrumentsRouter } from './routes/instruments.js';
 import { equipmentRouter } from './routes/equipment.js';
 import { signalsRouter } from './routes/signals.js';
-import { riosRouter } from './routes/rios.js';
+import { gabinetesRouter } from './routes/gabinetes.js';
 import { racksRouter } from './routes/racks.js';
 import { slotsRouter } from './routes/slots.js';
 import { modulesRouter } from './routes/modules.js';
@@ -37,6 +37,7 @@ import { devAuthzRouter } from './routes/devAuthz.js';
 import { tiposEntregableRouter } from './routes/tiposEntregable.js';
 import { ordenTipoInstrumentoRouter } from './routes/ordenTipoInstrumento.js';
 import { tiposEquipoRouter } from './routes/tiposEquipo.js';
+import { tiposGabineteRouter } from './routes/tiposGabinete.js';
 
 const app = express();
 
@@ -107,8 +108,8 @@ app.use(
   signalsRouter
 );
 app.use(
-  '/api/projects/:projectId/rios',
-  riosRouter
+  '/api/projects/:projectId/gabinetes',
+  gabinetesRouter
 );
 app.use(
   '/api/projects/:projectId/racks',
@@ -255,6 +256,7 @@ app.use(
 app.use('/api/catalogs/tipos-entregable', tiposEntregableRouter);
 app.use('/api/catalogs/orden-tipo-instrumento', ordenTipoInstrumentoRouter);
 app.use('/api/catalogs/tipos-equipo', tiposEquipoRouter);
+app.use('/api/catalogs/tipos-gabinete', tiposGabineteRouter);
 
 app.use('/api/clients', clientsRouter);
 app.use('/api/users', usersRouter);

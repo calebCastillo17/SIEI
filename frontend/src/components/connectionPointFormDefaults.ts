@@ -5,7 +5,7 @@ export function emptyConnectionPointInput(): ConnectionPointInput {
     instrumentoId: null,
     equipoId: null,
     cajaId: null,
-    rioId: null,
+    gabineteId: null,
     moduloId: null,
     regleta: null,
     bornera: null,

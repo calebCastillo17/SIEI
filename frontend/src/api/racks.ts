@@ -7,19 +7,19 @@ interface RackMutationResponse {
   rack: { id: string; projectId: string };
 }
 
-/** GET /api/projects/:projectId/racks?rioId= */
+/** GET /api/projects/:projectId/racks?gabineteId= */
 export function listRacks(
   projectId: string,
   devUserEmail: string,
-  rioId?: string
+  gabineteId?: string
 ): Promise<RacksListResponse> {
-  const query = rioId ? `?rioId=${rioId}` : '';
+  const query = gabineteId ? `?gabineteId=${gabineteId}` : '';
   return apiFetch<RacksListResponse>(`${base(projectId)}${query}`, { devUserEmail });
 }
 
 export function createRack(
   projectId: string,
-  input: { rioId: string; numeroRack: number },
+  input: { gabineteId: string; numeroRack: number },
   devUserEmail: string
 ): Promise<RackMutationResponse> {
   return apiFetch<RackMutationResponse>(base(projectId), {

@@ -345,38 +345,68 @@ export interface SignalInput {
   observacion: string | null;
 }
 
-/* ---- Jerarquía física de E/S: RIO -> Rack -> Slot -> Módulo -> Canal --- */
+/* ---- Jerarquía física de E/S: GABINETE -> Rack -> Slot -> Módulo -> Canal
+ * (GABINETE, ex RIO, migración 012 — RIO ya no es el concepto padre, es
+ * uno de varios tipos posibles: RIO / CONTROL / COMUNICACION, ver
+ * cat.cat_tipo_gabinete). --- */
 
-export interface Rio {
+export interface Gabinete {
   id: string;
   projectId: string;
-  tagRio: string;
+  tagGabinete: string;
+  /** Nomenclatura anterior del mismo gabinete físico, si existe evidencia
+   * — nullable, no participa en identidad (mismo patrón que
+   * instrumento.tagAnterior). */
+  tagAnterior: string | null;
   descripcion: string | null;
   active: boolean;
+  tipoGabineteId: string | null;
+  tipoGabineteCodigo: string | null;
+  tipoGabineteNombre: string | null;
   createdAt: string;
   updatedAt: string | null;
   createdBy: string | null;
   updatedBy: string | null;
 }
 
-export interface RiosListResponse {
+export interface GabinetesListResponse {
   projectId: string;
-  rios: Rio[];
+  gabinetes: Gabinete[];
 }
 
-export interface RioResponse {
-  rio: Rio;
+export interface GabineteResponse {
+  gabinete: Gabinete;
 }
 
-export interface RioInput {
-  tagRio: string;
+export interface GabineteInput {
+  tagGabinete: string;
+  tagAnterior: string | null;
   descripcion: string | null;
+  /** Obligatorio en creación — un gabinete nuevo siempre elige su tipo
+   * explícitamente, nunca hereda uno tácito. */
+  tipoGabineteId: string;
+}
+
+/** cat.cat_tipo_gabinete (migración 012) — catálogo global, solo lectura,
+ * lista cerrada por ahora (RIO / CONTROL / COMUNICACION). No reutiliza
+ * CatalogItem: su columna de texto es `nombre`, no `descripcion` (mismo
+ * patrón que TipoEquipo). */
+export interface TipoGabinete {
+  id: string;
+  codigo: string;
+  nombre: string;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface TiposGabineteResponse {
+  items: TipoGabinete[];
 }
 
 export interface Rack {
   id: string;
   projectId: string;
-  rioId: string;
+  gabineteId: string;
   numeroRack: number;
   active: boolean;
   createdAt: string;
@@ -471,6 +501,10 @@ export interface SwitchEntity {
   tagSwitch: string;
   descripcion: string | null;
   marcaModelo: string | null;
+  /** Gabinete que contiene físicamente este switch, si corresponde — NULL
+   * si el switch no está dentro de ningún gabinete modelado (migración
+   * 012, relación opcional). */
+  gabineteId: string | null;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -491,6 +525,7 @@ export interface SwitchInput {
   tagSwitch: string;
   descripcion: string | null;
   marcaModelo: string | null;
+  gabineteId: string | null;
 }
 
 export interface Port {
@@ -618,7 +653,7 @@ export type ConnectionPointOwnerField =
   | 'instrumentoId'
   | 'equipoId'
   | 'cajaId'
-  | 'rioId'
+  | 'gabineteId'
   | 'moduloId';
 
 export interface ConnectionPoint {
@@ -627,7 +662,7 @@ export interface ConnectionPoint {
   instrumentoId: string | null;
   equipoId: string | null;
   cajaId: string | null;
-  rioId: string | null;
+  gabineteId: string | null;
   moduloId: string | null;
   regleta: string | null;
   bornera: string | null;
@@ -653,7 +688,7 @@ export interface ConnectionPointInput {
   instrumentoId: string | null;
   equipoId: string | null;
   cajaId: string | null;
-  rioId: string | null;
+  gabineteId: string | null;
   moduloId: string | null;
   regleta: string | null;
   bornera: string | null;

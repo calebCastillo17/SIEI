@@ -9,7 +9,7 @@ interface CommLinkMutationResponse {
 
 /** GET no admite filtrar por puertoId (ver commLinks.ts en backend) — trae
  * todos los enlaces activos del proyecto; filtrar por puerto se hace en
- * el cliente, igual que con la jerarquía física de RIOs. */
+ * el cliente, igual que con la jerarquía física de Gabinetes. */
 export function listCommLinks(
   projectId: string,
   devUserEmail: string

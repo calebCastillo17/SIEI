@@ -4,6 +4,7 @@ export function emptySwitchInput(): SwitchInput {
   return {
     tagSwitch: '',
     descripcion: null,
-    marcaModelo: null
+    marcaModelo: null,
+    gabineteId: null
   };
 }

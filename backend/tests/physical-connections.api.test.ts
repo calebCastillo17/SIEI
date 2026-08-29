@@ -7,7 +7,7 @@
  * IDs/TAGs únicos por corrida, limpieza total en `finally`.
  *
  * Requiere que la base ya tenga el proyecto TEST-001, los usuarios DEV, y
- * el RIO fixture RIO-TEST-001 (de database/tests/001_smoke_modulo.sql).
+ * el gabinete fixture RIO-TEST-001 (de database/tests/001_smoke_modulo.sql).
  *
  * Uso: npm run test:connections   (ver backend/package.json)
  */
@@ -150,12 +150,12 @@ async function main(): Promise<void> {
     const ROUTES = `/api/projects/${projectId}/routes`;
     const INSTRUMENTS = `/api/projects/${projectId}/instruments`;
     const SIGNALS = `/api/projects/${projectId}/signals`;
-    const RIOS = `/api/projects/${projectId}/rios`;
+    const GABINETES = `/api/projects/${projectId}/gabinetes`;
 
-    const rioList = await call('admin', 'GET', RIOS);
-    const fixtureRio = rioList.json?.rios?.find((r: any) => r.tagRio === 'RIO-TEST-001');
-    check('RIO fixture RIO-TEST-001 disponible', Boolean(fixtureRio), rioList.json);
-    const rioId: string = fixtureRio?.id;
+    const gabineteList = await call('admin', 'GET', GABINETES);
+    const fixtureGabinete = gabineteList.json?.gabinetes?.find((g: any) => g.tagGabinete === 'RIO-TEST-001');
+    check('Gabinete fixture RIO-TEST-001 disponible', Boolean(fixtureGabinete), gabineteList.json);
+    const gabineteId: string = fixtureGabinete?.id;
 
     // ===================== CAJA =====================
     const viewerCreateBox = await call('viewer', 'POST', BOXES, { tagCaja: `VIEWER-DENIED-${runId}` });
@@ -261,10 +261,10 @@ async function main(): Promise<void> {
     const pointBoxId: string = createPointBox.json?.connectionPoint?.id;
     if (pointBoxId) createdConnectionPointIds.push(pointBoxId);
 
-    const createPointRio = await call('editor', 'POST', POINTS, { rioId, regleta: 'R3' });
-    check('EDITOR crea PUNTO_CONEXION en el RIO (201)', createPointRio.status === 201, createPointRio.json);
-    const pointRioId: string = createPointRio.json?.connectionPoint?.id;
-    if (pointRioId) createdConnectionPointIds.push(pointRioId);
+    const createPointGabinete = await call('editor', 'POST', POINTS, { gabineteId, regleta: 'R3' });
+    check('EDITOR crea PUNTO_CONEXION en el gabinete (201)', createPointGabinete.status === 201, createPointGabinete.json);
+    const pointGabineteId: string = createPointGabinete.json?.connectionPoint?.id;
+    if (pointGabineteId) createdConnectionPointIds.push(pointGabineteId);
 
     const filteredPoints = await call('viewer', 'GET', `${POINTS}?cajaId=${boxId}`);
     check('GET connection-points?cajaId= filtra correctamente', filteredPoints.status === 200 && filteredPoints.json?.connectionPoints?.length === 1, filteredPoints.json);
@@ -280,7 +280,7 @@ async function main(): Promise<void> {
       senalId,
       segments: [
         { parConductorId: pairId1, puntoOrigenId: pointInstrId, puntoDestinoId: pointBoxId },
-        { parConductorId: pairId2, puntoOrigenId: pointBoxId, puntoDestinoId: pointRioId }
+        { parConductorId: pairId2, puntoOrigenId: pointBoxId, puntoDestinoId: pointGabineteId }
       ]
     });
     check(
@@ -301,7 +301,7 @@ async function main(): Promise<void> {
     // Segunda ruta activa para la misma señal -> conflicto.
     const dupRouteForSignal = await call('editor', 'POST', ROUTES, {
       senalId,
-      segments: [{ parConductorId: pairId2, puntoOrigenId: pointInstrId, puntoDestinoId: pointRioId }]
+      segments: [{ parConductorId: pairId2, puntoOrigenId: pointInstrId, puntoDestinoId: pointGabineteId }]
     });
     check(
       'EDITOR: la señal ya tiene ruta activa -> 409 route_signal_conflict',
@@ -314,7 +314,7 @@ async function main(): Promise<void> {
     // COM no puede tener ruta activa.
     const routeForCom = await call('editor', 'POST', ROUTES, {
       senalId: senalComId,
-      segments: [{ parConductorId: pairId2, puntoOrigenId: pointInstrId, puntoDestinoId: pointRioId }]
+      segments: [{ parConductorId: pairId2, puntoOrigenId: pointInstrId, puntoDestinoId: pointGabineteId }]
     });
     check(
       'EDITOR: señal COM no puede tener ruta activa -> 409 route_signal_is_com',
@@ -331,7 +331,7 @@ async function main(): Promise<void> {
     // Origen del primer tramo no es el dueño real de la señal.
     const badOrigin = await call('editor', 'POST', ROUTES, {
       senalId: senalId2,
-      segments: [{ parConductorId: pairId3, puntoOrigenId: pointOtherInstrId, puntoDestinoId: pointRioId }]
+      segments: [{ parConductorId: pairId3, puntoOrigenId: pointOtherInstrId, puntoDestinoId: pointGabineteId }]
     });
     check(
       'EDITOR: origen del primer tramo no es el dueño real -> 400 route_origin_mismatch',
@@ -339,13 +339,13 @@ async function main(): Promise<void> {
       badOrigin.json
     );
 
-    // Último tramo no termina en RIO/MODULO (termina en la caja).
+    // Último tramo no termina en GABINETE/MODULO (termina en la caja).
     const badDestination = await call('editor', 'POST', ROUTES, {
       senalId: senalId2,
       segments: [{ parConductorId: pairId3, puntoOrigenId: pointInstrId, puntoDestinoId: pointBoxId }]
     });
     check(
-      'EDITOR: último tramo termina en CAJA, no en RIO/MODULO -> 400 route_destination_invalid',
+      'EDITOR: último tramo termina en CAJA, no en GABINETE/MODULO -> 400 route_destination_invalid',
       badDestination.status === 400 && badDestination.json?.error === 'route_destination_invalid',
       badDestination.json
     );
@@ -359,7 +359,7 @@ async function main(): Promise<void> {
       senalId: senalId2,
       segments: [
         { parConductorId: pairId3, puntoOrigenId: pointInstrId, puntoDestinoId: pointBoxId },
-        { parConductorId: pairId4, puntoOrigenId: pointBox2Id, puntoDestinoId: pointRioId } // no encadena con pointBoxId
+        { parConductorId: pairId4, puntoOrigenId: pointBox2Id, puntoDestinoId: pointGabineteId } // no encadena con pointBoxId
       ]
     });
     check(
@@ -379,7 +379,7 @@ async function main(): Promise<void> {
     // Referencia inválida.
     const badRef = await call('editor', 'POST', ROUTES, {
       senalId: senalId2,
-      segments: [{ parConductorId: '999999999', puntoOrigenId: pointInstrId, puntoDestinoId: pointRioId }]
+      segments: [{ parConductorId: '999999999', puntoOrigenId: pointInstrId, puntoDestinoId: pointGabineteId }]
     });
     check('EDITOR: parConductorId inexistente -> 400 invalid_reference', badRef.status === 400 && badRef.json?.error === 'invalid_reference', badRef.json);
 

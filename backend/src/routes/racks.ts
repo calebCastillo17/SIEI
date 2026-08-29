@@ -12,9 +12,9 @@ import { requireProjectPermission } from '../middleware/requireProjectPermission
 import { getDbPool } from '../db/sql.js';
 
 /*
- * nucleo.rack — depende de RIO. Sin TAG: se identifica por numero_rack,
- * único dentro de su RIO entre filas activas (UX_rack_rio_numero). Sin
- * CHECK ni triggers propios.
+ * nucleo.rack — depende de GABINETE (ex RIO, migración 012). Sin TAG: se
+ * identifica por numero_rack, único dentro de su gabinete entre filas
+ * activas (UX_rack_gabinete_numero). Sin CHECK ni triggers propios.
  */
 export const racksRouter = Router({ mergeParams: true });
 
@@ -45,7 +45,7 @@ function serialize(row: Record<string, any>) {
   return {
     id: String(row.id),
     projectId: String(row.proyecto_id),
-    rioId: String(row.rio_id),
+    gabineteId: String(row.gabinete_id),
     numeroRack: row.numero_rack,
     active: Boolean(row.activo),
     createdAt: row.created_at,
@@ -56,7 +56,7 @@ function serialize(row: Record<string, any>) {
 }
 
 const COLUMN_NAMES = [
-  'id', 'proyecto_id', 'rio_id', 'numero_rack', 'activo',
+  'id', 'proyecto_id', 'gabinete_id', 'numero_rack', 'activo',
   'created_at', 'updated_at', 'created_by', 'updated_by'
 ];
 const COLUMNS = COLUMN_NAMES.join(', ');
@@ -64,7 +64,7 @@ const OUTPUT_INSERTED_COLUMNS = COLUMN_NAMES.map((c) => `INSERTED.${c}`).join(',
 
 
 /*
- * GET /api/projects/:projectId/racks?rioId=
+ * GET /api/projects/:projectId/racks?gabineteId=
  */
 racksRouter.get(
   '/',
@@ -72,25 +72,25 @@ racksRouter.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const projectId = req.projectAccess!.projectId;
-      const rioIdFilter = normalizeParam(req.query.rioId as string | string[] | undefined);
+      const gabineteIdFilter = normalizeParam(req.query.gabineteId as string | string[] | undefined);
 
-      if (rioIdFilter !== undefined && !isPositiveIntString(rioIdFilter)) {
-        res.status(400).json({ error: 'invalid_rio_id', message: 'rioId filter must be a positive integer.' });
+      if (gabineteIdFilter !== undefined && !isPositiveIntString(gabineteIdFilter)) {
+        res.status(400).json({ error: 'invalid_gabinete_id', message: 'gabineteId filter must be a positive integer.' });
         return;
       }
 
       const pool = await getDbPool();
       const request = pool.request().input('proyecto_id', sql.NVarChar(30), projectId);
 
-      if (rioIdFilter) request.input('rio_id', sql.NVarChar(30), rioIdFilter);
+      if (gabineteIdFilter) request.input('gabinete_id', sql.NVarChar(30), gabineteIdFilter);
 
       const result = await request.query(`
         SELECT ${COLUMNS}
         FROM nucleo.rack
         WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
           AND activo = 1
-          ${rioIdFilter ? 'AND rio_id = TRY_CONVERT(BIGINT, @rio_id)' : ''}
-        ORDER BY rio_id, numero_rack;
+          ${gabineteIdFilter ? 'AND gabinete_id = TRY_CONVERT(BIGINT, @gabinete_id)' : ''}
+        ORDER BY gabinete_id, numero_rack;
       `);
 
       res.status(200).json({ projectId, racks: result.recordset.map(serialize) });
@@ -157,10 +157,10 @@ racksRouter.post(
     try {
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
-      const { rioId, numeroRack } = req.body ?? {};
+      const { gabineteId, numeroRack } = req.body ?? {};
 
-      if (!isPositiveIntString(rioId)) {
-        res.status(400).json({ error: 'validation_error', message: 'rioId is required and must be a numeric id.' });
+      if (!isPositiveIntString(gabineteId)) {
+        res.status(400).json({ error: 'validation_error', message: 'gabineteId is required and must be a numeric id.' });
         return;
       }
 
@@ -179,21 +179,21 @@ racksRouter.post(
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('created_by', sql.NVarChar(30), userId)
-        .input('rio_id', sql.NVarChar(30), rioId)
+        .input('gabinete_id', sql.NVarChar(30), gabineteId)
         .input('numero_rack', sql.SmallInt, numeroRack)
         .query(`
           IF EXISTS (
             SELECT 1 FROM nucleo.rack
-            WHERE rio_id = TRY_CONVERT(BIGINT, @rio_id)
+            WHERE gabinete_id = TRY_CONVERT(BIGINT, @gabinete_id)
               AND numero_rack = @numero_rack AND activo = 1
           )
           BEGIN
-            THROW 54401, 'Ya existe un rack activo con ese número en ese RIO.', 1;
+            THROW 54401, 'Ya existe un rack activo con ese número en ese gabinete.', 1;
           END;
 
-          INSERT INTO nucleo.rack (proyecto_id, rio_id, numero_rack, activo, created_at, created_by)
+          INSERT INTO nucleo.rack (proyecto_id, gabinete_id, numero_rack, activo, created_at, created_by)
           OUTPUT ${OUTPUT_INSERTED_COLUMNS}
-          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @rio_id), @numero_rack, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
+          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @gabinete_id), @numero_rack, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 
       const row = result.recordset[0];
@@ -207,12 +207,12 @@ racksRouter.post(
       const number = sqlErrorNumber(error);
 
       if (number === 54401 || number === 2601 || number === 2627) {
-        res.status(409).json({ error: 'rack_number_conflict', message: 'An active rack with this number already exists in that RIO.' });
+        res.status(409).json({ error: 'rack_number_conflict', message: 'An active rack with this number already exists in that gabinete.' });
         return;
       }
 
       if (number === 547) {
-        res.status(400).json({ error: 'invalid_reference', message: 'rioId does not exist, is inactive, or does not belong to this project.' });
+        res.status(400).json({ error: 'invalid_reference', message: 'gabineteId does not exist, is inactive, or does not belong to this project.' });
         return;
       }
 
@@ -225,9 +225,10 @@ racksRouter.post(
 /*
  * PATCH /api/projects/:projectId/racks/:rackId
  *
- * Solo permite renumerar (numeroRack). Mover un rack a otro RIO no está
- * soportado aquí — reasignar rio_id implicaría revalidar toda la cadena
- * física por debajo (slot/modulo/canal); si hace falta, se agrega aparte.
+ * Solo permite renumerar (numeroRack). Mover un rack a otro gabinete no
+ * está soportado aquí — reasignar gabinete_id implicaría revalidar toda
+ * la cadena física por debajo (slot/modulo/canal); si hace falta, se
+ * agrega aparte.
  */
 racksRouter.patch(
   '/:rackId',
@@ -263,24 +264,24 @@ racksRouter.patch(
         .input('numero_rack', sql.SmallInt, numeroRack)
         .input('updated_by', sql.NVarChar(30), userId)
         .query(`
-          DECLARE @rio_id BIGINT;
-          SELECT @rio_id = rio_id FROM nucleo.rack
+          DECLARE @gabinete_id BIGINT;
+          SELECT @gabinete_id = gabinete_id FROM nucleo.rack
           WHERE id = TRY_CONVERT(BIGINT, @rack_id)
             AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
             AND activo = 1;
 
-          IF @rio_id IS NULL
+          IF @gabinete_id IS NULL
           BEGIN
             THROW 54402, 'El rack no existe en este proyecto o está inactivo.', 1;
           END;
 
           IF EXISTS (
             SELECT 1 FROM nucleo.rack
-            WHERE rio_id = @rio_id AND numero_rack = @numero_rack AND activo = 1
+            WHERE gabinete_id = @gabinete_id AND numero_rack = @numero_rack AND activo = 1
               AND id <> TRY_CONVERT(BIGINT, @rack_id)
           )
           BEGIN
-            THROW 54401, 'Ya existe un rack activo con ese número en ese RIO.', 1;
+            THROW 54401, 'Ya existe un rack activo con ese número en ese gabinete.', 1;
           END;
 
           UPDATE nucleo.rack
@@ -299,7 +300,7 @@ racksRouter.patch(
       const number = sqlErrorNumber(error);
 
       if (number === 54401 || number === 2601 || number === 2627) {
-        res.status(409).json({ error: 'rack_number_conflict', message: 'An active rack with this number already exists in that RIO.' });
+        res.status(409).json({ error: 'rack_number_conflict', message: 'An active rack with this number already exists in that gabinete.' });
         return;
       }
       if (number === 54402) {

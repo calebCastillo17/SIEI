@@ -7,7 +7,7 @@ import { listConnectionPoints } from '../api/connectionPoints';
 import { listInstruments } from '../api/instruments';
 import { listEquipment } from '../api/equipment';
 import { listBoxes } from '../api/boxes';
-import { listRios } from '../api/rios';
+import { listGabinetes } from '../api/gabinetes';
 import { listModules } from '../api/modules';
 import { useAsyncData } from '../lib/useAsyncData';
 import type {
@@ -16,9 +16,9 @@ import type {
   ConductorPair,
   ConnectionPoint,
   Equipment,
+  Gabinete,
   Instrument,
   PhysicalModule,
-  Rio,
   Signal
 } from '../api/types';
 
@@ -30,7 +30,7 @@ export interface RouteFormOptions {
   instruments: Instrument[];
   equipment: Equipment[];
   boxes: Box[];
-  rios: Rio[];
+  gabinetes: Gabinete[];
   modules: PhysicalModule[];
 }
 
@@ -52,7 +52,7 @@ export function useRouteFormOptions(projectId: string, devUserEmail: string) {
       instruments,
       equipment,
       boxes,
-      rios,
+      gabinetes,
       modules
     ] = await Promise.all([
       listSignals(projectId, devUserEmail),
@@ -62,7 +62,7 @@ export function useRouteFormOptions(projectId: string, devUserEmail: string) {
       listInstruments(projectId, devUserEmail),
       listEquipment(projectId, devUserEmail),
       listBoxes(projectId, devUserEmail),
-      listRios(projectId, devUserEmail),
+      listGabinetes(projectId, devUserEmail),
       listModules(projectId, devUserEmail)
     ]);
 
@@ -74,7 +74,7 @@ export function useRouteFormOptions(projectId: string, devUserEmail: string) {
       instruments: instruments.instruments,
       equipment: equipment.equipment,
       boxes: boxes.boxes,
-      rios: rios.rios,
+      gabinetes: gabinetes.gabinetes,
       modules: modules.modules
     };
   }, [projectId, devUserEmail]);

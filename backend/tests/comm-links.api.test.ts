@@ -91,6 +91,7 @@ async function main(): Promise<void> {
   const createdPortIds: string[] = [];
   const createdSwitchIds: string[] = [];
   const createdInstrumentIds: string[] = [];
+  const createdGabineteIds: string[] = [];
 
   const alreadyRunning = await waitForHealth(500);
 
@@ -146,6 +147,21 @@ async function main(): Promise<void> {
     const PORTS = `/api/projects/${projectId}/ports`;
     const COMM_LINKS = `/api/projects/${projectId}/comm-links`;
     const INSTRUMENTS = `/api/projects/${projectId}/instruments`;
+    const GABINETES = `/api/projects/${projectId}/gabinetes`;
+    const TIPOS_GABINETE = '/api/catalogs/tipos-gabinete';
+
+    // --- Fixture propio: gabinete tipo COMUNICACION para asociar al switch ---
+    const tiposGabinete = await call('viewer', 'GET', TIPOS_GABINETE);
+    const tipoComunicacionId: string | undefined = tiposGabinete.json?.items?.find((t: any) => t.codigo === 'COMUNICACION')?.id;
+    check('Existe el tipo COMUNICACION en el catálogo tipos-gabinete', Boolean(tipoComunicacionId), tiposGabinete.json);
+
+    const createGabinete = await call('admin', 'POST', GABINETES, {
+      tagGabinete: `GAB-COMM-${runId}`,
+      tipoGabineteId: tipoComunicacionId
+    });
+    check('ADMIN crea gabinete fixture tipo COMUNICACION (201)', createGabinete.status === 201, createGabinete.json);
+    const gabineteId: string | undefined = createGabinete.json?.gabinete?.id;
+    if (gabineteId) createdGabineteIds.push(gabineteId);
 
     // --- Fixture propio: instrumento activo para dueño de enlaces ---
     const instrTag = `COMM-TEST-${runId}`;
@@ -170,12 +186,39 @@ async function main(): Promise<void> {
 
     const switchTag = `SW-${runId}`;
     const createSwitch = await call('editor', 'POST', SWITCHES, { tagSwitch: switchTag, marcaModelo: 'Cisco Test' });
-    check('EDITOR crea SWITCH (201)', createSwitch.status === 201 && createSwitch.json?.switch?.tagSwitch === switchTag, createSwitch.json);
+    check(
+      'EDITOR crea SWITCH sin gabinete (201, gabineteId null)',
+      createSwitch.status === 201 && createSwitch.json?.switch?.tagSwitch === switchTag && createSwitch.json?.switch?.gabineteId === null,
+      createSwitch.json
+    );
     const switchId: string | undefined = createSwitch.json?.switch?.id;
     if (switchId) createdSwitchIds.push(switchId);
 
     const dupSwitch = await call('editor', 'POST', SWITCHES, { tagSwitch: switchTag });
     check('EDITOR: TAG de switch duplicado -> 409', dupSwitch.status === 409 && dupSwitch.json?.error === 'switch_tag_conflict', dupSwitch.json);
+
+    // --- SWITCH con gabinete asignado desde su creación ---
+    const switchWithGabineteTag = `SW-GAB-${runId}`;
+    const createSwitchWithGabinete = await call('editor', 'POST', SWITCHES, {
+      tagSwitch: switchWithGabineteTag,
+      gabineteId
+    });
+    check(
+      'EDITOR crea SWITCH con gabinete (201)',
+      createSwitchWithGabinete.status === 201 && createSwitchWithGabinete.json?.switch?.gabineteId === gabineteId,
+      createSwitchWithGabinete.json
+    );
+    const switchWithGabineteId: string | undefined = createSwitchWithGabinete.json?.switch?.id;
+    if (switchWithGabineteId) createdSwitchIds.push(switchWithGabineteId);
+
+    const switchBadGabinete = await call('editor', 'POST', SWITCHES, { tagSwitch: `SW-BADGAB-${runId}`, gabineteId: '999999999' });
+    check('EDITOR: gabineteId inexistente -> 400 invalid_reference', switchBadGabinete.status === 400 && switchBadGabinete.json?.error === 'invalid_reference', switchBadGabinete.json);
+
+    const patchAddGabinete = await call('editor', 'PATCH', `${SWITCHES}/${switchId}`, { gabineteId });
+    check('EDITOR asigna gabinete a un switch existente vía PATCH (200)', patchAddGabinete.status === 200 && patchAddGabinete.json?.switch?.gabineteId === gabineteId, patchAddGabinete.json);
+
+    const patchClearGabinete = await call('editor', 'PATCH', `${SWITCHES}/${switchId}`, { gabineteId: null });
+    check('EDITOR limpia el gabinete de un switch vía PATCH (200, gabineteId null)', patchClearGabinete.status === 200 && patchClearGabinete.json?.switch?.gabineteId === null, patchClearGabinete.json);
 
     const createPort1 = await call('editor', 'POST', PORTS, { switchId, numeroPuerto: 1 });
     check('EDITOR crea PUERTO 1 (201)', createPort1.status === 201, createPort1.json);
@@ -292,6 +335,10 @@ async function main(): Promise<void> {
       for (const id of createdInstrumentIds) {
         const r = await call('admin', 'DELETE', `/api/projects/${projectId}/instruments/${id}`).catch(() => null);
         if (!r || ![200, 404].includes(r.status)) console.warn(`No se pudo limpiar instrumento ${id} (status ${r?.status})`);
+      }
+      for (const id of createdGabineteIds) {
+        const r = await call('admin', 'DELETE', `/api/projects/${projectId}/gabinetes/${id}`).catch(() => null);
+        if (!r || ![200, 404].includes(r.status)) console.warn(`No se pudo limpiar gabinete ${id} (status ${r?.status})`);
       }
     } else {
       console.warn('projectId no resuelto: no se pudo limpiar fixtures creados.');

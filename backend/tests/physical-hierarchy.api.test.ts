@@ -92,7 +92,7 @@ async function main(): Promise<void> {
   const createdModuleIds: string[] = [];
   const createdSlotIds: string[] = [];
   const createdRackIds: string[] = [];
-  const createdRioIds: string[] = [];
+  const createdGabineteIds: string[] = [];
 
   const alreadyRunning = await waitForHealth(500);
 
@@ -144,12 +144,21 @@ async function main(): Promise<void> {
     projectId = project.id as string;
     const runId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-    const RIOS = `/api/projects/${projectId}/rios`;
+    const GABINETES = `/api/projects/${projectId}/gabinetes`;
     const RACKS = `/api/projects/${projectId}/racks`;
     const SLOTS = `/api/projects/${projectId}/slots`;
     const MODULES = `/api/projects/${projectId}/modules`;
     const CHANNELS = `/api/projects/${projectId}/channels`;
     const MODULE_TYPES = '/api/catalogs/module-types';
+    const TIPOS_GABINETE = '/api/catalogs/tipos-gabinete';
+
+    // ===================== Catálogo global: cat_tipo_gabinete =====================
+
+    const tiposGabinete = await call('viewer', 'GET', TIPOS_GABINETE);
+    check('GET tipos-gabinete trae RIO/CONTROL/COMUNICACION (200)', tiposGabinete.status === 200 && tiposGabinete.json?.items?.length === 3, tiposGabinete.json);
+    const tipoRioId: string | undefined = tiposGabinete.json?.items?.find((t: any) => t.codigo === 'RIO')?.id;
+    const tipoControlId: string | undefined = tiposGabinete.json?.items?.find((t: any) => t.codigo === 'CONTROL')?.id;
+    check('Existe el tipo RIO y el tipo CONTROL en el catálogo', Boolean(tipoRioId && tipoControlId), tiposGabinete.json);
 
     // ===================== Catálogo global: cat_modulo_io =====================
 
@@ -187,37 +196,61 @@ async function main(): Promise<void> {
     check('Tipo de módulo duplicado (fabricante+modelo) -> 409', dupType.status === 409, dupType.json);
 
     // ===================== VIEWER =====================
-    const viewerListRios = await call('viewer', 'GET', RIOS);
-    check('VIEWER puede listar RIOs (200)', viewerListRios.status === 200, viewerListRios.json);
+    const viewerListGabinetes = await call('viewer', 'GET', GABINETES);
+    check('VIEWER puede listar gabinetes (200)', viewerListGabinetes.status === 200, viewerListGabinetes.json);
 
-    const viewerCreateRio = await call('viewer', 'POST', RIOS, { tagRio: `VIEWER-DENIED-${runId}` });
-    check('VIEWER no puede crear RIO (403)', viewerCreateRio.status === 403, viewerCreateRio.json);
+    const viewerCreateGabinete = await call('viewer', 'POST', GABINETES, { tagGabinete: `VIEWER-DENIED-${runId}`, tipoGabineteId: tipoRioId });
+    check('VIEWER no puede crear gabinete (403)', viewerCreateGabinete.status === 403, viewerCreateGabinete.json);
 
     // ===================== EDITOR: construir la cadena completa =====================
 
-    const rioTag = `RIO-${runId}`;
-    const createRio = await call('editor', 'POST', RIOS, { tagRio: rioTag, descripcion: 'RIO de prueba' });
-    check('EDITOR crea RIO (201)', createRio.status === 201 && createRio.json?.rio?.tagRio === rioTag, createRio.json);
-    const rioId: string | undefined = createRio.json?.rio?.id;
-    if (rioId) createdRioIds.push(rioId);
+    const gabineteTag = `RIO-${runId}`;
+    const createGabinete = await call('editor', 'POST', GABINETES, { tagGabinete: gabineteTag, descripcion: 'RIO de prueba', tipoGabineteId: tipoRioId });
+    check(
+      'EDITOR crea gabinete tipo RIO (201)',
+      createGabinete.status === 201 && createGabinete.json?.gabinete?.tagGabinete === gabineteTag && createGabinete.json?.gabinete?.tipoGabineteCodigo === 'RIO',
+      createGabinete.json
+    );
+    const gabineteId: string | undefined = createGabinete.json?.gabinete?.id;
+    if (gabineteId) createdGabineteIds.push(gabineteId);
 
-    const dupRio = await call('editor', 'POST', RIOS, { tagRio: rioTag });
-    check('EDITOR: TAG de RIO duplicado -> 409', dupRio.status === 409 && dupRio.json?.error === 'rio_tag_conflict', dupRio.json);
+    // Reproduce el caso real que motivó la migración 012 (620-PCC-5006):
+    // un gabinete con el mismo tipo de tag pero clasificado como CONTROL,
+    // no como RIO — confirma que el tipo es un dato explícito, no inferido
+    // del nombre.
+    const createGabineteControl = await call('editor', 'POST', GABINETES, {
+      tagGabinete: `PCC-${runId}`,
+      descripcion: 'Gabinete de control de motores de prueba',
+      tipoGabineteId: tipoControlId
+    });
+    check(
+      'EDITOR crea gabinete tipo CONTROL (201)',
+      createGabineteControl.status === 201 && createGabineteControl.json?.gabinete?.tipoGabineteCodigo === 'CONTROL',
+      createGabineteControl.json
+    );
+    const gabineteControlId: string | undefined = createGabineteControl.json?.gabinete?.id;
+    if (gabineteControlId) createdGabineteIds.push(gabineteControlId);
 
-    const createRack = await call('editor', 'POST', RACKS, { rioId, numeroRack: 1 });
-    check('EDITOR crea RACK 1 en el RIO (201)', createRack.status === 201 && createRack.json?.rack?.numeroRack === 1, createRack.json);
+    const createGabineteSinTipo = await call('editor', 'POST', GABINETES, { tagGabinete: `SIN-TIPO-${runId}` });
+    check('EDITOR: sin tipoGabineteId -> 400 (obligatorio)', createGabineteSinTipo.status === 400, createGabineteSinTipo.json);
+
+    const dupGabinete = await call('editor', 'POST', GABINETES, { tagGabinete: gabineteTag, tipoGabineteId: tipoRioId });
+    check('EDITOR: TAG de gabinete duplicado -> 409', dupGabinete.status === 409 && dupGabinete.json?.error === 'gabinete_tag_conflict', dupGabinete.json);
+
+    const createRack = await call('editor', 'POST', RACKS, { gabineteId, numeroRack: 1 });
+    check('EDITOR crea RACK 1 en el gabinete (201)', createRack.status === 201 && createRack.json?.rack?.numeroRack === 1, createRack.json);
     const rackId: string | undefined = createRack.json?.rack?.id;
     if (rackId) createdRackIds.push(rackId);
 
-    const dupRack = await call('editor', 'POST', RACKS, { rioId, numeroRack: 1 });
-    check('EDITOR: número de rack duplicado en el mismo RIO -> 409', dupRack.status === 409 && dupRack.json?.error === 'rack_number_conflict', dupRack.json);
+    const dupRack = await call('editor', 'POST', RACKS, { gabineteId, numeroRack: 1 });
+    check('EDITOR: número de rack duplicado en el mismo gabinete -> 409', dupRack.status === 409 && dupRack.json?.error === 'rack_number_conflict', dupRack.json);
 
-    const rackBadRio = await call('editor', 'POST', RACKS, { rioId: '999999999', numeroRack: 1 });
-    check('EDITOR: rioId inexistente -> 400 invalid_reference', rackBadRio.status === 400 && rackBadRio.json?.error === 'invalid_reference', rackBadRio.json);
+    const rackBadGabinete = await call('editor', 'POST', RACKS, { gabineteId: '999999999', numeroRack: 1 });
+    check('EDITOR: gabineteId inexistente -> 400 invalid_reference', rackBadGabinete.status === 400 && rackBadGabinete.json?.error === 'invalid_reference', rackBadGabinete.json);
 
-    const filteredRacks = await call('viewer', 'GET', `${RACKS}?rioId=${rioId}`);
+    const filteredRacks = await call('viewer', 'GET', `${RACKS}?gabineteId=${gabineteId}`);
     check(
-      'GET racks?rioId= filtra correctamente',
+      'GET racks?gabineteId= filtra correctamente',
       filteredRacks.status === 200 && filteredRacks.json?.racks?.length === 1,
       filteredRacks.json
     );
@@ -325,14 +358,17 @@ async function main(): Promise<void> {
     const adminDeactivateRack = await call('admin', 'DELETE', `${RACKS}/${rackId}`);
     check('ADMIN desactiva el rack (200)', adminDeactivateRack.status === 200, adminDeactivateRack.json);
 
-    const adminDeactivateRio = await call('admin', 'DELETE', `${RIOS}/${rioId}`);
-    check('ADMIN desactiva el RIO (200)', adminDeactivateRio.status === 200, adminDeactivateRio.json);
+    const adminDeactivateGabineteControl = await call('admin', 'DELETE', `${GABINETES}/${gabineteControlId}`);
+    check('ADMIN desactiva el gabinete CONTROL (200)', adminDeactivateGabineteControl.status === 200, adminDeactivateGabineteControl.json);
 
-    const noAccess = await call('viewer', 'GET', '/api/projects/999999/rios');
+    const adminDeactivateGabinete = await call('admin', 'DELETE', `${GABINETES}/${gabineteId}`);
+    check('ADMIN desactiva el gabinete (200)', adminDeactivateGabinete.status === 200, adminDeactivateGabinete.json);
+
+    const noAccess = await call('viewer', 'GET', '/api/projects/999999/gabinetes');
     check('Proyecto sin acceso -> 403/404', [403, 404].includes(noAccess.status), noAccess.json);
 
   } finally {
-    // Limpieza en orden hijo -> padre. Los módulos/slots/racks/rios ya
+    // Limpieza en orden hijo -> padre. Los módulos/slots/racks/gabinetes ya
     // deberían estar desactivados por el flujo normal de la prueba, pero se
     // reintenta cada uno por si la corrida falló a mitad de camino — DELETE
     // sobre algo ya inactivo devuelve 404, que se trata como éxito de
@@ -342,7 +378,7 @@ async function main(): Promise<void> {
         { kind: 'module', ids: createdModuleIds, path: (id) => `/api/projects/${projectId}/modules/${id}` },
         { kind: 'slot', ids: createdSlotIds, path: (id) => `/api/projects/${projectId}/slots/${id}` },
         { kind: 'rack', ids: createdRackIds, path: (id) => `/api/projects/${projectId}/racks/${id}` },
-        { kind: 'rio', ids: createdRioIds, path: (id) => `/api/projects/${projectId}/rios/${id}` }
+        { kind: 'gabinete', ids: createdGabineteIds, path: (id) => `/api/projects/${projectId}/gabinetes/${id}` }
       ];
 
       for (const step of cleanupSteps) {

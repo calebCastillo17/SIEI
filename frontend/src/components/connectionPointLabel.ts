@@ -1,10 +1,10 @@
-import type { Box, ConnectionPoint, Equipment, Instrument, PhysicalModule, Rio } from '../api/types';
+import type { Box, ConnectionPoint, Equipment, Gabinete, Instrument, PhysicalModule } from '../api/types';
 
 interface OwnerLists {
   instruments: Instrument[];
   equipment: Equipment[];
   boxes: Box[];
-  rios: Rio[];
+  gabinetes: Gabinete[];
   modules: PhysicalModule[];
 }
 
@@ -23,9 +23,9 @@ export function connectionPointOwnerLabel(point: ConnectionPoint, options: Owner
     const item = options.boxes.find((b) => b.id === point.cajaId);
     return `Caja ${item?.tagCaja ?? `#${point.cajaId}`}`;
   }
-  if (point.rioId) {
-    const item = options.rios.find((r) => r.id === point.rioId);
-    return `RIO ${item?.tagRio ?? `#${point.rioId}`}`;
+  if (point.gabineteId) {
+    const item = options.gabinetes.find((g) => g.id === point.gabineteId);
+    return `Gabinete ${item?.tagGabinete ?? `#${point.gabineteId}`}`;
   }
   if (point.moduloId) {
     const item = options.modules.find((m) => m.id === point.moduloId);

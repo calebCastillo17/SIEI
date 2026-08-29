@@ -2,7 +2,8 @@ SET NOCOUNT ON;
 
 DECLARE @cliente_id BIGINT;
 DECLARE @proyecto_id BIGINT;
-DECLARE @rio_id BIGINT;
+DECLARE @tipo_gabinete_rio_id BIGINT;
+DECLARE @gabinete_id BIGINT;
 DECLARE @rack_id BIGINT;
 DECLARE @slot_id BIGINT;
 DECLARE @tipo_ai_id BIGINT;
@@ -21,15 +22,19 @@ VALUES (@cliente_id, N'TEST-001', N'Proyecto de prueba SIEI');
 
 SET @proyecto_id = SCOPE_IDENTITY();
 
--- 3. RIO
-INSERT INTO nucleo.rio (proyecto_id, tag_rio, descripcion)
-VALUES (@proyecto_id, N'RIO-TEST-001', N'RIO de prueba');
+-- 3. GABINETE (ex RIO, migracion 012 — tipo_gabinete_id ahora obligatorio)
+SELECT @tipo_gabinete_rio_id = id
+FROM cat.cat_tipo_gabinete
+WHERE codigo = N'RIO';
 
-SET @rio_id = SCOPE_IDENTITY();
+INSERT INTO nucleo.gabinete (proyecto_id, tag_gabinete, descripcion, tipo_gabinete_id)
+VALUES (@proyecto_id, N'RIO-TEST-001', N'RIO de prueba', @tipo_gabinete_rio_id);
+
+SET @gabinete_id = SCOPE_IDENTITY();
 
 -- 4. RACK
-INSERT INTO nucleo.rack (proyecto_id, rio_id, numero_rack)
-VALUES (@proyecto_id, @rio_id, 1);
+INSERT INTO nucleo.rack (proyecto_id, gabinete_id, numero_rack)
+VALUES (@proyecto_id, @gabinete_id, 1);
 
 SET @rack_id = SCOPE_IDENTITY();
 
@@ -65,7 +70,7 @@ SET @modulo_id = SCOPE_IDENTITY();
 SELECT
     @cliente_id AS cliente_id,
     @proyecto_id AS proyecto_id,
-    @rio_id AS rio_id,
+    @gabinete_id AS gabinete_id,
     @rack_id AS rack_id,
     @slot_id AS slot_id,
     @modulo_id AS modulo_id;

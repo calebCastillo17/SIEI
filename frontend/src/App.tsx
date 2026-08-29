@@ -13,8 +13,8 @@ import { SignalDetailPage } from './pages/SignalDetailPage';
 import { EquipmentListPage } from './pages/EquipmentListPage';
 import { EquipmentFormPage } from './pages/EquipmentFormPage';
 import { EquipmentDetailPage } from './pages/EquipmentDetailPage';
-import { RiosListPage } from './pages/RiosListPage';
-import { RioDetailPage } from './pages/RioDetailPage';
+import { GabinetesListPage } from './pages/GabinetesListPage';
+import { GabineteDetailPage } from './pages/GabineteDetailPage';
 import { SwitchesListPage } from './pages/SwitchesListPage';
 import { SwitchDetailPage } from './pages/SwitchDetailPage';
 import { BoxesListPage } from './pages/BoxesListPage';
@@ -76,8 +76,8 @@ function App() {
           path="/projects/:projectId/equipment/:equipmentId"
           element={<EquipmentDetailPage />}
         />
-        <Route path="/projects/:projectId/rios" element={<RiosListPage />} />
-        <Route path="/projects/:projectId/rios/:rioId" element={<RioDetailPage />} />
+        <Route path="/projects/:projectId/gabinetes" element={<GabinetesListPage />} />
+        <Route path="/projects/:projectId/gabinetes/:gabineteId" element={<GabineteDetailPage />} />
         <Route path="/projects/:projectId/switches" element={<SwitchesListPage />} />
         <Route path="/projects/:projectId/switches/:switchId" element={<SwitchDetailPage />} />
         <Route path="/projects/:projectId/boxes" element={<BoxesListPage />} />

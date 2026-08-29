@@ -13,8 +13,8 @@ import { getDbPool } from '../db/sql.js';
 
 /*
  * nucleo.punto_conexion — un terminal físico, dueño de exactamente uno de
- * instrumento/equipo/caja/rio/modulo (CK_punto_conexion_pertenencia_xor,
- * 5 opciones). Sin trigger en INSERT; sí en UPDATE
+ * instrumento/equipo/caja/gabinete/modulo (CK_punto_conexion_pertenencia_xor,
+ * 5 opciones; gabinete ex rio, migración 012). Sin trigger en INSERT; sí en UPDATE
  * (TR_punto_conexion_validar_desactivacion, 51020): no se puede desactivar
  * un punto usado por un TRAMO_CONEXION activo como origen o destino.
  */
@@ -48,14 +48,14 @@ function sqlErrorMessage(error: unknown): string {
   return String(error);
 }
 
-const OWNER_FIELDS = ['instrumentoId', 'equipoId', 'cajaId', 'rioId', 'moduloId'] as const;
+const OWNER_FIELDS = ['instrumentoId', 'equipoId', 'cajaId', 'gabineteId', 'moduloId'] as const;
 type OwnerField = (typeof OWNER_FIELDS)[number];
 
 const OWNER_COLUMN: Record<OwnerField, string> = {
   instrumentoId: 'instrumento_id',
   equipoId: 'equipo_id',
   cajaId: 'caja_id',
-  rioId: 'rio_id',
+  gabineteId: 'gabinete_id',
   moduloId: 'modulo_id'
 };
 
@@ -63,7 +63,7 @@ const FK_FIELD_BY_CONSTRAINT: Record<string, string> = {
   FK_punto_conexion_instrumento: 'instrumentoId',
   FK_punto_conexion_equipo: 'equipoId',
   FK_punto_conexion_caja: 'cajaId',
-  FK_punto_conexion_rio: 'rioId',
+  FK_punto_conexion_gabinete: 'gabineteId',
   FK_punto_conexion_modulo: 'moduloId'
 };
 
@@ -87,7 +87,7 @@ function mapConnectionPointSqlError(error: unknown): { status: number; body: Rec
   if (message.includes('CK_punto_conexion_pertenencia_xor')) {
     return {
       status: 400,
-      body: { error: 'validation_error', message: 'El punto de conexión debe pertenecer a exactamente uno de instrumentoId, equipoId, cajaId, rioId o moduloId.' }
+      body: { error: 'validation_error', message: 'El punto de conexión debe pertenecer a exactamente uno de instrumentoId, equipoId, cajaId, gabineteId o moduloId.' }
     };
   }
 
@@ -111,7 +111,7 @@ function serialize(row: Record<string, any>) {
     instrumentoId: nullableId(row.instrumento_id),
     equipoId: nullableId(row.equipo_id),
     cajaId: nullableId(row.caja_id),
-    rioId: nullableId(row.rio_id),
+    gabineteId: nullableId(row.gabinete_id),
     moduloId: nullableId(row.modulo_id),
     regleta: row.regleta,
     bornera: row.bornera,
@@ -129,7 +129,7 @@ function serialize(row: Record<string, any>) {
 }
 
 const COLUMNS = [
-  'id', 'proyecto_id', 'instrumento_id', 'equipo_id', 'caja_id', 'rio_id', 'modulo_id',
+  'id', 'proyecto_id', 'instrumento_id', 'equipo_id', 'caja_id', 'gabinete_id', 'modulo_id',
   'regleta', 'bornera', 'borne', 'lado', 'circuito', 'hilo', 'descripcion', 'activo',
   'created_at', 'updated_at', 'created_by', 'updated_by'
 ].join(', ');
@@ -137,7 +137,7 @@ const COLUMNS = [
 
 /*
  * GET /api/projects/:projectId/connection-points
- * Filtros opcionales: instrumentoId, equipoId, cajaId, rioId, moduloId.
+ * Filtros opcionales: instrumentoId, equipoId, cajaId, gabineteId, moduloId.
  */
 connectionPointsRouter.get(
   '/',
@@ -252,7 +252,7 @@ connectionPointsRouter.post(
       if (Object.keys(owners).length !== 1) {
         res.status(400).json({
           error: 'validation_error',
-          message: 'Debe indicarse exactamente uno de instrumentoId, equipoId, cajaId, rioId o moduloId.'
+          message: 'Debe indicarse exactamente uno de instrumentoId, equipoId, cajaId, gabineteId o moduloId.'
         });
         return;
       }
@@ -294,7 +294,7 @@ connectionPointsRouter.post(
 
       const result = await request.query(`
         INSERT INTO nucleo.punto_conexion (
-          proyecto_id, instrumento_id, equipo_id, caja_id, rio_id, modulo_id,
+          proyecto_id, instrumento_id, equipo_id, caja_id, gabinete_id, modulo_id,
           regleta, bornera, borne, lado, circuito, hilo, descripcion,
           activo, created_at, created_by
         )
@@ -304,7 +304,7 @@ connectionPointsRouter.post(
           TRY_CONVERT(BIGINT, @instrumentoId),
           TRY_CONVERT(BIGINT, @equipoId),
           TRY_CONVERT(BIGINT, @cajaId),
-          TRY_CONVERT(BIGINT, @rioId),
+          TRY_CONVERT(BIGINT, @gabineteId),
           TRY_CONVERT(BIGINT, @moduloId),
           @regleta, @bornera, @borne, @lado, @circuito, @hilo, @descripcion,
           1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by)
@@ -334,7 +334,7 @@ connectionPointsRouter.post(
  * PATCH /api/projects/:projectId/connection-points/:pointId
  *
  * Solo los campos descriptivos (regleta/bornera/borne/lado/circuito/hilo/
- * descripcion). El dueño (instrumento/equipo/caja/rio/modulo) no es
+ * descripcion). El dueño (instrumento/equipo/caja/gabinete/modulo) no es
  * editable aquí: cambiar de dueño un punto ya usado en una ruta activa
  * dejaría el tramo apuntando a un terminal físico distinto sin que la
  * ruta se haya vuelto a validar contra ese cambio.
@@ -404,7 +404,7 @@ connectionPointsRouter.patch(
       const result = await request.query(`
         DECLARE @actualizados TABLE (
           id BIGINT, proyecto_id BIGINT, instrumento_id BIGINT, equipo_id BIGINT,
-          caja_id BIGINT, rio_id BIGINT, modulo_id BIGINT,
+          caja_id BIGINT, gabinete_id BIGINT, modulo_id BIGINT,
           regleta NVARCHAR(30), bornera NVARCHAR(30), borne NVARCHAR(30), lado NVARCHAR(20),
           circuito NVARCHAR(30), hilo NVARCHAR(30), descripcion NVARCHAR(200), activo BIT,
           created_at DATETIME2, updated_at DATETIME2, created_by BIGINT, updated_by BIGINT

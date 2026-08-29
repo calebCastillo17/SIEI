@@ -9,6 +9,7 @@ import { instrumentsRouter } from './routes/instruments.js';
 import { equipmentRouter } from './routes/equipment.js';
 import { signalsRouter } from './routes/signals.js';
 import { gabinetesRouter } from './routes/gabinetes.js';
+import { planosRouter } from './routes/planos.js';
 import { racksRouter } from './routes/racks.js';
 import { slotsRouter } from './routes/slots.js';
 import { modulesRouter } from './routes/modules.js';
@@ -110,6 +111,10 @@ app.use(
 app.use(
   '/api/projects/:projectId/gabinetes',
   gabinetesRouter
+);
+app.use(
+  '/api/projects/:projectId/planos',
+  planosRouter
 );
 app.use(
   '/api/projects/:projectId/racks',
@@ -261,6 +266,17 @@ app.use('/api/catalogs/tipos-entregable', tiposEntregableRouter);
 app.use('/api/catalogs/orden-tipo-instrumento', ordenTipoInstrumentoRouter);
 app.use('/api/catalogs/tipos-equipo', tiposEquipoRouter);
 app.use('/api/catalogs/tipos-gabinete', tiposGabineteRouter);
+/*
+ * cat.cat_tipo_plano (migración 014) — misma forma {id, codigo,
+ * descripcion, created_at, updated_at} que cat_tipo_dato_com, reutiliza
+ * el mismo factory genérico en vez de un router propio. Lista cerrada
+ * (CONEXIONADO/INTERIOR_GABINETE/LAYOUT/UNIFILAR) — ampliarla es una
+ * migración, no una llamada a la API.
+ */
+app.use(
+  '/api/catalogs/tipos-plano',
+  createSimpleCatalogRouter('cat.cat_tipo_plano', false)
+);
 
 app.use('/api/clients', clientsRouter);
 app.use('/api/users', usersRouter);

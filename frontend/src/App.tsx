@@ -15,6 +15,9 @@ import { EquipmentFormPage } from './pages/EquipmentFormPage';
 import { EquipmentDetailPage } from './pages/EquipmentDetailPage';
 import { GabinetesListPage } from './pages/GabinetesListPage';
 import { GabineteDetailPage } from './pages/GabineteDetailPage';
+import { PlanosListPage } from './pages/PlanosListPage';
+import { PlanoFormPage } from './pages/PlanoFormPage';
+import { PlanoDetailPage } from './pages/PlanoDetailPage';
 import { SwitchesListPage } from './pages/SwitchesListPage';
 import { SwitchDetailPage } from './pages/SwitchDetailPage';
 import { BoxesListPage } from './pages/BoxesListPage';
@@ -78,6 +81,9 @@ function App() {
         />
         <Route path="/projects/:projectId/gabinetes" element={<GabinetesListPage />} />
         <Route path="/projects/:projectId/gabinetes/:gabineteId" element={<GabineteDetailPage />} />
+        <Route path="/projects/:projectId/planos" element={<PlanosListPage />} />
+        <Route path="/projects/:projectId/planos/new" element={<PlanoFormPage />} />
+        <Route path="/projects/:projectId/planos/:planoId" element={<PlanoDetailPage />} />
         <Route path="/projects/:projectId/switches" element={<SwitchesListPage />} />
         <Route path="/projects/:projectId/switches/:switchId" element={<SwitchDetailPage />} />
         <Route path="/projects/:projectId/boxes" element={<BoxesListPage />} />

@@ -60,6 +60,11 @@ export const listComMediaTypes = (devUserEmail: string) =>
 export const listPnidStates = (devUserEmail: string) =>
   listCatalog('/api/catalogs/pnid-states', devUserEmail);
 
+/** cat.cat_tipo_plano (migración 014) — lista cerrada
+ * (CONEXIONADO/INTERIOR_GABINETE/LAYOUT/UNIFILAR). */
+export const listTiposPlano = (devUserEmail: string) =>
+  listCatalog('/api/catalogs/tipos-plano', devUserEmail);
+
 export const createInterfaceType = (input: CatalogInput, devUserEmail: string) =>
   createCatalogItem('/api/catalogs/interface-types', input, devUserEmail);
 

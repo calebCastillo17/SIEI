@@ -2012,3 +2012,368 @@ ALTER TABLE nucleo.senal ADD CONSTRAINT CK_senal_tipo_dato_com_loop_excl
 ### 34.25 Preguntas bloqueantes para 013
 
 **Ninguna.** Las 3 preguntas de la ronda anterior quedaron resueltas: `causa_alarma` se implementa como `BIT NULL` independiente (34.3), `BOT_S`/`BOT_D` quedan fuera de 013 como deuda de modelado documentada sin bloquear nada (34.11), `codigo_senal` no lleva índice único (34.6). El diseño de `013_senales` está completo y consolidado en 34.24, listo para implementar cuando el usuario lo apruebe.
+
+---
+
+## 35. DISEÑO TÉCNICO EXACTO DE `014_planos.sql` (propuesto, NO implementado)
+
+Verificación de repositorio (re-hecha, no asumida): `git status` limpio, `git log -3` = `83a8db4` (013) → `a33aba6` (011) → `019780e` (012), `013_senales.sql` confirmado comiteado. `014` confirmado como siguiente migración libre; `026` como siguiente smoke test libre.
+
+### 35.1 `PLANOS` — estructura real confirmada (re-verificada contra el Excel, no asumida)
+
+Encabezados reales: `ITEM, DESCRIPCION, CODIGO, TABLERO, TABLERO_WSP, PLANO_CONEX_INTERIOR, ESTAD0` — exactamente los 7 ya documentados, sin cambios. **40 filas reales de datos** (41 filas físicas menos 1 encabezado de sección "ELECTRICIDAD" en la fila 36, que no es un plano). Un bloque de 33 filas E&C/PE (filas 2-34) y un bloque de 7 filas "ELECTRICIDAD" (filas 37-43, diagramas de motor + unifilares) que **no tiene TABLERO/TABLERO_WSP/PLANO_CONEX_INTERIOR/ESTAD0 en absoluto** (las 4 columnas vienen `NULL` en las 7).
+
+| Columna | Poblados | Notas |
+|---|---|---|
+| `CODIGO` | 37/40 | **1 duplicado real**: `620-J-20039` aparece en la fila 25 (E&C CONEXIONADO TBJ 3) Y en la fila 26 (PE LAYOUT TBC 3) — dos documentos distintos, mismo código. 3 nulos, los 3 son filas LAYOUT (32, 33, 34). Longitud uniforme: **11 caracteres**, formato `###-J-#####` (o `###-E-#####` en la sección ELECTRICIDAD). Varios códigos contienen `X` como placeholder de "aún no asignado" (`620-J-2XXX3`, `620-J-200X6`, etc.) |
+| `DESCRIPCION` | 40/40 | **Cero duplicados.** Longitud real 42–79 caracteres |
+| `TABLERO` | 32/40 | Ver clasificación 35.3 |
+| `TABLERO_WSP` | 32/40 | Ver 35.4 |
+| `PLANO_CONEX_INTERIOR` | 18/40 | Ver 35.5 |
+| `ESTAD0` | 28/40 | Ver 35.6 |
+
+### 35.2 Principio del dominio (confirmado, sin cambios de diseño)
+
+`PLANO` = identidad viva del dibujo de ingeniería (`plano.id` es la identidad real, igual que `senal.id`/`gabinete.id`); `ENTREGABLE`/`REVISION_ENTREGABLE` = emisión documental controlada, dominio completamente separado (`nucleo.entregable` inspeccionado: numeración compuesta congelada, `tipo_entregable_id`, nada de esto aplica a un plano CAD/externo). Un `plano.codigo_plano` puede existir sin que exista jamás una revisión emitida — de hecho, hoy no existe ningún mecanismo de revisión de plano en absoluto, y **014 no lo crea** (ver 35.6).
+
+### 35.3 Clasificación de `TABLERO` (evidencia dura, no asumida)
+
+Cruzado contra `SENALES_CONTROL.RIO` (valores reales: `620-PCC-5006`, `620-RIO-5012`, `620-RIO-5013` — exactamente los 3 tags de gabinete ya conocidos desde el diagnóstico de 012) y `SENALES_CONTROL.TAG_CAJA`/`CAJA_EQUIPO` (valores reales: `620-TBC-5015/5016/5017/50X3/50X4/XXX1`, `620-TBJ-5014/5015/5016/XXX1/XXX2/XXX3` — exclusivamente prefijos `TBC-`/`TBJ-`, nunca usados como gabinete en ninguna otra hoja):
+
+| Clasificación | Filas | Valores distintos |
+|---|---|---|
+| → `nucleo.gabinete` (prefijo `620-PCC-`/`620-RIO-`) | **18** | 3 (`620-PCC-5006`, `620-RIO-5012`, `620-RIO-5013`) |
+| → `nucleo.caja` (prefijo `620-TBC-`/`620-TBJ-`) | **14** | 12 |
+| → no resuelto | **0** | — |
+
+**100% resuelto, sin ambigüedad.** Confirma exactamente la sospecha del diagnóstico anterior: `TABLERO` mezcla dos clases de objeto reales (gabinete y caja), nunca una tercera. **`plano.tablero` NO se crea como columna** — se resuelve exclusivamente vía las relaciones tipadas (35.9/35.10).
+
+Evidencia de cardinalidad **N:M real** (no 1:1): la fila 34 tiene `TABLERO = '620-TBC-5016/5017'` — **un mismo plano (LAYOUT) documentando DOS cajas a la vez**, separadas por `/` en el dato crudo. `620-TBC-5016` por su parte tiene 3 planos propios (filas 20, 29, 34) — confirma también **un mismo tablero con varios planos**. Ver 35.11/35.12 para la cardinalidad completa.
+
+### 35.4 `TABLERO_WSP` (confirmado: pertenece al gabinete/caja, no al plano — ya resuelto en la ronda de 012, re-confirmado aquí)
+
+32/40 poblados, 10 valores distintos, todos con el mismo prefijo base que su `TABLERO` correspondiente (ej. fila 2: `TABLERO='620-RIO-5012'`, `TABLERO_WSP='620-RIO-T103'`; fila 13: `TABLERO='620-TBC-XXX1'`, `TABLERO_WSP='620-TBC -5015'`). Es el mismo concepto que motivó `gabinete.tag_anterior` en la migración 012 — el identificador histórico WSP del **tablero/gabinete que el plano documenta**, no del plano en sí. **Confirmado con datos reales: NO se carga en `plano.codigo_anterior`.** Cuando la futura importación exista, `TABLERO_WSP` alimentará `gabinete.tag_anterior` o `caja.tag_anterior` (columna que aún no existe en `nucleo.caja` — no se crea en 014, es una migración de Cajas, fuera de este alcance) según a cuál de las dos resuelva su `TABLERO` correspondiente.
+
+### 35.5 `PLANO_CONEX_INTERIOR` (confirmado: es un SEGUNDO plano, no un atributo — con una anomalía real documentada)
+
+18/40 poblados, solo **3 valores distintos** (`620-J-2023`, `620-J-2029`, `620-J-20019`), cada uno constante para **todas** las filas que comparten el mismo `TABLERO` (ej. las 7 filas de `620-RIO-5012` tienen todas `PLANO_CONEX_INTERIOR = 620-J-2023`). **Confirmado: nunca aparece en una fila cuyo `TABLERO` sea una caja** (0/14 filas-caja lo tienen) — es exclusivo de gabinete. Esto confirma la hipótesis exacta: es el código del plano de conexionado *interior* del gabinete, constante por gabinete, no un atributo de cada hoja individual.
+
+**Anomalía real encontrada (no presente en el diagnóstico anterior)**: el valor `620-J-20019` (usado como `PLANO_CONEX_INTERIOR` de `620-PCC-5006` en 5 filas) es, en la fila 4 de la misma hoja, el `CODIGO` **propio** de un plano de `620-RIO-5012` ("HOJA 3"). Es decir, el código de "conexionado interior" de PCC-5006 coincide literalmente con el código ya usado como plano principal de otro gabinete distinto. Esto es casi con certeza un error de tipeo/copiado en el Excel legacy (no se puede confirmar ni corregir sin more contexto del usuario) — se documenta como advertencia de calidad de dato para la futura importación, no se resuelve aquí.
+
+**Diseño confirmado**: `PLANO_CONEX_INTERIOR` se convierte en su propio registro de `nucleo.plano` (`tipo_plano = INTERIOR_GABINETE`), relacionado al mismo gabinete vía `gabinete_plano` — **no se crea `plano.plano_conex_interior` como columna de texto.**
+
+### 35.6 `ESTAD0` (análisis profundo, confirma la mezcla ya sospechada — sigue fuera de 014)
+
+28/40 poblados. Valores y frecuencia: `B`=16, `A`=6, `INI`=5, `ANULADO`=1. Los 12 nulos son **exactamente** las 5 filas LAYOUT + las 7 filas ELECTRICIDAD — `ESTAD0` está poblado en el 100% de las filas CONEXIONADO (28/28) y en el 0% de LAYOUT/ELECTRICIDAD. Esto es evidencia nueva: `ESTAD0` no es una propiedad universal de "plano", es específica del tipo CONEXIONADO en este dataset (podría ser solo que las otras aún no se cargaron, no una regla estructural — no se puede afirmar con certeza cuál de las dos).
+
+Clasificación tentativa por valor:
+- `INI`, `A`, `B` → **revisión** (progresión secuencial, ya evidenciado en la ronda de 012 con `620-PCC-5006` mostrando sus 3 hojas en distintos estados simultáneos)
+- `ANULADO` → **estado documental** (terminal, aparece una sola vez, aislado, no combinado con una letra)
+- Ningún valor cae en "desconocido" — los 4 valores observados encajan en las 2 categorías ya identificadas.
+
+**Confirmado: 014 NO crea `cat_estado_plano` ni `revision_plano`.** El hallazgo se documenta, la separación real de "progresión de revisión" vs. "estado documental terminal" queda pendiente de una fase futura que sí las modele por separado.
+
+### 35.7 Tipos de plano definitivos — CORRECCIÓN: solo 3, no 4
+
+Clasificando las 40 filas reales por el contenido literal de `DESCRIPCION`:
+
+| Tipo | Filas | Regla de clasificación | Evidencia |
+|---|---|---|---|
+| `CONEXIONADO` | **33** | Contiene "DIAGRAMA(S) DE CONEXIONADO" | Incluye las 5 filas de motores en la sección ELECTRICIDAD (mismo tipo de documento, sin gabinete/caja asociado) |
+| `LAYOUT` | **5** | Prefijo `PE -` | **Verificado 1:1**: las 5 filas con prefijo `PE -` son exactamente las 5 filas que contienen la palabra "LAYOUT" en su descripción — ambas señales coinciden en el 100% de los casos, no solo el prefijo aislado |
+| — sin clasificar | **0** | — | 33+5+2(ver abajo) = 40, cuadra exacto |
+
+**Hallazgo que corrige la premisa original: `GANCHO` NO es un tipo de plano.** Se buscó `PLANO_GANCHO`/`PLANO_GANCHO_DESCRIPCION` en todo el workbook — existen únicamente en `SENALES`/`SENALES_CONTROL` (nunca en la hoja `PLANOS`). De los 24 valores distintos de `PLANO_GANCHO`, **20 (83%) coinciden literalmente con un `CODIGO` ya existente en `PLANOS`** (`620-J-20040`, `620-J-20035`, `620-E-60026`, etc. — códigos que ya son CONEXIONADO o de la sección ELECTRICIDAD). Los 4 que no coinciden son: `'VENDOR'` (26 ocurrencias — marcador explícito de "el gancho lo documenta el fabricante, no un plano de SIEI") y 3 variantes con errores/placeholders (`620-E-600XX`, `620-PPS-5005`, `620-PPS-5006` — el último parece un tag de equipo usado por error en vez del código del plano). Además, 90/269 filas con `PLANO_GANCHO` poblado **no tienen `TAG_CAJA`** — el "gancho" no es exclusivo de señales que llegan a una caja, también aparece en señales que terminan directo en equipo.
+
+**Conclusión con evidencia**: `GANCHO` es una **referencia desde `SEÑAL` hacia un plano YA EXISTENTE** (de cualquier tipo — normalmente CONEXIONADO), no una categoría de plano nueva. Es conceptualmente idéntico a `lazo.codigo_documento` (35.16): un puntero de otra entidad hacia un plano, no un atributo del plano. **No se agrega `GANCHO` a `cat.cat_tipo_plano`.** Tampoco se agrega ninguna columna a `nucleo.senal` en 014 (`senal.plano_gancho`) — eso pertenece, si acaso, a una fase futura de conexionado (mismo criterio que `lazo.codigo_documento`, ver 35.16), y el valor `'VENDOR'` tampoco encaja como FK a `plano.id` (no es un plano real).
+
+**¿Falta un quinto tipo? — evidencia mixta, no concluyente.** Las 7 filas de la sección "ELECTRICIDAD" incluyen 5 `CONEXIONADO` (diagramas de conexionado de motor, encajan bien) pero **2 filas dicen literalmente "DIAGRAMA UNIFILAR"** (filas 42-43: suministro 480V y centro de control de motores) — un tipo de dibujo eléctrico genuinamente distinto (diagrama unifilar/de una línea) que no encaja en `CONEXIONADO`, `INTERIOR_GABINETE` ni `LAYOUT`. Es evidencia real, pero son solo 2 filas de un dominio (distribución eléctrica de potencia) que está en el borde del alcance actual de I&C. **Se documenta como candidato (`UNIFILAR`) sin agregarlo al seed de 014** — ver pregunta abierta en 35.22.
+
+**Tipos definitivos para el seed de 014**: `CONEXIONADO`, `INTERIOR_GABINETE`, `LAYOUT`. `LAZO`, `UBICACION`, `P&ID` confirmados fuera (35.16-35.18); `GANCHO` removido de la lista original con evidencia (arriba); `UNIFILAR` documentado como candidato no incluido.
+
+### 35.8 `codigo_plano` — política definitiva
+
+`NVARCHAR(50)`, nullable — mismo patrón de longitud que `tag_gabinete`/`tag_caja`/`tag_instrumento` (todos `NVARCHAR(50)` en el esquema actual, independientemente de que el dato real observado sea más corto: 11 caracteres uniformes, formato `###-J-#####`/`###-E-#####`). **Nullable** porque 3/40 filas reales (todas LAYOUT) no tienen código todavía. **Sin `UNIQUE`**: se encontró **un duplicado real** (`620-J-20039`, ver 35.1) en el único dataset disponible — evidencia aún más fuerte que la ya usada para decidir que `codigo_senal` (013) tampoco fuera único. Se propone en su lugar un índice no único filtrado, igual patrón que `IX_senal_proyecto_codigo`:
+
+```sql
+CREATE INDEX IX_plano_proyecto_codigo
+    ON nucleo.plano (proyecto_id, codigo_plano)
+    WHERE codigo_plano IS NOT NULL AND activo = 1;
+```
+
+(Con `activo = 1` a diferencia de `IX_senal_proyecto_codigo`, porque aquí sí tiene sentido excluir planos desactivados de la búsqueda operativa — a diferencia de `codigo_senal`, que es puramente legado/histórico y se busca igual esté la señal activa o no.)
+
+### 35.9 Esquema definitivo de `nucleo.plano`
+
+Patrón inspeccionado contra `nucleo.gabinete`/`nucleo.caja` (mismas convenciones: `id BIGINT IDENTITY`, `UNIQUE(id, proyecto_id)`, `activo BIT DEFAULT 1`, `created_at/updated_at`, `created_by/updated_by` vía FK a `seguridad.usuario` como en las 20 tablas de la migración 003).
+
+```sql
+CREATE TABLE nucleo.plano (
+    id                  BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id         BIGINT               NOT NULL,
+    codigo_plano        NVARCHAR(50)         NULL,
+    codigo_anterior     NVARCHAR(50)         NULL,
+    descripcion         NVARCHAR(300)        NOT NULL,
+    tipo_plano_id       BIGINT               NOT NULL,
+    activo              BIT                  NOT NULL CONSTRAINT DF_plano_activo DEFAULT (1),
+    created_at          DATETIME2            NOT NULL CONSTRAINT DF_plano_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at          DATETIME2            NULL,
+    created_by          BIGINT               NULL,
+    updated_by          BIGINT               NULL,
+    CONSTRAINT PK_plano PRIMARY KEY (id),
+    CONSTRAINT UQ_plano_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_plano_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_plano_tipo_plano FOREIGN KEY (tipo_plano_id) REFERENCES cat.cat_tipo_plano (id),
+    CONSTRAINT FK_plano_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_plano_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+```
+
+`descripcion NOT NULL` (100% poblado en la evidencia real, es la única columna siempre presente además del tipo). `descripcion NVARCHAR(300)` — mismo patrón que `instrumento.descripcion`/`gabinete.descripcion`/`caja.descripcion` (no `NVARCHAR(200)`, ese es el patrón de `cat.*`; no `MAX`, el dato real es de 42-79 caracteres, 300 da margen amplio sin desperdiciar). `codigo_anterior NVARCHAR(50) NULL`, sin `UNIQUE`, sin FK — mismo patrón exacto que `instrumento.tag_anterior`/`gabinete.tag_anterior`, **y solo se puebla si representa el código anterior del MISMO plano** (35.1 confirma: el Excel actual no tiene evidencia de un código anterior de plano — queda `NULL` para todo lo que se importe de este dataset).
+
+### 35.10 Esquema definitivo de `nucleo.gabinete_plano` y `nucleo.caja_plano`
+
+Estrategia de relación tipada (no genérica `plano_entidad`/`tipo_entidad`) confirmada como la más coherente: sigue el mismo espíritu que el resto del modelo (`CK_..._xor` en vez de FK polimórfica) y es, de hecho, la **primera tabla puramente de unión N:M** del esquema `nucleo` — no hay antecedente idéntico, así que se diseña siguiendo los principios ya documentados (FK compuesta por proyecto, filtrado único, soft delete + auditoría igual que cualquier otra tabla `nucleo`, en vez de tratarla como una excepción):
+
+```sql
+CREATE TABLE nucleo.gabinete_plano (
+    id              BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id     BIGINT               NOT NULL,
+    gabinete_id     BIGINT               NOT NULL,
+    plano_id        BIGINT               NOT NULL,
+    activo          BIT                  NOT NULL CONSTRAINT DF_gabinete_plano_activo DEFAULT (1),
+    created_at      DATETIME2            NOT NULL CONSTRAINT DF_gabinete_plano_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at      DATETIME2            NULL,
+    created_by      BIGINT               NULL,
+    updated_by      BIGINT               NULL,
+    CONSTRAINT PK_gabinete_plano PRIMARY KEY (id),
+    CONSTRAINT FK_gabinete_plano_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_gabinete_plano_gabinete FOREIGN KEY (gabinete_id, proyecto_id) REFERENCES nucleo.gabinete (id, proyecto_id),
+    CONSTRAINT FK_gabinete_plano_plano FOREIGN KEY (plano_id, proyecto_id) REFERENCES nucleo.plano (id, proyecto_id),
+    CONSTRAINT FK_gabinete_plano_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_gabinete_plano_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+
+CREATE UNIQUE INDEX UX_gabinete_plano_activo
+    ON nucleo.gabinete_plano (gabinete_id, plano_id)
+    WHERE activo = 1;
+```
+
+`nucleo.caja_plano` es estructuralmente idéntico, sustituyendo `gabinete_id`→`caja_id` y las FKs correspondientes a `nucleo.caja`. **Protección cross-project automática**: al tener `proyecto_id` como columna propia de la fila de unión, y ambas FKs compuestas exigir `(hijo_id, proyecto_id)` contra el MISMO `proyecto_id` de la fila, es estructuralmente imposible relacionar un gabinete/caja de un proyecto con un plano de otro — mismo mecanismo ya usado en todo el esquema (`senal.canal_id`, `punto_conexion.*`, etc.), no hace falta ningún `CHECK` ni trigger adicional.
+
+### 35.11 Cardinalidad GABINETE ↔ PLANO (evidencia real, no 1:1)
+
+**1 gabinete → N planos, confirmado con datos reales**: `620-RIO-5012` tiene 7 planos propios (6 hojas de conexionado + 1 layout), `620-RIO-5013` tiene 6, `620-PCC-5006` tiene 5 (4 hojas + 1 layout) — exactamente el patrón `conexionado (varias hojas) + layout` descrito en el pedido. **N planos → 1 gabinete es el caso dominante** en este dataset; no se encontró ningún caso real de "un plano → varios gabinetes" (el único caso de agrupación múltiple encontrado fue del lado de caja, ver 35.12), pero la tabla de unión N:M soporta ambos sentidos sin costo adicional — no se restringe artificialmente a 1:N solo porque sea lo único observado hoy.
+
+### 35.12 Cardinalidad CAJA ↔ PLANO (confirmado N:M real)
+
+**Confirmado con evidencia directa, no hipotético**: la fila 34 (`'PE - ... LAYOUT TABLEROS TBC 1/2'`, `TABLERO='620-TBC-5016/5017'`) es **un solo plano relacionado con DOS cajas**. Y `620-TBC-5016` tiene **3 planos propios** (filas 20, 29, 34) — confirma también "una caja, varios planos". La cardinalidad real es N:M en ambos sentidos, exactamente lo que `nucleo.caja_plano` como tabla de unión modela sin necesitar ningún caso especial.
+
+### 35.13 Unicidades e índices — resumen definitivo
+
+| Objeto | Índice | Motivo |
+|---|---|---|
+| `nucleo.plano` | `IX_plano_proyecto_codigo` (NO único, filtrado `WHERE codigo_plano IS NOT NULL AND activo=1`) | Duplicado real encontrado (35.8); LAYOUT frecuentemente sin código |
+| `nucleo.gabinete_plano` | `UX_gabinete_plano_activo` (ÚNICO, filtrado `WHERE activo=1`, sobre `(gabinete_id, plano_id)`) | Evita duplicar la MISMA asociación activa dos veces, sin impedir que un gabinete tenga múltiples planos DISTINTOS (la unicidad es sobre el PAR, no sobre `gabinete_id` solo) |
+| `nucleo.caja_plano` | `UX_caja_plano_activo` (ÚNICO, filtrado `WHERE activo=1`, sobre `(caja_id, plano_id)`) | Mismo motivo |
+
+### 35.14 FKs cross-project — confirmado, sin mecanismo nuevo
+
+Ya cubierto en 35.10: toda relación de `gabinete_plano`/`caja_plano` lleva su propio `proyecto_id`, y ambas FK compuestas fuerzan que el gabinete/caja Y el plano referenciado pertenezcan al mismo proyecto que esa fila de unión — estructuralmente imposible cruzar proyectos, sin necesidad de `CHECK` ni trigger. Mismo patrón que el resto del esquema, ninguna excepción.
+
+### 35.15 Política de `codigo_anterior` — definitiva
+
+`plano.codigo_anterior` existe conceptualmente pero **no se puebla desde `TABLERO_WSP`** (35.4 — ese valor pertenece al gabinete/caja, no al plano). El Excel actual no muestra evidencia de que un plano individual haya tenido un código *anterior propio* distinto del actual. Política: `codigo_anterior = NULL` para toda fila creada a partir de este dataset; la columna queda preparada para el día en que exista evidencia real de renumeración de un plano específico (ej. un plano reeditado con nuevo número de documento tras un cambio de disciplina o de numeración de proyecto).
+
+### 35.16 `nucleo.lazo` — inspeccionado, sin tocar en 014
+
+`nucleo.lazo` (migración 001): `id, proyecto_id, instrumento_id NOT NULL, codigo_documento NVARCHAR(100) NULL, activo, created_at, updated_at`. Hoy `codigo_documento` es texto libre sin FK — candidato evidente a convertirse en `lazo.plano_id BIGINT NULL` con FK compuesta a `nucleo.plano`, pero **no se migra en 014** (sería un cambio de columna existente con datos ya cargados en un dominio distinto — instrumentación, no planos — y mezclaría dos refactors). Documentado como trabajo futuro explícito, ninguna FK ni columna nueva se toca en `nucleo.lazo` en esta migración.
+
+### 35.17 `UBICACION` — candidato futuro, no incluido
+
+Sin evidencia de filas reales de plano de ubicación en el dataset actual (ninguna fila de `PLANOS` menciona "UBICACION" en su descripción). Se documenta como candidato para un futuro tipo de `cat.cat_tipo_plano`, sin seedearlo por anticipado — agregar un catálogo con cero evidencia real sería inventar, no confirmar.
+
+### 35.18 P&ID — confirmado fuera de 014
+
+`instrumento.plano_pnid`/`equipo.plano_pnid` ya existen (migraciones 004/007) con su propio origen (el importador P&ID/Plant3D, dominio completamente distinto). No hay ninguna razón estructural para mezclarlos con `nucleo.plano` en 014 — son referencias de texto libre a un plano P&ID que vive fuera del alcance actual de este dominio. Confirmado: **P&ID queda fuera de 014**, sin FK, sin mención en `cat.cat_tipo_plano`.
+
+### 35.19 Relación con Entregables — confirmado, sin FK en 014
+
+`nucleo.entregable` inspeccionado (migración 006): numeración compuesta congelada (`componente_etapa/proyecto/cliente/tipo/area/disciplina/correlativo`), pensada para documentos **generados por SIEI desde plantilla** (hoy solo LDI). Un plano es un documento **externamente autorado** (CAD), catalogado pero no generado por SIEI — dominios estructuralmente distintos, ya confirmado conceptualmente antes de esta ronda. **014 no crea `plano.entregable_id` ni `entregable.plano_id`.** Si en el futuro un plano necesita pasar por un flujo de emisión controlada equivalente al de LDI, sería una relación explícita a diseñar entonces, no una anticipada aquí sin caso de uso real.
+
+### 35.20 Soft delete y auditoría — confirmado sin sorpresas
+
+Las 3 tablas (`plano`, `gabinete_plano`, `caja_plano`) siguen el patrón universal ya usado en cada tabla `nucleo.*` desde la migración 003: `activo BIT NOT NULL DEFAULT 1`, `created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()`, `updated_at DATETIME2 NULL` (poblado por el backend, nunca por trigger salvo cascada), `created_by`/`updated_by BIGINT NULL` con FK a `seguridad.usuario` (nulos permitidos para datos de sistema/importación, igual que el resto). Ninguna columna adicional inventada.
+
+### 35.21 Backend — diseño, sin implementar
+
+**Ruta**: `/api/projects/:projectId/planos` (español), **no** `/api/projects/:projectId/plans`. Justificación basada en la convención real del backend, no en preferencia: el precedente mixto existente usa inglés para la mayoría (`instruments`, `equipment`, `boxes` para `caja`, `switches`, `racks`, `loops`) pero español para conceptos de dominio sin traducción limpia y de introducción reciente (`gabinetes`, `documentacion`, `plantillas-entregable`, `entregables`, `revisiones`) — precisamente el precedente más reciente y más cercano temática y cronológicamente (`gabinetes`, migración 012, la migración inmediatamente anterior de este mismo arco Señales/Gabinetes/Planos) resolvió el mismo dilema a favor del español porque "cabinet"/"enclosure" no capturan el término de dominio tal como ya se usa en todo el proyecto. "Plano" tiene el mismo problema: "plans"/"drawings" en inglés no transmiten específicamente "documento de ingeniería tipo CAD" sin ambigüedad, y toda la documentación de este dominio (`CLAUDE.md`, este mismo diagnóstico) ya usa "Planos" consistentemente en español como nombre de sección. Se recomienda `/api/projects/:projectId/planos`.
+
+Diseño de endpoints (mismo patrón que `gabinetes.ts`):
+- `GET /planos` — filtros por querystring: `?tipoPlanoId=`, `?gabineteId=` (join a `gabinete_plano`), `?cajaId=` (join a `caja_plano`) — mismo patrón `?instrumentoId=`/`?canalId=` ya usado en `signals.ts`/`connectionPoints.ts`.
+- `GET /planos/:id` — incluye, en la respuesta, los gabinetes y cajas asociados (arrays resueltos, no solo ids sueltos) para evitar 3 llamadas separadas desde el frontend.
+- `POST /planos` — body: `codigoPlano` (opcional), `codigoAnterior` (opcional), `descripcion` (requerido), `tipoPlanoId` (requerido). Nunca acepta `gabineteId`/`cajaId` directamente en el mismo body (las asociaciones son su propio recurso, ver más abajo) — sigue el mismo principio que `punto_conexion` (creado con su dueño ya resuelto) pero aquí, al ser N:M real, no aplica un "dueño único al crear": el plano se crea solo, las asociaciones se agregan después.
+- `PATCH /planos/:id` — mismos 4 campos editables.
+- `DELETE /planos/:id` — soft delete (`activo=0`), mismo patrón que el resto; reactivar no existe hoy en ningún endpoint de este estilo (ni `gabinetes.ts` lo tiene), no se inventa aquí.
+- `POST /planos/:id/gabinetes` — body `{ gabineteId }`, crea la fila de `gabinete_plano` (o la reactiva si ya existía inactiva, mismo criterio que otros índices filtrados del repo). `DELETE /planos/:id/gabinetes/:gabineteId` — desactiva la asociación.
+- `POST /planos/:id/cajas` / `DELETE /planos/:id/cajas/:cajaId` — análogo para caja.
+- **Catálogo**: `cat.cat_tipo_plano` tiene forma `{id, codigo, descripcion, created_at, updated_at}` — mismo caso que `cat.cat_tipo_dato_com` en 013: se expone reutilizando `createSimpleCatalogRouter('cat.cat_tipo_plano', false)`, sin router propio, montado en `/api/catalogs/tipos-plano` (español, seguido el precedente de `tipos-gabinete`/`tipos-equipo`, no el de `io-types`/`com-directions` — `cat_tipo_plano` es un catálogo de ENTIDAD como gabinete/equipo, no un catálogo de VALIDACIÓN de señal como `cat_tipo_dato_com`, así que sigue esa otra familia de nombres).
+
+### 35.22 Frontend — diseño, sin implementar
+
+Módulo nuevo `Planos`: `PlanosListPage` (tabla: Código / Descripción / Tipo / Código anterior), `PlanoFormPage` (crear/editar, campos: Código, Descripción\*, Tipo\*, Código anterior), `PlanoDetailPage` (datos + gestión de asociaciones). Mismo patrón visual que `GabinetesListPage`/`GabineteDetailPage`.
+
+**Recomendación UX — opción B (crear, luego asociar en el detalle), no A (todo en un formulario):** dado que la relación es N:M real y un plano puede nacer sin ninguna asociación todavía (o con varias desde el principio, sin límite fijo), meter un multi-select de gabinetes Y otro de cajas dentro del mismo formulario de creación sería sobrediseñar un caso que el propio dominio no acota (¿cuántos de cada uno mostrar por defecto?). El patrón ya establecido en el frontend para relaciones N:M-ish es justamente "crear la entidad simple primero, gestionar relaciones en su página de detalle" (ej. instrumento se crea solo, sus señales se gestionan después desde Señales, no desde el formulario de Instrumento). Se recomienda: `PlanoFormPage` crea solo los 4 campos propios; `PlanoDetailPage` tiene dos secciones ("Gabinetes asociados" / "Cajas asociadas") con un selector + botón "Asociar" y una lista con botón "Quitar" por fila — igual espíritu que la sección de puertos dentro de `SwitchDetailPage`.
+
+### 35.23 Tabla de mapeo Excel → SIEI (los 7 campos reales)
+
+| Campo Excel | Destino SIEI | Persistido/derivado/ignorado | Observación |
+|---|---|---|---|
+| `ITEM` | — | Ignorado | Correlativo de fila del Excel, sin significado fuera de él (igual que otros `ITEM` ya vistos en este workbook) |
+| `DESCRIPCION` | `plano.descripcion` | Persistido literal | 100% poblado, sin duplicados |
+| `CODIGO` | `plano.codigo_plano` | Persistido literal | Nullable, sin normalización — preserva placeholders `X` tal cual |
+| `TABLERO` | `gabinete_plano`/`caja_plano` (resuelto por prefijo, ver 35.3) | Derivado a relación, nunca columna | Puede generar 1 o 2 filas de relación si el valor viene compuesto (`"A/B"`) |
+| `TABLERO_WSP` | `gabinete.tag_anterior` / `caja.tag_anterior` (futuro) | Derivado, va a OTRA entidad | Nunca a `plano.codigo_anterior` (35.4) |
+| `PLANO_CONEX_INTERIOR` | Nuevo registro de `nucleo.plano` (`tipo=INTERIOR_GABINETE`) + `gabinete_plano` | Derivado a una fila adicional | Un valor puede repetirse en varias filas de `PLANOS` — se crea una sola vez por valor distinto, no una vez por fila origen |
+| `ESTAD0` | — (por ahora) | Ignorado en 014 | Ver 35.6 — queda documentado, no modelado |
+
+### 35.24 Datos existentes de SIEI (consultado, no asumido)
+
+`nucleo.gabinete`: 42 filas, 1 activa, **todas en TEST-001** (fixtures). `nucleo.caja`: 33 filas, **0 activas** (todas desactivadas por corridas de test anteriores), todas en TEST-001. **Proyecto real 22043: 0 gabinetes, 0 cajas.** `nucleo.plano` **no existe todavía** (`OBJECT_ID('nucleo.plano') IS NULL`, confirmado). Mismo perfil que `senal`/`gabinete` antes de sus respectivas migraciones: cero dato real, cero riesgo de backfill con datos de producción.
+
+### 35.25 Backfill — confirmado: ninguno
+
+014 crea catálogo + tablas + constraints + índices; `nucleo.plano` queda **vacío** al terminar. No existe ninguna razón técnica para poblar nada automáticamente — la importación real de `PLANOS` es un proyecto aparte, explícitamente fuera de esta migración (punto 33 del pedido).
+
+### 35.26 Tests SQL — diseño (próximo número real: **026**, confirmado libre)
+
+1. Crear plano con `codigoPlano` — aceptado.
+2. Crear plano sin `codigoPlano` (`NULL`) — aceptado.
+3. Mismo `codigo_plano` activo dos veces en el mismo proyecto — **permitido** (sin UNIQUE, 35.8) — caso explícito para no dejarlo sin cubrir, invierte la expectativa "natural".
+4. Mismo `codigo_plano` en otro proyecto — permitido (ya lo es, al no haber UNIQUE, pero se prueba igual para dejar registro del comportamiento esperado).
+5. Desactivar un plano (`activo=0`) y crear uno nuevo con el mismo código — permitido (no hay índice único que lo bloquee de todas formas).
+6. `tipo_plano_id` inexistente — rechazado (FK).
+7. `proyecto_id` inexistente en un INSERT directo — rechazado (FK, regresión estándar).
+8. Asociar plano-gabinete mismo proyecto — aceptado, aparece en `gabinete_plano`.
+9. Asociar plano-gabinete cross-project — rechazado (FK compuesta).
+10. Asociar la MISMA pareja gabinete-plano dos veces activa — rechazado (`UX_gabinete_plano_activo`).
+11. Asociar plano-caja mismo proyecto — aceptado.
+12. Asociar plano-caja cross-project — rechazado.
+13. Asociar la misma pareja caja-plano dos veces activa — rechazado.
+14. Un gabinete con múltiples planos distintos — permitido (varias filas en `gabinete_plano`, distinto `plano_id` cada una).
+15. Un plano con múltiples gabinetes distintos — permitido (reproduce el caso real de la fila 34 del Excel, adaptado a gabinete para cubrir ambos lados).
+16. Una caja con múltiples planos — permitido.
+17. Auditoría: `created_by`/`updated_by` se pueblan cuando se pasa el parámetro, quedan `NULL` si no (regresión del patrón estándar).
+18. Reactivar una asociación previamente desactivada (crear de nuevo la misma pareja tras desactivarla) — permitido, sin violar el índice filtrado.
+
+### 35.27 Tests API — diseño
+
+CRUD completo de `/planos` con los 3 roles (ADMIN/EDITOR/VIEWER); filtros `?tipoPlanoId=`/`?gabineteId=`/`?cajaId=`; `codigoPlano` duplicado → 201 (no 409, a diferencia de `tag_gabinete`/`tag_caja` — caso explícito para no romper la expectativa heredada de otros módulos); asociar/desasociar gabinete y caja vía los sub-recursos; cross-project → 400 `invalid_reference` (mismo patrón que `racks.ts`/`switches.ts` con `gabineteId` inexistente/ajeno); permisos de proyecto (403 para VIEWER en escritura); `GET /catalogs/tipos-plano` trae exactamente `CONEXIONADO`/`INTERIOR_GABINETE`/`LAYOUT`.
+
+### 35.28 Instalación limpia futura (diseño, no ejecutada)
+
+BD temporal descartable → aplicar `001`...`013` (congeladas) → aplicar `014_planos.sql` recién creado → `001_smoke_modulo.sql` (fixture base) → `026_smoke_planos.sql` (o el nombre real que se le dé) → destruir la BD. Mismo procedimiento ya usado y documentado para 012 y 013.
+
+### 35.29 Draft DDL completo de `014_planos.sql` (consolidado, NO creado como archivo)
+
+```sql
+-- 1. Catálogo global (lista cerrada, 3 valores confirmados con evidencia)
+CREATE TABLE cat.cat_tipo_plano (
+    id          BIGINT IDENTITY(1,1) NOT NULL,
+    codigo      NVARCHAR(30)         NOT NULL,
+    descripcion NVARCHAR(200)        NULL,
+    created_at  DATETIME2            NOT NULL CONSTRAINT DF_cat_tipo_plano_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at  DATETIME2            NULL,
+    CONSTRAINT PK_cat_tipo_plano PRIMARY KEY (id),
+    CONSTRAINT UQ_cat_tipo_plano_codigo UNIQUE (codigo)
+);
+
+INSERT INTO cat.cat_tipo_plano (codigo, descripcion) VALUES
+    (N'CONEXIONADO',       N'Diagrama de conexionado / cableado'),
+    (N'INTERIOR_GABINETE', N'Plano de conexionado interior de un gabinete'),
+    (N'LAYOUT',            N'Plano de distribución física (layout)');
+
+-- 2. nucleo.plano
+CREATE TABLE nucleo.plano (
+    id                  BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id         BIGINT               NOT NULL,
+    codigo_plano        NVARCHAR(50)         NULL,
+    codigo_anterior     NVARCHAR(50)         NULL,
+    descripcion         NVARCHAR(300)        NOT NULL,
+    tipo_plano_id       BIGINT               NOT NULL,
+    activo              BIT                  NOT NULL CONSTRAINT DF_plano_activo DEFAULT (1),
+    created_at          DATETIME2            NOT NULL CONSTRAINT DF_plano_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at          DATETIME2            NULL,
+    created_by          BIGINT               NULL,
+    updated_by          BIGINT               NULL,
+    CONSTRAINT PK_plano PRIMARY KEY (id),
+    CONSTRAINT UQ_plano_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_plano_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_plano_tipo_plano FOREIGN KEY (tipo_plano_id) REFERENCES cat.cat_tipo_plano (id),
+    CONSTRAINT FK_plano_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_plano_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+
+CREATE INDEX IX_plano_proyecto_codigo
+    ON nucleo.plano (proyecto_id, codigo_plano)
+    WHERE codigo_plano IS NOT NULL AND activo = 1;
+
+-- 3. nucleo.gabinete_plano (union N:M)
+CREATE TABLE nucleo.gabinete_plano (
+    id              BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id     BIGINT               NOT NULL,
+    gabinete_id     BIGINT               NOT NULL,
+    plano_id        BIGINT               NOT NULL,
+    activo          BIT                  NOT NULL CONSTRAINT DF_gabinete_plano_activo DEFAULT (1),
+    created_at      DATETIME2            NOT NULL CONSTRAINT DF_gabinete_plano_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at      DATETIME2            NULL,
+    created_by      BIGINT               NULL,
+    updated_by      BIGINT               NULL,
+    CONSTRAINT PK_gabinete_plano PRIMARY KEY (id),
+    CONSTRAINT FK_gabinete_plano_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_gabinete_plano_gabinete FOREIGN KEY (gabinete_id, proyecto_id) REFERENCES nucleo.gabinete (id, proyecto_id),
+    CONSTRAINT FK_gabinete_plano_plano FOREIGN KEY (plano_id, proyecto_id) REFERENCES nucleo.plano (id, proyecto_id),
+    CONSTRAINT FK_gabinete_plano_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_gabinete_plano_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+
+CREATE UNIQUE INDEX UX_gabinete_plano_activo
+    ON nucleo.gabinete_plano (gabinete_id, plano_id)
+    WHERE activo = 1;
+
+-- 4. nucleo.caja_plano (union N:M, estructuralmente identico)
+CREATE TABLE nucleo.caja_plano (
+    id              BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id     BIGINT               NOT NULL,
+    caja_id         BIGINT               NOT NULL,
+    plano_id        BIGINT               NOT NULL,
+    activo          BIT                  NOT NULL CONSTRAINT DF_caja_plano_activo DEFAULT (1),
+    created_at      DATETIME2            NOT NULL CONSTRAINT DF_caja_plano_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at      DATETIME2            NULL,
+    created_by      BIGINT               NULL,
+    updated_by      BIGINT               NULL,
+    CONSTRAINT PK_caja_plano PRIMARY KEY (id),
+    CONSTRAINT FK_caja_plano_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_caja_plano_caja FOREIGN KEY (caja_id, proyecto_id) REFERENCES nucleo.caja (id, proyecto_id),
+    CONSTRAINT FK_caja_plano_plano FOREIGN KEY (plano_id, proyecto_id) REFERENCES nucleo.plano (id, proyecto_id),
+    CONSTRAINT FK_caja_plano_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_caja_plano_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+
+CREATE UNIQUE INDEX UX_caja_plano_activo
+    ON nucleo.caja_plano (caja_id, plano_id)
+    WHERE activo = 1;
+```
+
+**Confirmado que NO se incluye**: `revision_plano`, `cat_estado_plano`, `archivo_plano`, `plano_pdf`/`plano_dwg`, importador de `PLANOS`, `vw_conexionado`, terminaciones/borneras, `BOT_S`/`BOT_D`, cualquier columna/catálogo `UNIFILAR`, `LAZO`, `UBICACION`, `P&ID`, `plano.entregable_id`/`entregable.plano_id`, `plano.tablero`, `plano.plano_conex_interior`, `senal.plano_gancho`, cambios a `001`–`013`.
+
+### 35.30 Preguntas — decisiones finales (RESUELTO, `014_planos` implementada)
+
+1. **`UNIFILAR` como cuarto tipo**: **aprobado e incorporado** al seed de `cat.cat_tipo_plano` — 2 documentos reales inequívocos son evidencia suficiente. Sin lógica especial: mismo catálogo cerrado, mismo tratamiento que los otros 3.
+2. **La anomalía de `PLANO_CONEX_INTERIOR` para `620-PCC-5006`** (código `620-J-20019` coincidiendo con el plano propio de `620-RIO-5012`): **queda documentada, no resuelta**. Conflicto legacy real, pendiente de aclaración humana en la futura importación (política: detectar + advertir, nunca corregir ni fusionar automáticamente).
+3. **El duplicado real de `CODIGO`** (`620-J-20039`): **queda documentado, no corregido**. Confirma la decisión ya tomada de no imponer `UNIQUE` sobre `codigo_plano`; la futura importación deberá advertir sobre este caso puntual sin bloquear ni deduplicar.
+4. **Ruta del backend**: **aprobada `/planos`** (español) — implementada en `backend/src/routes/planos.ts`, montada en `/api/projects/:projectId/planos`.
+
+`014_planos` está implementada y aplicada en SIEI_DEV: `cat.cat_tipo_plano` (4 tipos), `nucleo.plano`, `nucleo.gabinete_plano`, `nucleo.caja_plano` — las 3 tablas nuevas quedaron vacías tras la migración (0 filas), sin ningún backfill, tal como se diseñó. Backend completo (CRUD + asociaciones N:M con reactivación) y frontend completo (`PlanosListPage`/`PlanoFormPage`/`PlanoDetailPage`) implementados. `database/tests/026_smoke_planos.sql` (18 casos) y `backend/tests/planos.api.test.ts` (33 casos) en verde, tanto en SIEI_DEV como en una instalación limpia `001→014` desde los archivos versionados. Detalle completo en el reporte de entrega al usuario, no repetido aquí.
+
+**`014_planos.sql` (implementada) es la última migración congelada.** `015_terminaciones` sigue sin diseñar más allá de reconocerla como la siguiente fase.

@@ -1302,3 +1302,73 @@ export interface RevisionEliminacionResponse {
   revisionId: string;
   estadoAnterior: RevisionEstado;
 }
+
+/* ---- Planos (migración 014) — identidad del dibujo de ingeniería,
+ * separada a propósito de ENTREGABLE/REVISION_ENTREGABLE. Las
+ * asociaciones a gabinete/caja son N:M reales (ver planos.ts backend),
+ * nunca 1:1. --- */
+
+export interface Plano {
+  id: string;
+  projectId: string;
+  codigoPlano: string | null;
+  codigoAnterior: string | null;
+  descripcion: string;
+  active: boolean;
+  tipoPlanoId: string | null;
+  tipoPlanoCodigo: string | null;
+  tipoPlanoDescripcion: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface PlanoGabineteAsociado {
+  gabineteId: string;
+  tagGabinete: string;
+  tipoGabineteCodigo: string | null;
+}
+
+export interface PlanoCajaAsociada {
+  cajaId: string;
+  tagCaja: string;
+}
+
+/** GET/POST/PATCH de un plano individual, y las asociaciones, siempre
+ * devuelven el detalle completo (incluye gabinetes/cajas ya resueltos) —
+ * ver fetchPlanoDetail en planos.ts backend. */
+export interface PlanoDetail extends Plano {
+  gabinetes: PlanoGabineteAsociado[];
+  cajas: PlanoCajaAsociada[];
+}
+
+export interface PlanosListResponse {
+  projectId: string;
+  planos: Plano[];
+}
+
+export interface PlanoResponse {
+  plano: PlanoDetail;
+}
+
+/** DELETE devuelve una forma más chica, igual que gabinetes/instrumentos. */
+export interface PlanoMutationResponse {
+  plano: {
+    id: string;
+    projectId: string;
+    codigoPlano: string | null;
+    active: boolean;
+    updatedAt: string | null;
+    updatedBy: string | null;
+  };
+}
+
+/** codigoPlano/codigoAnterior son opcionales y deliberadamente sin
+ * unicidad (ver docs/DIAGNOSTICO_SENALES_GABINETES.md sección 35). */
+export interface PlanoInput {
+  codigoPlano: string | null;
+  codigoAnterior: string | null;
+  descripcion: string;
+  tipoPlanoId: string;
+}

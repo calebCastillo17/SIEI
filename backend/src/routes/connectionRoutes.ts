@@ -13,7 +13,10 @@ import { getDbPool } from '../db/sql.js';
 
 /*
  * nucleo.ruta_conexion + nucleo.tramo_conexion — la ruta física completa
- * de una señal CONTROL: INSTRUMENTO/EQUIPO -> 0..N CAJAS -> RIO/MODULO.
+ * de una señal CONTROL: INSTRUMENTO/EQUIPO -> 0..N CAJAS -> GABINETE/MODULO
+ * (y, desde la migración 015, también CAJAS -> GABINETE -> MODULO, cuando
+ * el módulo final pertenece físicamente a ese mismo gabinete — ver
+ * TR_tramo_conexion_validar_secuencia "Punto 6"/"6b"/"6c").
  *
  * REGLA NO NEGOCIABLE (ver CLAUDE.md "Key modelling decisions" y el
  * comentario de TR_tramo_conexion_validar_secuencia en la migración):
@@ -21,7 +24,7 @@ import { getDbPool } from '../db/sql.js';
  * de tramos de una ruta después de CADA sentencia. Si los tramos se
  * insertaran uno por uno, el estado intermedio (solo el primer tramo,
  * terminando en una CAJA) sería rechazado por "el último tramo no termina
- * en RIO/MODULO" (51007) antes de poder insertar el segundo. Por eso
+ * en GABINETE/MODULO" (51007) antes de poder insertar el segundo. Por eso
  * POST /routes inserta TODOS los tramos de la ruta en un único INSERT
  * multi-fila, dentro de una transacción explícita junto con el INSERT de
  * ruta_conexion — si cualquier tramo falla su validación, la transacción
@@ -102,16 +105,21 @@ function mapRouteSqlError(error: unknown): { status: number; body: Record<string
     return { status: 400, body: { error: 'route_origin_mismatch', message: 'El origen del primer tramo no corresponde al dueño real de la señal (instrumentoId/equipoId).' } };
   }
   if (number === 51007) {
-    return { status: 400, body: { error: 'route_destination_invalid', message: 'El último tramo debe terminar en un punto de conexión de RIO o MODULO.' } };
+    return { status: 400, body: { error: 'route_destination_invalid', message: 'El último tramo debe terminar en un punto de conexión de GABINETE o MODULO.' } };
   }
   if (number === 51015) {
     return { status: 409, body: { error: 'route_resource_inactive', message: 'Un tramo activo no puede usar puntos de conexión o cable inactivos.' } };
   }
   if (number === 51017) {
-    return { status: 400, body: { error: 'route_intermediate_not_box', message: 'Un nodo intermedio de la ruta debe corresponder a una CAJA.' } };
+    // migración 015: el penúltimo nodo ahora admite CAJA o GABINETE (no
+    // solo CAJA) — un nodo anterior al penúltimo sigue exigiendo CAJA.
+    return { status: 400, body: { error: 'route_intermediate_invalid', message: 'Un nodo intermedio de la ruta debe corresponder a una CAJA; el penúltimo nodo admite CAJA o GABINETE.' } };
   }
   if (number === 51023) {
     return { status: 409, body: { error: 'route_inactive', message: 'Un tramo activo requiere una ruta de conexión activa.' } };
+  }
+  if (number === 51034) {
+    return { status: 400, body: { error: 'route_gabinete_modulo_mismatch', message: 'Si el penúltimo nodo es un GABINETE, el último debe ser un MODULO que pertenezca físicamente a ese mismo gabinete.' } };
   }
 
   if (message.includes('CK_tramo_conexion_puntos_distintos')) {
@@ -160,7 +168,7 @@ function serializeSegment(row: Record<string, any>) {
     id: String(row.id),
     routeId: String(row.ruta_conexion_id),
     numeroOrden: row.numero_orden,
-    parConductorId: String(row.par_conductor_id),
+    parConductorId: row.par_conductor_id === null ? null : String(row.par_conductor_id),
     puntoOrigenId: String(row.punto_origen_id),
     puntoDestinoId: String(row.punto_destino_id),
     active: Boolean(row.activo),
@@ -291,6 +299,12 @@ connectionRoutesRouter.get(
  *
  * numeroOrden se deriva de la posición en el arreglo (1..N) — no se acepta
  * del cliente, así queda garantizado consecutivo por construcción.
+ *
+ * parConductorId es OPCIONAL desde la migración 015_terminaciones:
+ * NULL/ausente crea un tramo del modelo nuevo (sus conductores se
+ * declaran aparte, uno a uno, vía POST /tramo-conductores — ver ese
+ * router); un valor numérico sigue creando un tramo legacy con PAR_
+ * CONDUCTOR exactamente igual que antes de 015.
  */
 connectionRoutesRouter.post(
   '/',
@@ -315,7 +329,7 @@ connectionRoutesRouter.post(
 
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i];
-        for (const field of ['parConductorId', 'puntoOrigenId', 'puntoDestinoId'] as const) {
+        for (const field of ['puntoOrigenId', 'puntoDestinoId'] as const) {
           if (!isPositiveIntString(seg?.[field])) {
             res.status(400).json({
               error: 'validation_error',
@@ -323,6 +337,18 @@ connectionRoutesRouter.post(
             });
             return;
           }
+        }
+        // parConductorId es OPCIONAL desde 015 (migración
+        // 015_terminaciones): NULL/ausente = modelo nuevo, los
+        // conductores del tramo se declaran aparte vía
+        // POST /tramo-conductores. Si se envía, debe ser un id numérico
+        // (modelo legacy, comportamiento sin cambios).
+        if (seg?.parConductorId !== null && seg?.parConductorId !== undefined && !isPositiveIntString(seg?.parConductorId)) {
+          res.status(400).json({
+            error: 'validation_error',
+            message: `segments[${i}].parConductorId must be a numeric id or null.`
+          });
+          return;
         }
       }
 
@@ -354,7 +380,7 @@ connectionRoutesRouter.post(
         .input('created_by', sql.NVarChar(30), userId);
 
       const valuesClauses: string[] = segments.map((seg: any, i: number) => {
-        tramosRequest.input(`par_${i}`, sql.NVarChar(30), seg.parConductorId);
+        tramosRequest.input(`par_${i}`, sql.NVarChar(30), seg.parConductorId ?? null);
         tramosRequest.input(`origen_${i}`, sql.NVarChar(30), seg.puntoOrigenId);
         tramosRequest.input(`destino_${i}`, sql.NVarChar(30), seg.puntoDestinoId);
 
@@ -417,6 +443,114 @@ connectionRoutesRouter.post(
         res.status(mapped.status).json(mapped.body);
         return;
       }
+      next(error);
+    }
+  }
+);
+
+
+/*
+ * GET /api/projects/:projectId/routes/:routeId/conexionado (migración 015)
+ *
+ * Vista de solo lectura: por cada TRAMO_CONEXION activo de la ruta,
+ * los TRAMO_CONDUCTOR activos y, para cada uno, sus TERMINACION
+ * activas (ORIGEN/DESTINO) con el terminal/bloque/dueño ya resueltos —
+ * evita que el frontend tenga que cruzar 4 tablas para mostrar "Señal ->
+ * Conexionado". No es vw_conexionado (esa vista plana, fuera de alcance
+ * en 015, se reconstruiría igual, ver docs/DIAGNOSTICO_SENALES_
+ * GABINETES.md sección 38.14/39) — esto es un árbol jerárquico, no una
+ * fila plana por señal.
+ */
+connectionRoutesRouter.get(
+  '/:routeId/conexionado',
+  requireProjectPermission('read'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const projectId = req.projectAccess!.projectId;
+      const routeId = normalizeParam(req.params.routeId);
+
+      if (!isPositiveIntString(routeId)) {
+        res.status(400).json({ error: 'invalid_route_id', message: 'routeId must be a positive integer.' });
+        return;
+      }
+
+      const pool = await getDbPool();
+
+      const routeExists = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('ruta_id', sql.NVarChar(30), routeId)
+        .query(`SELECT id FROM nucleo.ruta_conexion WHERE id = TRY_CONVERT(BIGINT, @ruta_id) AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND activo = 1;`);
+
+      if (!routeExists.recordset[0]) {
+        res.status(404).json({ error: 'route_not_found', message: 'Route does not exist in this project or is inactive.' });
+        return;
+      }
+
+      const segmentsResult = await pool
+        .request()
+        .input('ruta_id', sql.NVarChar(30), routeId)
+        .query(`SELECT id, numero_orden FROM nucleo.tramo_conexion WHERE ruta_conexion_id = TRY_CONVERT(BIGINT, @ruta_id) AND activo = 1 ORDER BY numero_orden;`);
+
+      const segments = [];
+      for (const seg of segmentsResult.recordset) {
+        const conductoresResult = await pool
+          .request()
+          .input('tramo_id', sql.NVarChar(30), String(seg.id))
+          .query(`
+            SELECT tc.id AS tramo_conductor_id, c.id AS conductor_id, c.codigo AS conductor_codigo,
+                   te.id AS terminacion_id, te.extremo, pt.id AS posicion_id, pt.codigo AS posicion_codigo,
+                   t.id AS terminal_id, t.numero AS terminal_numero,
+                   bt.id AS bloque_id, bt.codigo AS bloque_codigo,
+                   bt.caja_id, bt.gabinete_id, bt.modulo_id
+            FROM nucleo.tramo_conductor tc
+            JOIN nucleo.conductor c ON c.id = tc.conductor_id
+            LEFT JOIN nucleo.terminacion te ON te.tramo_conductor_id = tc.id AND te.activo = 1
+            LEFT JOIN nucleo.posicion_terminal pt ON pt.id = te.posicion_terminal_id
+            LEFT JOIN nucleo.terminal t ON t.id = pt.terminal_id
+            LEFT JOIN nucleo.bloque_terminal bt ON bt.id = t.bloque_terminal_id
+            WHERE tc.tramo_conexion_id = TRY_CONVERT(BIGINT, @tramo_id) AND tc.activo = 1
+            ORDER BY c.orden, c.codigo, te.extremo;
+          `);
+
+        const conductoresPorId = new Map<string, any>();
+        for (const row of conductoresResult.recordset) {
+          const key = String(row.tramo_conductor_id);
+          if (!conductoresPorId.has(key)) {
+            conductoresPorId.set(key, {
+              tramoConductorId: key,
+              conductorId: String(row.conductor_id),
+              conductorCodigo: row.conductor_codigo,
+              terminaciones: []
+            });
+          }
+          if (row.terminacion_id !== null) {
+            conductoresPorId.get(key).terminaciones.push({
+              id: String(row.terminacion_id),
+              extremo: row.extremo,
+              posicionTerminal: { id: String(row.posicion_id), codigo: row.posicion_codigo },
+              terminal: { id: String(row.terminal_id), numero: row.terminal_numero },
+              bloqueTerminal: {
+                id: String(row.bloque_id),
+                codigo: row.bloque_codigo,
+                cajaId: row.caja_id === null ? null : String(row.caja_id),
+                gabineteId: row.gabinete_id === null ? null : String(row.gabinete_id),
+                moduloId: row.modulo_id === null ? null : String(row.modulo_id)
+              }
+            });
+          }
+        }
+
+        segments.push({
+          tramoConexionId: String(seg.id),
+          numeroOrden: seg.numero_orden,
+          conductores: Array.from(conductoresPorId.values())
+        });
+      }
+
+      res.status(200).json({ routeId, conexionado: segments });
+
+    } catch (error) {
       next(error);
     }
   }

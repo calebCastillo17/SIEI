@@ -248,3 +248,129 @@ moduleTypesRouter.post(
     }
   }
 );
+
+
+/*
+ * GET /api/catalogs/module-types/:moduleTypeId/terminals (migración 015)
+ *
+ * cat.cat_modulo_io_terminal — 1:N por canal (catalogo_modulo_id +
+ * numero_canal + orden_terminal). Una etiqueta puede repetirse
+ * legítimamente para el mismo canal (caso real RTD: 2 filas "IN_0/A" +
+ * "IN_0/RTD C" para el canal 0) — orden_terminal es lo único que las
+ * distingue, nunca se colapsan por texto igual.
+ */
+moduleTypesRouter.get(
+  '/:moduleTypeId/terminals',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const moduleTypeId = normalizeParam(req.params.moduleTypeId);
+      if (!moduleTypeId || !/^\d+$/.test(moduleTypeId)) {
+        res.status(400).json({ error: 'invalid_module_type_id', message: 'moduleTypeId must be a positive integer.' });
+        return;
+      }
+
+      const pool = await getDbPool();
+      const result = await pool
+        .request()
+        .input('id', sql.NVarChar(30), moduleTypeId)
+        .query(`
+          SELECT id, catalogo_modulo_id, numero_canal, orden_terminal, etiqueta_terminal, created_at, updated_at
+          FROM cat.cat_modulo_io_terminal
+          WHERE catalogo_modulo_id = TRY_CONVERT(BIGINT, @id)
+          ORDER BY numero_canal, orden_terminal;
+        `);
+
+      res.status(200).json({
+        terminals: result.recordset.map((row) => ({
+          id: String(row.id),
+          catalogoModuloId: String(row.catalogo_modulo_id),
+          numeroCanal: row.numero_canal,
+          ordenTerminal: row.orden_terminal,
+          etiquetaTerminal: row.etiqueta_terminal,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
+        }))
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+
+/*
+ * POST /api/catalogs/module-types/:moduleTypeId/terminals
+ *
+ * Solo es_admin_sistema (mismo criterio que crear un tipo de módulo):
+ * es un catálogo global compartido por todos los proyectos.
+ */
+moduleTypesRouter.post(
+  '/:moduleTypeId/terminals',
+  requireSystemAdmin,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const moduleTypeId = normalizeParam(req.params.moduleTypeId);
+      if (!moduleTypeId || !/^\d+$/.test(moduleTypeId)) {
+        res.status(400).json({ error: 'invalid_module_type_id', message: 'moduleTypeId must be a positive integer.' });
+        return;
+      }
+
+      const { numeroCanal, ordenTerminal, etiquetaTerminal } = req.body ?? {};
+
+      if (typeof numeroCanal !== 'number' || !Number.isInteger(numeroCanal) || numeroCanal < 0) {
+        res.status(400).json({ error: 'validation_error', message: 'numeroCanal must be a non-negative integer.' });
+        return;
+      }
+      if (typeof ordenTerminal !== 'number' || !Number.isInteger(ordenTerminal) || ordenTerminal <= 0) {
+        res.status(400).json({ error: 'validation_error', message: 'ordenTerminal must be a positive integer.' });
+        return;
+      }
+      if (typeof etiquetaTerminal !== 'string' || etiquetaTerminal.trim().length === 0 || etiquetaTerminal.length > 50) {
+        res.status(400).json({ error: 'validation_error', message: 'etiquetaTerminal is required and must be at most 50 characters.' });
+        return;
+      }
+
+      const pool = await getDbPool();
+      const insertResult = await pool
+        .request()
+        .input('catalogo_modulo_id', sql.NVarChar(30), moduleTypeId)
+        .input('numero_canal', sql.SmallInt, numeroCanal)
+        .input('orden_terminal', sql.SmallInt, ordenTerminal)
+        .input('etiqueta_terminal', sql.NVarChar(50), etiquetaTerminal.trim())
+        .query(`
+          INSERT INTO cat.cat_modulo_io_terminal (catalogo_modulo_id, numero_canal, orden_terminal, etiqueta_terminal)
+          OUTPUT INSERTED.id, INSERTED.catalogo_modulo_id, INSERTED.numero_canal, INSERTED.orden_terminal, INSERTED.etiqueta_terminal, INSERTED.created_at, INSERTED.updated_at
+          VALUES (TRY_CONVERT(BIGINT, @catalogo_modulo_id), @numero_canal, @orden_terminal, @etiqueta_terminal);
+        `);
+
+      const row = insertResult.recordset[0];
+
+      res.status(201).json({
+        terminal: {
+          id: String(row.id),
+          catalogoModuloId: String(row.catalogo_modulo_id),
+          numeroCanal: row.numero_canal,
+          ordenTerminal: row.orden_terminal,
+          etiquetaTerminal: row.etiqueta_terminal,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
+        }
+      });
+
+    } catch (error) {
+      const number = sqlErrorNumber(error);
+
+      if (number === 2601 || number === 2627) {
+        res.status(409).json({ error: 'terminal_conflict', message: 'Ya existe una fila de catálogo con ese numeroCanal + ordenTerminal para este modelo.' });
+        return;
+      }
+      if (number === 547) {
+        res.status(400).json({ error: 'invalid_reference', message: 'moduleTypeId does not exist.' });
+        return;
+      }
+
+      next(error);
+    }
+  }
+);

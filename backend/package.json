@@ -19,6 +19,7 @@
     "test:equipos-instrumentacion": "tsx tests/equiposInstrumentacion.api.test.ts",
     "test:instrumento-eliminacion": "tsx tests/instrumentoEliminacionDefinitiva.api.test.ts",
     "test:planos": "tsx tests/planos.api.test.ts",
+    "test:terminaciones": "tsx tests/terminaciones.api.test.ts",
     "seed:equipos-620": "tsx scripts/seedEquiposDesdeExcel.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",

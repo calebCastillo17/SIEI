@@ -9,8 +9,10 @@ import { createRack, deactivateRack } from '../api/racks';
 import { createSlot, deactivateSlot } from '../api/slots';
 import { createModule, deactivateModule, updateModule } from '../api/modules';
 import { listChannels } from '../api/channels';
+import { getModuloTerminales, syncModuloTerminales } from '../api/terminaciones';
 import { useAsyncData } from '../lib/useAsyncData';
 import { usePhysicalTree } from '../components/usePhysicalTree';
+import { BornerasSection } from '../components/BornerasSection';
 import type { Channel, Gabinete, ModuleType, PhysicalModule, Rack, Slot } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
 
@@ -53,6 +55,63 @@ function ChannelsView({
   );
 }
 
+/*
+ * Terminales de un módulo (migración 015) — solo lectura: se
+ * materializan solos (TR_modulo_generar_terminales), esta vista solo
+ * los lista. "Sincronizar" invoca sp_sincronizar_terminales_modulo,
+ * necesario cuando se agregan filas nuevas a cat.cat_modulo_io_terminal
+ * después de instalar el módulo (agregar una fila de catálogo no
+ * dispara ningún trigger de nucleo.modulo).
+ */
+function ModuloTerminalesView({
+  projectId,
+  devUserEmail,
+  moduloId
+}: {
+  projectId: string;
+  devUserEmail: string;
+  moduloId: string;
+}) {
+  const fetchTerminales = useCallback(
+    () => getModuloTerminales(projectId, moduloId, devUserEmail),
+    [projectId, devUserEmail, moduloId]
+  );
+  const { data, loading, error, refresh } = useAsyncData(fetchTerminales);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<Error | null>(null);
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      await syncModuloTerminales(projectId, moduloId, devUserEmail);
+      refresh();
+    } catch (err) {
+      setSyncError(err instanceof Error ? err : new Error('Error desconocido.'));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  if (loading) return <p className="physical-hint">Cargando terminales…</p>;
+  if (error) return <ErrorMessage error={error} />;
+
+  return (
+    <div className="physical-channels">
+      <ErrorMessage error={syncError} />
+      {(data?.terminales ?? []).length === 0 && <span className="physical-hint">Sin terminales materializados.</span>}
+      {data?.terminales.map((t) => (
+        <span key={t.id} className="badge badge--control" title={`Canal ${t.numeroCanal ?? '—'}`}>
+          {t.numero}
+        </span>
+      ))}
+      <button type="button" className="button button--secondary button--small" disabled={syncing} onClick={handleSync}>
+        {syncing ? 'Sincronizando…' : 'Sincronizar con catálogo'}
+      </button>
+    </div>
+  );
+}
+
 /* ---- Un slot: su módulo (si tiene) o el formulario para instalar uno ---- */
 
 function SlotBlock({
@@ -73,6 +132,7 @@ function SlotBlock({
   onChange: () => void;
 }) {
   const [showChannels, setShowChannels] = useState(false);
+  const [showTerminales, setShowTerminales] = useState(false);
   const [selectedType, setSelectedType] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -170,6 +230,14 @@ function SlotBlock({
             {showChannels ? 'Ocultar canales' : 'Ver canales'}
           </button>
 
+          <button
+            type="button"
+            className="button button--secondary button--small"
+            onClick={() => setShowTerminales((v) => !v)}
+          >
+            {showTerminales ? 'Ocultar terminales' : 'Ver terminales'}
+          </button>
+
           {permissions.canWrite && (
             <select
               disabled={submitting}
@@ -196,6 +264,9 @@ function SlotBlock({
 
           {showChannels && (
             <ChannelsView projectId={projectId} devUserEmail={devUserEmail} moduloId={module.id} />
+          )}
+          {showTerminales && (
+            <ModuloTerminalesView projectId={projectId} devUserEmail={devUserEmail} moduloId={module.id} />
           )}
         </div>
       ) : (
@@ -506,6 +577,17 @@ export function GabineteDetailPage() {
             ))}
           </div>
         </>
+      )}
+
+      {!loading && gabinete && (
+        <BornerasSection
+          projectId={projectId}
+          devUserEmail={devUser.email}
+          ownerType="gabinete"
+          ownerId={gabinete.id}
+          canWrite={permissions.canWrite}
+          canDeactivate={permissions.canDeactivate}
+        />
       )}
     </section>
   );

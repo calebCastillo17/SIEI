@@ -4,10 +4,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import { deactivateRoute, getRoute } from '../api/connectionRoutes';
+import { getRouteConexionado } from '../api/terminaciones';
 import { useAsyncData } from '../lib/useAsyncData';
 import { useRouteFormOptions } from '../components/useRouteFormOptions';
 import { connectionPointFullLabel } from '../components/connectionPointLabel';
-import type { ConnectionRouteWithSegments } from '../api/types';
+import type { ConnectionRouteWithSegments, RouteConexionadoResponse } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
 
 export function RouteDetailPage() {
@@ -32,6 +33,15 @@ export function RouteDetailPage() {
     projectId ?? '',
     devUser.email
   );
+
+  const fetchConexionado = useCallback(() => {
+    if (!projectId || !routeId) return Promise.resolve<RouteConexionadoResponse | null>(null);
+    return getRouteConexionado(projectId, routeId, devUser.email);
+  }, [projectId, routeId, devUser.email]);
+
+  const { data: conexionado, loading: conexionadoLoading, error: conexionadoError } = useAsyncData<
+    RouteConexionadoResponse | null
+  >(fetchConexionado);
 
   const [deactivating, setDeactivating] = useState(false);
   const [actionError, setActionError] = useState<Error | null>(null);
@@ -61,7 +71,11 @@ export function RouteDetailPage() {
 
   const signalTag = options?.signals.find((s) => s.id === route?.senalId)?.tagSenal;
 
-  function pairLabel(parConductorId: string): string {
+  function pairLabel(parConductorId: string | null): string {
+    // NULL desde 015: el tramo usa el modelo nuevo (conductores
+    // individuales vía tramo-conductores) — ver la sección "Conexionado
+    // detallado" más abajo, no un par_conductor legacy.
+    if (parConductorId === null) return '— (ver conexionado detallado)';
     const pair = options?.conductorPairs.find((p) => p.id === parConductorId);
     if (!pair) return `#${parConductorId}`;
     const cable = options?.cables.find((c) => c.id === pair.cableId);
@@ -129,6 +143,57 @@ export function RouteDetailPage() {
           </tbody>
         </table>
       )}
+
+      <h2>Conexionado detallado</h2>
+      <ErrorMessage error={conexionadoError} />
+      {conexionadoLoading && <p>Cargando conexionado…</p>}
+      {!conexionadoLoading && conexionado && conexionado.conexionado.length === 0 && (
+        <p className="physical-hint">Sin conductores/terminaciones registrados todavía para esta ruta.</p>
+      )}
+      {!conexionadoLoading &&
+        conexionado?.conexionado.map((segmento) => (
+          <div key={segmento.tramoConexionId} className="physical-slot">
+            <div className="physical-slot__header">
+              <span className="physical-slot__title">Tramo {segmento.numeroOrden}</span>
+            </div>
+            {segmento.conductores.length === 0 && (
+              <p className="physical-hint">Sin conductores declarados en este tramo.</p>
+            )}
+            {segmento.conductores.length > 0 && (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Conductor</th>
+                    <th>Extremo</th>
+                    <th>Terminal</th>
+                    <th>Posición</th>
+                    <th>Bloque</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {segmento.conductores.map((conductor) =>
+                    conductor.terminaciones.length === 0 ? (
+                      <tr key={conductor.tramoConductorId}>
+                        <td>{conductor.conductorCodigo}</td>
+                        <td colSpan={4} className="physical-hint">sin terminaciones registradas</td>
+                      </tr>
+                    ) : (
+                      conductor.terminaciones.map((t) => (
+                        <tr key={t.id}>
+                          <td>{conductor.conductorCodigo}</td>
+                          <td>{t.extremo}</td>
+                          <td>{t.terminal.numero}</td>
+                          <td>{t.posicionTerminal.codigo}</td>
+                          <td>{t.bloqueTerminal.codigo}</td>
+                        </tr>
+                      ))
+                    )
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ))}
     </section>
   );
 }

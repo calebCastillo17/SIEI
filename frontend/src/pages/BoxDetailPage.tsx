@@ -7,6 +7,7 @@ import { deactivateBox, getBox, updateBox } from '../api/boxes';
 import { useAsyncData } from '../lib/useAsyncData';
 import type { Box, BoxInput } from '../api/types';
 import { BoxForm } from '../components/BoxForm';
+import { BornerasSection } from '../components/BornerasSection';
 import { ErrorMessage } from '../components/ErrorMessage';
 
 function toInput(box: Box): BoxInput {
@@ -133,6 +134,17 @@ export function BoxDetailPage() {
           disabled={!canWrite}
           onSubmit={handleUpdate}
           onCancel={() => setEditing(false)}
+        />
+      )}
+
+      {!loading && box && (
+        <BornerasSection
+          projectId={projectId}
+          devUserEmail={devUser.email}
+          ownerType="caja"
+          ownerId={box.id}
+          canWrite={canWrite}
+          canDeactivate={canDeactivate}
         />
       )}
     </section>

@@ -21,6 +21,9 @@ import { commLinksRouter } from './routes/commLinks.js';
 import { boxesRouter } from './routes/boxes.js';
 import { cablesRouter } from './routes/cables.js';
 import { conductorPairsRouter } from './routes/conductorPairs.js';
+import { conductorsRouter } from './routes/conductors.js';
+import { bloquesTerminalRouter } from './routes/bloquesTerminal.js';
+import { tramoConductoresRouter } from './routes/tramoConductores.js';
 import { connectionPointsRouter } from './routes/connectionPoints.js';
 import { connectionRoutesRouter } from './routes/connectionRoutes.js';
 import { loopsRouter } from './routes/loops.js';
@@ -155,6 +158,18 @@ app.use(
 app.use(
   '/api/projects/:projectId/conductor-pairs',
   conductorPairsRouter
+);
+app.use(
+  '/api/projects/:projectId/conductors',
+  conductorsRouter
+);
+app.use(
+  '/api/projects/:projectId/bloques-terminal',
+  bloquesTerminalRouter
+);
+app.use(
+  '/api/projects/:projectId/tramo-conductores',
+  tramoConductoresRouter
 );
 app.use(
   '/api/projects/:projectId/connection-points',

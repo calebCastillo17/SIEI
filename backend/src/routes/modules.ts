@@ -459,3 +459,147 @@ modulesRouter.delete(
     }
   }
 );
+
+
+/*
+ * GET /api/projects/:projectId/modules/:moduleId/terminales (migración 015)
+ *
+ * Lectura del bloque_terminal + terminal + posicion_terminal
+ * materializados automáticamente por TR_modulo_generar_terminales — el
+ * backend no construye nada aquí, solo lee lo que ya generó la BD.
+ */
+modulesRouter.get(
+  '/:moduleId/terminales',
+  requireProjectPermission('read'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const projectId = req.projectAccess!.projectId;
+      const moduleId = normalizeParam(req.params.moduleId);
+      if (!isPositiveIntString(moduleId)) {
+        res.status(400).json({ error: 'invalid_module_id', message: 'moduleId must be a positive integer.' });
+        return;
+      }
+
+      const pool = await getDbPool();
+      const bloqueResult = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('modulo_id', sql.NVarChar(30), moduleId)
+        .query(`
+          SELECT id, codigo, descripcion, activo
+          FROM nucleo.bloque_terminal
+          WHERE modulo_id = TRY_CONVERT(BIGINT, @modulo_id) AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND activo = 1;
+        `);
+
+      const bloque = bloqueResult.recordset[0];
+      if (!bloque) {
+        res.status(200).json({ bloqueTerminal: null, terminales: [] });
+        return;
+      }
+
+      const terminalesResult = await pool
+        .request()
+        .input('bloque_id', sql.NVarChar(30), String(bloque.id))
+        .query(`
+          SELECT t.id, t.numero, t.catalogo_modulo_io_terminal_id, cmit.numero_canal, cmit.orden_terminal
+          FROM nucleo.terminal t
+          LEFT JOIN cat.cat_modulo_io_terminal cmit ON cmit.id = t.catalogo_modulo_io_terminal_id
+          WHERE t.bloque_terminal_id = TRY_CONVERT(BIGINT, @bloque_id) AND t.activo = 1
+          ORDER BY cmit.numero_canal, cmit.orden_terminal, t.numero;
+        `);
+
+      const terminales = [];
+      for (const t of terminalesResult.recordset) {
+        const posicionesResult = await pool
+          .request()
+          .input('terminal_id', sql.NVarChar(30), String(t.id))
+          .query(`
+            SELECT pt.id, pt.codigo, pt.activo, CASE WHEN te.id IS NOT NULL THEN 1 ELSE 0 END AS in_use
+            FROM nucleo.posicion_terminal pt
+            LEFT JOIN nucleo.terminacion te ON te.posicion_terminal_id = pt.id AND te.activo = 1
+            WHERE pt.terminal_id = TRY_CONVERT(BIGINT, @terminal_id) AND pt.activo = 1
+            ORDER BY pt.codigo;
+          `);
+        terminales.push({
+          id: String(t.id),
+          numero: t.numero,
+          numeroCanal: t.numero_canal,
+          ordenTerminal: t.orden_terminal,
+          posiciones: posicionesResult.recordset.map((p) => ({
+            id: String(p.id), codigo: p.codigo, active: Boolean(p.activo), inUse: Boolean(p.in_use)
+          }))
+        });
+      }
+
+      res.status(200).json({
+        bloqueTerminal: { id: String(bloque.id), codigo: bloque.codigo, descripcion: bloque.descripcion, active: Boolean(bloque.activo) },
+        terminales
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+
+/*
+ * POST /api/projects/:projectId/modules/:moduleId/sync-terminales
+ * (migración 015)
+ *
+ * Invoca nucleo.sp_sincronizar_terminales_modulo — necesario cuando se
+ * agregan filas nuevas a cat.cat_modulo_io_terminal DESPUÉS de que el
+ * módulo ya fue instalado (agregar una fila de catálogo no dispara
+ * ningún trigger de nucleo.modulo, esa tabla no cambió). Idempotente:
+ * no duplica los terminales ya materializados.
+ */
+modulesRouter.post(
+  '/:moduleId/sync-terminales',
+  requireProjectPermission('write'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const projectId = req.projectAccess!.projectId;
+      const userId = req.authUser!.id;
+      const moduleId = normalizeParam(req.params.moduleId);
+      if (!isPositiveIntString(moduleId)) {
+        res.status(400).json({ error: 'invalid_module_id', message: 'moduleId must be a positive integer.' });
+        return;
+      }
+
+      const pool = await getDbPool();
+
+      const moduleResult = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('modulo_id', sql.NVarChar(30), moduleId)
+        .query(`SELECT id FROM nucleo.modulo WHERE id = TRY_CONVERT(BIGINT, @modulo_id) AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND activo = 1;`);
+
+      if (!moduleResult.recordset[0]) {
+        res.status(404).json({ error: 'module_not_found', message: 'Module does not exist in this project or is inactive.' });
+        return;
+      }
+
+      const transaction = new sql.Transaction(pool);
+      await transaction.begin();
+      try {
+        await new sql.Request(transaction)
+          .input('modulo_id', sql.NVarChar(30), moduleId)
+          .input('actor_id', sql.NVarChar(30), userId)
+          .query(`
+            DECLARE @modulo_id_bigint BIGINT = TRY_CONVERT(BIGINT, @modulo_id);
+            DECLARE @actor_id_bigint BIGINT = TRY_CONVERT(BIGINT, @actor_id);
+            EXEC nucleo.sp_sincronizar_terminales_modulo @modulo_id = @modulo_id_bigint, @actor_id = @actor_id_bigint;
+          `);
+        await transaction.commit();
+      } catch (procError) {
+        await transaction.rollback();
+        throw procError;
+      }
+
+      res.status(200).json({ synced: true });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);

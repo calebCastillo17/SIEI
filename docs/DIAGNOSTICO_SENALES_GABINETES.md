@@ -2377,3 +2377,1220 @@ CREATE UNIQUE INDEX UX_caja_plano_activo
 `014_planos` está implementada y aplicada en SIEI_DEV: `cat.cat_tipo_plano` (4 tipos), `nucleo.plano`, `nucleo.gabinete_plano`, `nucleo.caja_plano` — las 3 tablas nuevas quedaron vacías tras la migración (0 filas), sin ningún backfill, tal como se diseñó. Backend completo (CRUD + asociaciones N:M con reactivación) y frontend completo (`PlanosListPage`/`PlanoFormPage`/`PlanoDetailPage`) implementados. `database/tests/026_smoke_planos.sql` (18 casos) y `backend/tests/planos.api.test.ts` (33 casos) en verde, tanto en SIEI_DEV como en una instalación limpia `001→014` desde los archivos versionados. Detalle completo en el reporte de entrega al usuario, no repetido aquí.
 
 **`014_planos.sql` (implementada) es la última migración congelada.** `015_terminaciones` sigue sin diseñar más allá de reconocerla como la siguiente fase.
+
+## 36. Diagnóstico técnico — `015_terminaciones` (SOLO DISEÑO, sin implementar)
+
+Fase disparada por el mensaje "FASE 015 — DISEÑO TÉCNICO DE `015_terminaciones`". `001`–`014` quedan congeladas (`014_planos` en `98e61bc`, working tree limpio al iniciar). Este apartado es puramente analítico: **no existe `015_terminaciones.sql`, no se aplicó SQL, no hay backend/frontend/tests nuevos, no hay commit.**
+
+### 36.1 Modelo físico actual re-inspeccionado (evidencia de código, no de memoria)
+
+De `001_initial_schema.sql` (líneas ~300-650) y `012_gabinetes.sql` (líneas ~283-620, versión vigente post-rename):
+
+- `nucleo.modulo(id, proyecto_id, slot_id, catalogo_modulo_id, activo, ...)` — 1 módulo por slot (`UQ_modulo_slot`).
+- `nucleo.canal(id, proyecto_id, modulo_id, numero_canal, activo, ...)` — `UX_canal_modulo_numero`. `TR_canal_validar_capacidad` valida rango y cupo contra `cat_modulo_io.canales_max`.
+- `nucleo.cable(id, proyecto_id, tag_cable, tipo_cable NVARCHAR(100), capacidad_conductores, activo, ...)`.
+- `nucleo.par_conductor(id, proyecto_id, cable_id, numero_par, ...)` — **sin `activo`** (registro histórico permanente, precedente ya documentado), `UQ_par_conductor_cable_numero`. Solo modela **pares**, no conductores individuales.
+- `nucleo.punto_conexion(id, proyecto_id, instrumento_id, equipo_id, caja_id, gabinete_id, modulo_id, regleta, bornera, borne, lado, circuito, hilo, descripcion, activo, ...)` — dueño XOR de 5 vías (`CK_punto_conexion_pertenencia_xor`). Los 6 campos de terminal son **texto libre sin normalizar**: `regleta`/`borne`/`circuito`/`hilo` NVARCHAR(30), `lado` NVARCHAR(20), `bornera` NVARCHAR(30) — confirmado en `backend/src/routes/connectionPoints.ts` (`OWNER_FIELDS`, sin validación de formato ni unicidad).
+- `nucleo.ruta_conexion(id, proyecto_id, senal_id, activo, ...)` — 1:1 con una señal activa.
+- `nucleo.tramo_conexion(id, proyecto_id, ruta_conexion_id, par_conductor_id, punto_origen_id, punto_destino_id, numero_orden, activo, ...)`.
+
+**Brecha confirmada** (vía `TR_senal_validar_canal_ruta`, `TR_tramo_conexion_validar_secuencia`, `TR_tramo_conexion_validar_canal_ruta`): una ruta es `INSTRUMENTO/EQUIPO → 0..N CAJA (intermedios) → GABINETE/MODULO (final)`. El tramo final solo valida que `punto_destino.modulo_id = canal.modulo_id` (el **módulo entero**) — **no existe `punto_conexion.canal_id`**, por lo que hoy es imposible representar "aterrizó en el canal N específico", solo "aterrizó en este módulo". Esta es exactamente la brecha que el punto 18 del pedido pide cerrar.
+
+**Restricción operativa heredada** (sin cambios desde `001`): una ruta multi-tramo debe construirse/editarse en **una sola sentencia multi-fila** — un estado intermedio que termine en CAJA es rechazado (error 51007) dentro de la misma transacción. Cualquier API nueva de terminales debe respetar esto.
+
+### 36.2 Evidencia Excel — sin asumir semántica por nombre (`02_MASTER_IO_620.xlsm`, `SENALES_CONTROL`, 488 filas)
+
+| Campo | Población | Formato real | Hallazgo |
+|---|---|---|---|
+| `TB` | 488/488 (100%) | `TB-01`…`TB-15+` | Identificador de **bloque físico de terminales**, alta repetición (`TB-07`×56, `TB-01`×48). |
+| `BORNERA` | 488/488 (100%) | `F{impar}-{par}` (`F1-2`…`F31-32`) | Terminal **par** específico dentro de un `TB`. `TB-01` por sí solo abarca 16 valores distintos de `BORNERA` (`F1-2`…`F31-32`) — confirma jerarquía `TB` (bloque) ⊃ `BORNERA` (par dentro del bloque), no sinónimos. Un valor anómalo encontrado: `"F1-F2-3-4"` (fila `620-PIT-5058`) — formato compuesto/mal formado, evidencia de calidad de dato real, no un patrón nuevo. |
+| `T_MODULO` | 488/488 (100%) | 2 partes separadas por `;` en 472/488 (ej. `IN-0;L2-0`), 3 partes en 16/488 (instrumentos RTD 3 hilos, ej. `IN_0/A;IN_0/A;IN_0/RTD C`) | **Determinístico por `(MODELO, CANAL)`**: 0 de 56 combinaciones verificadas tienen más de un `T_MODULO` distinto. Es la etiqueta de fábrica impresa en el **conector del módulo**, fija por modelo+canal — un hecho de hoja de datos, no un dato por señal. |
+| `TB_CAJA` | 189/488 (39%) | **Constante literal `"TB"` en el 100% de los casos poblados** | No distingue nada — confirma la sospecha previa del diagnóstico: convención/placeholder, no una identidad real. |
+| `BORNE_JB` | 189/488 (39%) | Listas separadas por coma (`"1,2"`, `"1,2,3"`, `"10,11,12,13,14"`, etc.) | Ver 36.3 — semántica resuelta esta fase. |
+| `BORNERA_BLOQUE_CAJA` | 189/488 (39%) | Enteros secuenciales `1`…`41` | Ver 36.4 — semántica resuelta esta fase. |
+| `B_NUM_RESERVA` | 12/488 (2.5%) | Enteros pequeños (1,2,3,5,7,10) | Ver 36.5. |
+| `N_PAR_CABLE` | 269/488 (55%) | Dígito único 1-9 | Mapea directo a `par_conductor.numero_par` — **pero ver 36.6**, hay evidencia de que no siempre representa un par físico real. |
+| `TAG_CABLE` vs `TAG_CABLE_INST` | 269/488 y 189/488 | `620TBC5016-T01` / `620HV5084-T01` | Dos tags de cable distintos para los dos tramos (instrumento→caja usa `_INST`; caja→gabinete usa el otro) — el modelo multi-tramo actual ya soporta esto sin cambios. |
+| `TIPO_CABLE`/`TIPO_CABLE_INST` | — | Texto libre (`"1-19c#14 AWG"`, `"1-8p#18 AWG+SH"`, `"1-1p#16 AWG+SH"`) | Mapea a `cable.tipo_cable NVARCHAR(100)`. **Nota importante**: `"19c"` = 19 **conductores** (no pares); `"8p"`/`"1p"` = pares. Coexisten cables organizados en pares y cables organizados en conductores individuales — ver 36.6. |
+| `CANAL` | 100% | Entero secuencial 0-N | Mapea a `canal.numero_canal`. |
+
+### 36.3 `BORNE_JB` — resuelto (puntos 6, 8, 9 del pedido)
+
+**Caso obligatorio `620-HV-5084`** (instrumento tipo válvula motorizada con selector remoto + finales de carrera + comando abrir/cerrar), las 5 señales de ESE instrumento en la misma caja `620-TBC-XXX1`, mismo `TAG_CABLE_INST=620HV5084-T01`:
+
+| TAG | SEÑAL | `BORNE_JB` | `N_PAR_CABLE` |
+|---|---|---|---|
+| 620-HS-5084 | REM | `1,2,3` | 1 |
+| 620-ZSO-5084 | ZIO | `4,5,6` | 2 |
+| 620-ZSC-5084 | ZIC | `7,8,9` | 3 |
+| 620-HYO-5084 | HYO | `10,11,12,13,14` | 4 |
+| 620-HYC-5084 | HYC | `15,16,17,18` | 5 |
+
+**Respuesta definitiva**: los 5 terminales de `HYO` (`10-14`) **no son un bloque compartido ni reservado** — son **exclusivos de esa señal**, y la cantidad (5, frente a 3 de las otras) refleja simplemente que esa señal específica necesita más hilos (probablemente doble contacto/interlock). La evidencia es contundente: los rangos son **contiguos y no se solapan** dentro del mismo instrumento/cable, y crecen 1:1 con `N_PAR_CABLE` (1,2,3,4,5 — orden secuencial de par dentro del mismo cable multiconductor). **No hay ambigüedad física en este caso puntual.**
+
+**Pero** (punto 9, análisis de solapamiento por `TAG_CAJA`): al repetir el mismo análisis entre TODAS las señales que comparten una `TAG_CAJA`, **7 de 8 cajas con datos muestran "solapamiento"** — ej. en `620-TBC-5015`, tanto `620-HV-5104` como `620-HV-5105` (dos instrumentos físicos DISTINTOS) reutilizan exactamente los mismos rangos `1,2,3` / `4,5,6` / `7,8,9` / `10-14` / `15-18`. (15 de las 488 filas usan tags placeholder `XXX` — instrumentos aún no asignados, `ESTADO_REVISION='PENDIENTE'` — excluidos del análisis para no contaminar el resultado; el patrón de reutilización persiste igual con datos 100% reales.)
+
+**Conclusión (resuelve la pregunta más importante del pedido)**: `BORNE_JB` **no es una dirección física global y única dentro de la caja** — es un **índice local/relativo, con ámbito (`TAG_CAJA` + `TAG_CABLE_INST`/instrumento)**, análogo a "conductor N del cable dedicado de ESTE instrumento". Cada instrumento vuelve a numerar desde 1 dentro de su propio grupo de conductores. Esto **no es un problema de calidad de datos** — es la semántica real del campo. La consecuencia de diseño es directa: **`BORNE_JB` nunca puede ser, por sí solo, una clave de negocio para "terminal físico ocupado en esta caja"**; para eso se necesita `(TAG_CAJA, TAG_CABLE_INST, BORNE_JB)` como mínimo, y aun así no corresponde a una dirección física absoluta de regleta (ver 36.4).
+
+### 36.4 `BORNERA_BLOQUE_CAJA` — resuelto (punto 10)
+
+Al ordenar por valor dentro de cada `TAG_CAJA` (ej. `620-TBC-5016`, 41 filas), la secuencia es monótonamente creciente **en el orden de aparición de cada grupo instrumento-señal** (1, 2, 3, 4, 5, 6, 7...) — pero con **irregularidades reales de captura**: se encontraron valores duplicados consecutivos (`5, 5` seguido de `7` — salta el `6`; `17, 17` seguido de `19` — salta el `18`) en `620-TBC-5015`. No hay ninguna fórmula que lo derive de `BORNE_JB` ni de ningún otro campo — es un **índice de enumeración asignado manualmente por el proyectista, en el orden gráfico en que las regletas aparecen en el plano interior de la caja**, confirmando la sospecha previa del diagnóstico (14.x). Es lo más cercano a una "dirección física absoluta de regleta en la caja" que existe en el dataset, pero **no es confiable como clave de negocio estricta** por los saltos/duplicados encontrados — son errores de captura reales, no una regla.
+
+### 36.5 `B_NUM_RESERVA` (punto 12 — analizado, explícitamente NO incluido en 015)
+
+Solo 12/488 filas (2.5%). Valores pequeños (1,2,3,5,7,10) que aparecen siempre junto a un `BORNERA_BLOQUE_CAJA` que es el último (o cercano al último) del grupo de esa caja — consistente con "cantidad de terminales de reserva dejados libres después de este grupo, antes del siguiente instrumento". Es un dato de **dimensionamiento de capacidad de la regleta física**, relacionado con capacidad de caja/bornera (un futuro tema de diseño de caja, no de conexionado señal-por-señal). **Por instrucción explícita del usuario, no se modela en `015`** — queda documentado como insumo para una futura fase de "diseño físico de caja/capacidad de bornera".
+
+### 36.6 `TB_CAJA` (punto 11) y ¿existe un conductor individual? (punto 13)
+
+**`TB_CAJA`**: 100% constante (`"TB"` literal en las 189 filas pobladas). **No amerita persistirse como entidad ni catálogo** — es una convención de nomenclatura sin valor discriminante en la evidencia disponible (un futuro dataset con cajas multi-bloque como `TB1`/`TB2` sí podría requerir usar este campo como identificador real de bloque dentro de la caja — ver 36.9 sobre soportar esa generalización desde el día uno del diseño, sin depender de que el dato actual lo use).
+
+**`nucleo.par_conductor` — ¿alcanza?**: se encontró evidencia real de que **no todos los cables están organizados en pares**. `TIPO_CABLE_INST` incluye tanto cables de pares (`"1-8p#18 AWG+SH"`, `"1-1p#16 AWG+SH"`) como cables de **conductores individuales** (`"1-19c#14 AWG"`, usado exactamente por `620-HV-5084` — el caso de 36.3 — donde `N_PAR_CABLE` toma valores 1-5 sin que exista un "par" físico real: son 5 conductores individuales de un cable de 19 hilos, no 5 pares). Esto significa que `N_PAR_CABLE`, tal como se usa realmente en el Excel, es más un **índice de grupo de conductor(es) dentro del cable** que un número de par en sentido estricto — y que el modelo actual (`par_conductor`, exclusivamente pares) **no representa fielmente un cable de conductores individuales**. **Evaluación (no implementar todavía)**: esto es evidencia real a favor de generalizar `par_conductor` hacia un concepto más amplio (`nucleo.conductor` individual, con `par_conductor` reducido a una agrupación opcional de 2 conductores) — pero antes de decidir la forma exacta hace falta confirmar con el usuario si en la práctica de diseño real siempre se cablea "conductor por conductor" o si el par sigue siendo la unidad manejable incluso en cables tipo "c" (ej. dos hilos adyacentes tratados como un par funcional aunque el cable no venga trenzado en pares de fábrica). **Queda como pregunta abierta**, no resuelta por asunción.
+
+### 36.7 Casos de cableado físico reconstruidos con valores literales (punto 7)
+
+- **AI 2 hilos (transmisor de proceso)** — `620-PIT-5058` (PIT, señal `PI`): `TB=TB-09`, `BORNERA=F1-F2-3-4` (formato anómalo, ver 36.2), `T_MODULO=IN0;RTN0`, `TAG_CAJA=620-TBJ-XXX1`, `BORNE_JB=1,2`, `N_PAR_CABLE=1`, `TAG_CABLE_INST=620PIT5058-X01`, `TIPO_CABLE_INST=1-1p#16 AWG+SH` (par blindado dedicado, instrumento→caja de instrumentación `TBJ`).
+- **RTD 3 hilos** — `620-TE-5041A` (TE): `T_MODULO` con 3 partes `IN_0/A;IN_0/A;IN_0/RTD C` — el módulo RTD dedica 3 terminales físicos por canal (dos "A" + un "RTD C"), consistente con el estándar de medición RTD a 3 hilos.
+- **DI válvula (finales de carrera / selector)** — `620-HS-5084`/`620-ZSO-5084`/`620-ZSC-5084` (ver tabla 36.3): cada señal discreta de entrada tiene su propio grupo contiguo de 3 terminales dentro del mismo cable multiconductor del instrumento.
+- **DO válvula (comando abrir/cerrar)** — `620-HV-XXX3`, señal `HY`: `TB=TB-07`, `BORNERA=F9-10`, `T_MODULO=OUT-4;L1-4` (prefijo `OUT`/`L1` en vez de `IN`/`L2`, confirmando que `T_MODULO` distingue entrada/salida de forma consistente), `TAG_CAJA=620-TBC-XXX1`, `BORNE_JB=1,2,3`.
+- **Directo a equipo (sin caja intermedia)** — `620-PPS-5005` (arrancador de motor), señales `RDY`/`REM`/`ESP`/`RUN`/`FAL`: 90 filas del dataset tienen `TAG_EQUIPO_INST` poblado y `TAG_CAJA` vacío, **pero `TB`/`BORNERA`/`T_MODULO` siguen poblados** — confirma que existe cableado real `EQUIPO → GABINETE` de un solo tramo, sin caja intermedia, exactamente como ya lo permite el modelo actual (`0..N` cajas intermedias, hoy 0 en este caso).
+
+### 36.8 Arquitectura del bloque de terminales — Opción 1 vs Opción 2 (punto 3A, resuelto con evidencia)
+
+Recordando la regla de negocio (memoria `siei-terminal-blocks-015`, confirmada de nuevo en el pedido): bloques de terminales existen de forma independiente en CAJA, GABINETE y MÓDULO.
+
+- **Evidencia a favor de un concepto único y reutilizable** (Opción 2, `bloque_terminal → caja/gabinete/modulo` de 3 vías): en el Excel, `TB`/`BORNERA` en `SENALES_CONTROL` conviven exactamente igual sea el destino una `TAG_CAJA` (caja) o un módulo de RIO/gabinete (filas sin `TAG_CAJA`, directo a gabinete/módulo) — la forma del dato (bloque + terminal dentro del bloque) es idéntica en ambos casos, no hay ninguna columna ni convención que distinga "bloque de caja" de "bloque de gabinete" más allá de cuál FK esté poblada. Un `bloque_terminal` con dueño XOR de 3 vías (`caja_id`/`gabinete_id`/`modulo_id`) — mismo patrón ya usado en `punto_conexion` (XOR de 5 vías) y en `gabinete_plano`/`caja_plano` (N:M con FKs compuestas) — evita duplicar la tabla y el CRUD tres veces, y modela naturalmente el caso de "terminal directo a equipo/gabinete sin caja" del punto 36.7.
+- **Evidencia a favor de separar módulo del resto** (parte de Opción 1): el terminal de módulo (`T_MODULO`) es un **hecho de fábrica determinístico por `(modelo, canal)`** — no se "crea" ni se numera libremente como sí ocurre con los bloques de caja/gabinete (`TB`, con bloques `TB1`/`TB2`/`X1`/`X2` nombrados libremente por el proyectista). Fusionarlos en la misma tabla sin distinción forzaría a decidir si el terminal de módulo es una fila manual (como los de caja/gabinete) o una fila derivada/generada del catálogo del módulo — son ciclos de vida distintos.
+
+**Recomendación**: **modelo híbrido, más cercano a la Opción 2 pero sin forzar la unificación total**:
+- Un `nucleo.bloque_terminal` genérico con dueño XOR de 3 vías (`caja_id`/`gabinete_id`/`modulo_id`) y un `nucleo.terminal` hijo (número/etiqueta dentro del bloque) cubre caja y gabinete de forma idéntica y **también** puede cubrir módulo si en el futuro se necesitan bloques de terminal de módulo nombrados libremente (no todos los módulos tienen terminales fijos de fábrica — algunos usan regletas removibles genéricas).
+- Pero para el terminal **específico de canal de módulo** (`T_MODULO`, fijo por catálogo), en vez de forzar una fila manual de `terminal` por cada módulo instalado, se modela como **metadato del catálogo del canal** (ver 36.9) — determinístico, sin captura manual, coexistiendo con el `bloque_terminal`/`terminal` genérico para los casos donde el módulo sí necesite terminales asignables libremente.
+
+Esto responde el punto 3A sin decidir por simplicidad de implementación: la evidencia real (mismo formato `TB`/`BORNERA` en caja y gabinete; naturaleza determinística y de catálogo distinta para el terminal de módulo) es la que separa "terminal asignable libremente" (caja/gabinete, y potencialmente módulo) de "terminal fijo de fábrica por canal" (módulo, caso común).
+
+### 36.9 `T_MODULO`/`BORNERA` como metadato de catálogo, no como dato por instalación
+
+Ambos campos resultaron **determinísticos por `(MODELO, CANAL)`** (0 de 56 combinaciones con más de un valor distinto verificadas para cada uno). Esto tiene una implicación de diseño directa: **no deben capturarse como texto libre por cada instalación real** (como hoy vive implícitamente en `punto_conexion.borne`/`bornera`) — deben derivarse de una tabla de catálogo `(catalogo_modulo_id, numero_canal) → etiqueta`.
+
+Interpretación de la diferencia entre ambos, con la evidencia disponible:
+- **`T_MODULO`** = etiqueta impresa por el fabricante en el conector físico del módulo (ej. `IN-0`, `OUT-4`) — **hecho universal del modelo de módulo**, no depende del proyecto.
+- **`BORNERA`** = el par de terminal específico en la **regleta de campo del gabinete/RIO** al que se cablea internamente ese canal (ej. `F1-2`) — en este dataset también resultó 100% determinístico por `(MODELO, CANAL)`, pero conceptualmente es una **convención de cableado interno del proyecto** (el ingeniero que diseñó el RIO decidió llevar canal 0 al par F1-2, canal 1 al F3-4, etc., de forma consistente en todo el proyecto) — no necesariamente un hecho universal del fabricante. Con un solo proyecto como evidencia, **no se puede descartar** que otro proyecto use un esquema de cableado interno distinto para el mismo módulo. Se recomienda modelarlo igual que `T_MODULO` (derivado de catálogo) **pero con el catálogo scoped a nivel de proyecto** (o a una "plantilla de cableado de RIO" reutilizable), nunca como un hecho global fijo del `cat.cat_modulo_io` en sí.
+
+### 36.10 `punto_conexion` vs. terminal — ¿evolucionar o extender? (puntos 17, 18)
+
+**Recomendación**: **no** convertir `punto_conexion` en un concepto de terminal. `punto_conexion` sigue representando el extremo lógico/físico de un tramo de la ruta de señal (dueño XOR ya establecido, con tramos que lo conectan en cadena) — cambiar su naturaleza rompería el modelo de rutas ya implementado y probado (`ruta_conexion`/`tramo_conexion`, triggers de secuencia). En su lugar:
+
+- Se agrega una **relación opcional** `punto_conexion.terminal_id` (nueva FK, nullable) que, cuando está poblada, ancla ese punto de conexión a un `nucleo.terminal` concreto (dentro de un `bloque_terminal` de caja/gabinete, o a un terminal de canal de módulo vía catálogo). Los 6 campos de texto libre actuales (`regleta`/`bornera`/`borne`/`lado`/`circuito`/`hilo`) **se mantienen** para retrocompatibilidad y para los casos donde aún no se modele el terminal formalmente (deuda técnica documentada, no forzada a resolverse de una vez).
+- Esto cierra el punto 18 (`punto_conexion.modulo_id` no referencia el canal exacto) **sin romper nada existente**: cuando el punto de conexión final de una ruta apunta a un módulo, su `terminal_id` (si está poblado) permite conocer el canal exacto a través de la cadena `terminal → catálogo(modelo, canal) → canal`, sin necesitar una columna `canal_id` directa en `punto_conexion` (que además sería redundante con `terminal_id` una vez que el terminal en sí ya referencia el canal).
+
+### 36.11 Alternativas de arquitectura comparadas (punto 15)
+
+| | A: `punto_conexion` por borne | B: `punto_conexion` + `punto_conexion_borne` hijo | C: `bloque_terminal`/`terminal` independiente + `terminacion` que enlaza conductor↔terminal | D: texto libre (statu quo) |
+|---|---|---|---|---|
+| Ventajas | Cambio mínimo | Menos cambio que C, ya reutiliza el XOR existente | Modela la jerarquía real (bloque→terminal) igual en caja/gabinete/módulo; permite detectar ocupación/conflicto; base para generar CAD/reportes de conexionado | Cero esfuerzo inmediato |
+| Desventajas | `punto_conexion` explota en identidad (un punto por CADA terminal usado, rompiendo su rol de "extremo de tramo") | El terminal queda subordinado a un punto de conexión existente, en vez de existir independientemente (no se puede declarar "terminal libre" sin una ruta) | Mayor superficie nueva (2-3 tablas), requiere backfill/estrategia de convivencia con `punto_conexion` actual | Nunca se puede consultar "qué terminal está ocupado por qué", ni detectar solapamientos — sigue siendo deuda técnica indefinidamente |
+| Capacidad de generar CAD/reporte de conexionado | Baja | Media | Alta — es justo lo que la jerarquía real necesita | Nula |
+| Detección de conflictos (dos señales al mismo terminal) | No (texto libre igual que hoy) | Parcial | Sí, con `UNIQUE` real sobre `(bloque_terminal_id, numero_terminal)` | No |
+| Complejidad de implementación | Baja | Media | Alta | Ninguna |
+
+**Recomendación: Opción C**, extendida con el `terminal_id` opcional en `punto_conexion` de 36.10 (no una tabla `terminacion` separada de tramo/conductor — el vínculo tramo↔terminal ya existe implícitamente vía `punto_conexion` como extremo del tramo; no hace falta una entidad nueva solo para eso). Es la única que responde al principio del punto 16 (consultar ocupación/libres/conflictos) con una clave real, y es la única evidenciada como necesaria por los datos (36.3-36.4 muestran que ni `BORNE_JB` ni `BORNERA_BLOQUE_CAJA` del Excel sirven como clave de negocio confiable — SIEI necesita numerar sus propios terminales, igual que ya hace con IDs internos en vez de TAG).
+
+### 36.12 Jerarquía de bloques de terminal en caja/gabinete/módulo (puntos 19, 20)
+
+`nucleo.bloque_terminal(id, proyecto_id, caja_id NULL, gabinete_id NULL, modulo_id NULL, codigo NVARCHAR(20), descripcion, activo, ...)` con XOR de 3 vías — soporta desde el día uno múltiples bloques nombrados por caja/gabinete (`TB1`, `TB2`, `X1`, `X2`), aunque el Excel actual solo use el nombre constante `"TB"` (36.6) — el `codigo` es libre, no hardcoded a `"TB"`.
+
+`nucleo.terminal(id, proyecto_id, bloque_terminal_id, numero NVARCHAR(20), activo, ...)` — un terminal individual dentro de un bloque, `UNIQUE (bloque_terminal_id, numero) WHERE activo = 1` (mismo patrón de índice filtrado del resto del esquema).
+
+Ejemplo trabajado (punto 20): `gabinete.TB1` (bloque de terminal de campo del RIO) recibe un cable externo en su terminal `F1-2`; **una fila `tramo_conexion` interna** (mismo mecanismo de tramo ya existente, `par_conductor_id` puede ser NULL o un "puente"/jumper interno) conecta ese `punto_conexion` (ancla a `terminal` de `TB1`) con otro `punto_conexion` que ancla al `terminal` de canal del `modulo` correspondiente — el cableado interno gabinete→módulo se modela como **un tramo más**, sin necesitar un concepto nuevo distinto de tramo.
+
+### 36.13 Diseño backend/frontend (solo diseño, puntos 21-22)
+
+**Backend** (rutas nuevas, mismo patrón que `planos.ts`/`gabinetes.ts`, no implementadas):
+- `GET /api/projects/:id/cajas/:cajaId/bloques-terminal` y equivalente para gabinete — lista bloques + terminales + ocupación (join contra `punto_conexion.terminal_id`).
+- `GET /api/projects/:id/modulos/:moduloId/terminales` — terminales de canal derivados del catálogo `(modelo, canal)`, más cualquier `bloque_terminal` manual asociado al módulo.
+- `GET /api/projects/:id/senales/:senalId/conexionado` — recorre `ruta_conexion` → `tramo_conexion` en orden, resolviendo cada `punto_conexion` a su terminal (si tiene) o a su texto libre (si no).
+- Reglas de conflicto (`terminal` ocupado por otro `punto_conexion` activo) se validan igual que hoy se valida "canal en uso" — rechazo, nunca sobrescritura silenciosa.
+
+**Frontend** (pantallas futuras, no implementadas): `Caja→Borneras`, `Gabinete→Borneras` (mismo componente reutilizado, XOR ya es el patrón usado en el resto del frontend), `Módulo→Terminales` (solo lectura, derivado de catálogo), `Señal→Conexionado` (vista de solo lectura del recorrido tramo por tramo) — ningún editor gráfico, consistente con el resto de SIEI.
+
+### 36.14 Reconstrucción de `vw_conexionado` sin duplicar datos en `senal` (punto 23)
+
+Una vista futura que reproduzca la forma plana de `MASTER_IO` (señal/gabinete/rack/slot/módulo/canal/TB/BORNERA/T_MODULO/cable/caja/TB_CAJA/BORNE_JB) se construye por `JOIN` puro, navegando exactamente la cadena ya existente: `senal → ruta_conexion → tramo_conexion (ordenado por numero_orden) → punto_conexion → terminal → bloque_terminal → (caja | gabinete | modulo → slot → rack → gabinete)`, más `tramo_conexion.par_conductor_id → cable`. **Ningún campo de esta vista se copia a `senal`** — la vista es 100% derivada en tiempo de consulta, igual que el resto del esquema evita denormalización.
+
+### 36.15 Casos de prueba futuros (diseño only, punto 25)
+
+Creación de bloque/terminal para caja/gabinete/módulo · prevención de terminal duplicado activo en un mismo bloque (`UNIQUE` filtrado) · cable→terminal de caja · cable→terminal de gabinete · cable→terminal de módulo · tramo interno gabinete-terminal→módulo-terminal · rechazo de ocupación incompatible (dos `punto_conexion` activos al mismo `terminal`) · casos válidos de puente/común si existen en el dominio real (no evidenciados aún en el Excel, pendiente de confirmar con el usuario) · aislamiento cross-project (mismo patrón FK compuesta) · soft delete (`activo`) · auditoría (`created_by`/`updated_by`).
+
+### 36.16 Preguntas abiertas — NO resueltas por asunción (punto 27)
+
+1. **`BORNERA` como convención de proyecto vs. hecho universal**: determinístico por `(modelo, canal)` en este único proyecto, pero no hay evidencia de un segundo proyecto para confirmar si esto es siempre así o específico del criterio de cableado de este ingeniero. Afecta si el catálogo de 36.9 debe ser global o scoped por proyecto/plantilla.
+2. **Individual conductor vs. par (`N_PAR_CABLE` en cables no-pareados, 36.6)**: ¿se necesita `nucleo.conductor` individual, o el equipo de ingeniería sigue razonando en "pares funcionales" incluso en cables de conductores sueltos? Requiere confirmación humana, no inferible del Excel solo.
+3. **Casos de puente/terminal común**: no se encontró evidencia de terminales compartidos legítimamente entre dos señales (todo solapamiento encontrado fue el patrón "reinicio local por instrumento" de 36.3, no un puente real) — queda abierto si existen en la práctica real de este dominio y cómo deben modelarse si sí.
+4. **Formato anómalo `"F1-F2-3-4"`** (`620-PIT-5058`, 36.7): dato de captura real, no un patrón — no se sabe si es error de tipeo o un formato legítimo de bornera compuesta; no se resuelve por asunción.
+5. **`TB1`/`TB2` multi-bloque**: el diseño (36.12) lo soporta estructuralmente, pero no hay ningún caso real en el Excel que use más de un `TB` por caja — la generalización es prospectiva, no evidenciada todavía.
+
+### 36.17 Estado al cierre de esta fase
+
+Solo diagnóstico y diseño, tal como se pidió. **No existe `015_terminaciones.sql`. No se aplicó SQL. No hay cambios en backend, frontend, tests ni commit.** `001`–`014` permanecen exactamente como están (`98e61bc`). La implementación de `015_terminaciones` requiere, como mínimo, que el usuario resuelva las 5 preguntas abiertas de 36.16 y confirme la recomendación arquitectónica de 36.11 (Opción C extendida) antes de proceder — siguiendo el mismo patrón de aprobación explícita usado en `012`/`013`/`014`.
+
+## 37. Revisión y corrección del diseño de terminaciones (antes de implementar, SOLO REDISEÑO)
+
+Disparado por "FASE 015 — REVISIÓN DEL DISEÑO DE TERMINACIONES ANTES DE IMPLEMENTAR", que **reabre expresamente** la conclusión de 36.10/36.11 (`punto_conexion.terminal_id` sin `terminacion`) por ser insuficiente frente a señales reales multi-conductor. Puerta confirmada: working tree con solo `docs/DIAGNOSTICO_SENALES_GABINETES.md` modificado (sección 36, sin commit), `git log` en `98e61bc`, `015_terminaciones.sql` no existe. Sigue sin haber SQL/backend/frontend/tests/commit — este apartado es la corrección del diseño, no su implementación.
+
+### 37.1 Crítica explícita de la propuesta anterior (36.10)
+
+La propuesta de 36.10 (`punto_conexion.terminal_id` opcional, sin entidad `terminacion`) **queda descartada**, no por preferencia sino por un contraejemplo directo ya presente en la propia evidencia: `620-HYO-5084` necesita **5 conductores** aterrizando en **5 terminales físicos distintos** dentro del mismo extremo lógico de un mismo tramo (la caja `620-TBC-XXX1`). `punto_conexion` es una fila única por extremo de tramo (dueño XOR); `terminal_id` como columna simple solo puede apuntar a **un** terminal. No existe forma de extender esa columna a "N terminales" sin romper la cardinalidad 1:1 de la fila, o sin forzar a crear un `punto_conexion` distinto por cada conductor — lo segundo es exactamente lo que el punto 4 del pedido prohíbe ("no convertir un terminal físico en un punto_conexion", porque multiplicaría artificialmente los puntos de una misma conexión y rompería la semántica ya probada de `ruta_conexion`/`tramo_conexion`). La propuesta anterior era válida únicamente para el caso 1:1 (AI de 2 hilos con un solo par) y fallaba silenciosamente para cualquier señal con más de un conductor por extremo — es decir, fallaba precisamente en el caso que el propio diagnóstico había identificado como el más importante (`HYO`).
+
+### 37.2 Decisión: ¿`TERMINACION` sí o no? → **SÍ, obligatoria**
+
+Justificación (no solo por el contraejemplo de 37.1, sino por lo que la entidad debe representar): una terminación no es "el extremo de una conexión" (eso ya lo es `punto_conexion`) — es **el hecho físico puntual "este conductor, en este tramo, en este extremo, aterriza en este terminal"**. Son conceptos ortogonales: `punto_conexion` vive en el espacio de la ruta lógica de la señal (cuántos tramos, en qué orden, entre qué nodos); `terminacion` vive en el espacio de la implementación física de cada tramo (cuántos hilos lo componen y dónde aterriza cada uno). Mantener `punto_conexion` sin conocimiento de terminales (se elimina por completo cualquier `terminal_id` en `punto_conexion` — no se conserva "por si acaso") evita la duplicación de fuente de verdad que arrastraría tener dos caminos (uno directo vía `punto_conexion.terminal_id` para el caso simple, otro vía `terminacion` para el caso múltiple) que podrían desincronizarse.
+
+### 37.3 Decisión: ¿`CONDUCTOR` individual sí o no? → **SÍ**
+
+Evidencia decisiva: `TIPO_CABLE_INST = "1-19c#14 AWG"` (19 **conductores**, sin estructura de pares) es el cable real usado por `620-HV-5084`, cuyas 5 señales consumen conductores 1 a 5 de ese cable **sin que exista un "par" físico correspondiente** — `N_PAR_CABLE` en este caso no numera pares reales, numera conductores sueltos. Un modelo que solo conozca `par_conductor` no puede representar "el conductor 3 de un cable de 19 hilos individuales" sin fingir una agrupación de a dos que no existe físicamente. `nucleo.conductor` pasa a ser **la unidad física fundamental**; `par_conductor` se conserva como una **agrupación opcional** de exactamente 2 conductores (par trenzado), nunca al revés.
+
+### 37.4 Estrategia de convivencia `CONDUCTOR` ↔ `PAR_CONDUCTOR`
+
+```
+nucleo.cable
+  └── nucleo.conductor            (unidad física real, 1..N por cable)
+         └── par_conductor_id NULL → nucleo.par_conductor   (agrupación opcional de 2 conductores)
+```
+
+- `nucleo.par_conductor` **no se modifica de forma destructiva**: mantiene exactamente su forma actual (`id, proyecto_id, cable_id, numero_par`, sin `activo`, registro histórico permanente). Sigue siendo válida y consultable tal cual para todo lo ya creado.
+- `nucleo.conductor` es la tabla nueva: cada conductor pertenece a un cable (`cable_id`) y, **opcionalmente**, a un par (`par_conductor_id NULL`). Un cable de conductores individuales (`"19c"`) tiene N filas `conductor` con `par_conductor_id = NULL`; un cable de pares (`"8p"`) tiene 2N filas `conductor`, agrupadas de a 2 bajo cada fila `par_conductor`.
+- **Convivencia con los registros existentes**: los `par_conductor` ya creados (fixtures de pruebas, sin datos reales de producción todavía) **permanecen intactos** — no se les asigna retroactivamente `conductor` a menos que se decida un backfill explícito más adelante (fuera de alcance de 015, ver 37.15). El código de aplicación deja de crear nuevas rutas usando solo `par_conductor`/`tramo_conexion.par_conductor_id` (ver 37.5) y empieza a operar sobre `conductor`, pero nada obliga a migrar el historial ya existente.
+- Cardinalidad de un par: se recomienda una regla (constraint o trigger, a definir en la implementación) de **como máximo 2** conductores activos por `par_conductor_id` — no se fuerza `= 2` exactamente para no bloquear un estado transitorio "par con un solo conductor cargado todavía".
+
+### 37.5 Decisión: `tramo_conexion.par_conductor_id` → **se retira de uso, no se elimina de golpe**
+
+Un tramo real puede transportar varios conductores simultáneamente (`HYO` = 5). Una columna singular `par_conductor_id` en `tramo_conexion` no puede expresar eso — es la misma limitación de cardinalidad que 37.1 encontró en `punto_conexion.terminal_id`, aplicada ahora al tramo en vez del punto. **Se introduce `nucleo.tramo_conductor` como tabla intermedia** (ver 37.6) que reemplaza esta relación. `tramo_conexion.par_conductor_id` se **deja intacta en su forma actual** (nullable, sin tocar su tipo/FK) por disciplina de no-destrucción sobre `001`–`014`, pero queda **deprecada**: el código de aplicación (rutas backend futuras) deja de escribirla para tramos nuevos creados bajo el modelo de `015`; los tramos existentes que ya la tengan poblada (fixtures de prueba) conservan su valor sin verse afectados. Una futura migración (`016+`, fuera de alcance aquí) podría formalizar su retiro (`DROP COLUMN`) una vez que ningún flujo activo dependa de ella — decisión que no corresponde tomar en este rediseño.
+
+### 37.6 Análisis de necesidad de `TRAMO_CONDUCTOR` → **necesaria**
+
+Sin ella, `terminacion` tendría que referenciar `(tramo_conexion_id, conductor_id)` directamente — funcionalmente posible, pero peor en integridad relacional: permitiría, por error, registrar una terminación para un conductor que nunca fue declarado como parte de ese tramo (nada impediría vincular un conductor de un cable completamente distinto). `tramo_conductor` declara explícitamente **qué conductores participan en qué tramo** como un hecho propio, independiente de si ya tienen terminación en alguno de sus extremos — y le da a `terminacion` una clave natural single-FK (`tramo_conductor_id`) en lugar de una compuesta. Es el mismo patrón que ya usa el esquema para otras relaciones N:M explícitas (`gabinete_plano`, `caja_plano` de la migración 014): declarar la pertenencia como su propia fila, no inferirla.
+
+### 37.7 Modelo final (bloque_terminal · terminal · conductor · tramo_conductor · terminacion)
+
+```
+nucleo.cable
+  └── nucleo.conductor (cable_id, par_conductor_id NULL)
+
+nucleo.ruta_conexion
+  └── nucleo.tramo_conexion (punto_origen_id, punto_destino_id, numero_orden)
+         └── nucleo.tramo_conductor (tramo_conexion_id, conductor_id)
+                ├── nucleo.terminacion (extremo = ORIGEN, terminal_id)
+                └── nucleo.terminacion (extremo = DESTINO, terminal_id)
+
+nucleo.caja / nucleo.gabinete / nucleo.modulo
+  └── nucleo.bloque_terminal (caja_id XOR gabinete_id XOR modulo_id, codigo)
+         └── nucleo.terminal (bloque_terminal_id, numero)
+```
+
+`punto_conexion` no cambia de rol (sigue siendo el extremo lógico del tramo, dueño XOR de 5 vías) y **no** gana un `terminal_id` — el detalle físico de terminales vive exclusivamente en `terminacion`/`terminal`, un nivel más abajo que `punto_conexion`, conectado indirectamente a través de `tramo_conductor`/`tramo_conexion`.
+
+### 37.8 ¿Es necesario `extremo`? → **sí, columna explícita obligatoria**
+
+Un mismo conductor (una fila `tramo_conductor`) tiene físicamente dos puntas: la que aterriza en el nodo de origen del tramo y la que aterriza en el nodo de destino — y son **dos terminales distintos** (ej. conductor 1 del cable `620HV5084-T01`: origen = terminal de la caja `620-TBC-XXX1`, destino = terminal del gabinete). Nada en `tramo_conductor_id` por sí solo indica cuál extremo corresponde a cuál fila de `terminacion` si hay dos filas por conductor — sin un campo `extremo` explícito, dos terminaciones del mismo `tramo_conductor_id` serían indistinguibles salvo por su `terminal_id`, y no habría forma de saber cuál es la de origen y cuál la de destino sin inspeccionar externamente cada `terminal.bloque_terminal_id` y compararlo contra `punto_origen`/`punto_destino` del tramo — una inferencia frágil e indirecta. `extremo NVARCHAR(10) NOT NULL CHECK (extremo IN ('ORIGEN','DESTINO'))` lo hace explícito y consultable en una sola columna, sin depender de un join adicional para saber qué extremo es cuál.
+
+### 37.9 Principio de `bloque_terminal`/`terminal` — confirmado sin cambios respecto a 36.12
+
+Se mantiene el diseño ya aprobado: `bloque_terminal` con dueño XOR de 3 vías (`caja_id`/`gabinete_id`/`modulo_id`), `codigo` como dato real (nunca hardcodeado a `"TB"`), `terminal` hijo con `numero` libre y `UNIQUE(bloque_terminal_id, numero) WHERE activo = 1`. Esto ya soporta, sin cambios adicionales: `cable → terminal de caja`, `cable → terminal de gabinete`, `cable → terminal de módulo`, y `terminal de gabinete → cableado interno (un tramo más, con su propio tramo_conductor/terminacion) → terminal de módulo`.
+
+### 37.10 `BORNERA` project-scoped — solución más simple que no impone una regla falsa global
+
+No se crea ningún catálogo nuevo para `BORNERA`. La política conservadora pedida ("no fijarlo globalmente como verdad universal del fabricante") se cumple de forma directa porque **`BORNERA` nunca fue propuesta como catálogo global** — es simplemente el valor de `terminal.numero` para un terminal cuyo `bloque_terminal.gabinete_id` está poblado (ej. `terminal.numero = 'F1-2'`). Es un dato capturado por proyecto, exactamente igual que cualquier otro `terminal.numero`, sin derivación ni fórmula. Si en el futuro se detecta que varios proyectos repiten la misma convención de forma consistente, ahí sí se justificaría una "plantilla de cableado de RIO" reutilizable (tabla de plantilla + un paso de generación masiva de `terminal` a partir de ella) — pero eso es una optimización de captura de datos, no un requisito de integridad, y **no se diseña en 015** por falta de evidencia multi-proyecto (pregunta abierta 1 de 36.16, ahora resuelta operativamente: se trata como dato de proyecto, sin catálogo).
+
+### 37.11 `T_MODULO` como metadato de catálogo — tabla recomendada
+
+`T_MODULO` sí es un hecho de fábrica (determinístico por modelo+canal, 0 contraejemplos). Se agrega:
+
+```
+cat.cat_modulo_io_terminal (catalogo_modulo_id, numero_canal) → etiqueta_terminal
+```
+
+Global (sin `proyecto_id`, mismo criterio que el resto de `cat.*`), `UNIQUE(catalogo_modulo_id, numero_canal)`. Con esto, la etiqueta de fábrica de un canal se deriva vía `canal → modulo.catalogo_modulo_id + canal.numero_canal → cat_modulo_io_terminal.etiqueta_terminal`, sin retipearla por cada módulo instalado.
+
+Para que `terminacion.terminal_id` sea uniforme sin importar si el dueño es caja/gabinete/módulo (evita un tipo de FK especial solo para módulos), se recomienda que un `modulo` real tenga también su propio `bloque_terminal` (con `modulo_id` poblado) y una fila `terminal` por canal — pero el **texto** de esa fila (`terminal.numero`) se **deriva/copia** de `cat_modulo_io_terminal` en el momento de crear el módulo o el canal (no se retipea a mano), en vez de dejarlo como dato manual libre como en caja/gabinete. Esta es una decisión de implementación (cuándo y cómo se generan esas filas) que no se resuelve en este rediseño — solo se confirma que el catálogo de origen (`cat_modulo_io_terminal`) es la pieza que falta y que la forma de `terminal` no necesita bifurcarse por tipo de dueño.
+
+### 37.12 Puentes y terminales comunes — no implementar, no bloquear
+
+Regla por defecto: ocupación doble de un terminal se **rechaza**. Esto se implementa como índice único filtrado sobre `terminacion`: `UNIQUE(terminal_id) WHERE activo = 1` — un terminal activo admite como máximo una terminación activa. Esto **no imposibilita** modelar puentes/jumpers/distribución más adelante: el día que se necesite, basta con relajar esa unicidad condicionalmente (por ejemplo agregando un `tipo_terminacion` o `es_puente BIT` a `terminacion` y excluyendo las filas marcadas como puente del índice filtrado) — un cambio aditivo de una futura migración, no una reestructuración. No se diseña esa funcionalidad ahora porque no hay evidencia real de que exista en el dominio (pregunta abierta 3 de 36.16, sigue abierta).
+
+### 37.13 Formato legacy anómalo (`"F1-F2-3-4"`) — no bloquea la arquitectura
+
+Se trata como dato legacy ambiguo, no como un patrón a soportar en el diseño. La arquitectura de `terminal`/`bloque_terminal` no necesita saber nada sobre cómo se parsea ese texto: cuando exista una futura importación real de este dato, la política será detectar + advertir + no corregir automáticamente (mismo precedente que `codigo_plano` duplicado y `PLANO_CONEX_INTERIOR` en `014_planos`), dejando la fila como pendiente de revisión humana. No afecta ni una sola columna del draft DDL de 37.14.
+
+### 37.14 Draft DDL conceptual (SOLO DRAFT — no se crea ningún archivo)
+
+```sql
+-- ============================================================
+-- nucleo.conductor — unidad física fundamental de un cable
+-- ============================================================
+CREATE TABLE nucleo.conductor (
+    id                BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id       BIGINT NOT NULL,
+    cable_id          BIGINT NULL,            -- NULL = conductor/jumper interno sin cable formal de proyecto (37.17)
+    numero_conductor  INT NOT NULL,
+    par_conductor_id  BIGINT NULL,            -- agrupación opcional de a 2 (37.4)
+    etiqueta          NVARCHAR(10) NULL,      -- ej. 'A'/'B' dentro de un par, informativo
+    activo            BIT NOT NULL CONSTRAINT DF_conductor_activo DEFAULT (1),
+    created_at        DATETIME2 NOT NULL CONSTRAINT DF_conductor_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at        DATETIME2 NULL,
+    created_by        BIGINT NULL,
+    updated_by        BIGINT NULL,
+    CONSTRAINT PK_conductor PRIMARY KEY (id),
+    CONSTRAINT UQ_conductor_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_conductor_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_conductor_cable FOREIGN KEY (cable_id, proyecto_id) REFERENCES nucleo.cable (id, proyecto_id),
+    CONSTRAINT FK_conductor_par FOREIGN KEY (par_conductor_id, proyecto_id) REFERENCES nucleo.par_conductor (id, proyecto_id),
+    CONSTRAINT FK_conductor_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_conductor_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+-- único cuando pertenece a un cable real; un jumper sin cable_id no compite por numeración
+CREATE UNIQUE INDEX UX_conductor_cable_numero
+    ON nucleo.conductor (cable_id, numero_conductor)
+    WHERE cable_id IS NOT NULL AND activo = 1;
+
+-- ============================================================
+-- nucleo.bloque_terminal — dueño XOR de 3 vías (caja/gabinete/modulo)
+-- ============================================================
+CREATE TABLE nucleo.bloque_terminal (
+    id            BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id   BIGINT NOT NULL,
+    caja_id       BIGINT NULL,
+    gabinete_id   BIGINT NULL,
+    modulo_id     BIGINT NULL,
+    codigo        NVARCHAR(20) NOT NULL,      -- dato real: 'TB', 'TB1', 'TB2', 'X1'... (13)
+    descripcion   NVARCHAR(200) NULL,
+    activo        BIT NOT NULL CONSTRAINT DF_bloque_terminal_activo DEFAULT (1),
+    created_at    DATETIME2 NOT NULL CONSTRAINT DF_bloque_terminal_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at    DATETIME2 NULL,
+    created_by    BIGINT NULL,
+    updated_by    BIGINT NULL,
+    CONSTRAINT PK_bloque_terminal PRIMARY KEY (id),
+    CONSTRAINT UQ_bloque_terminal_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT CK_bloque_terminal_pertenencia_xor CHECK (
+        (IIF(caja_id IS NOT NULL,1,0) + IIF(gabinete_id IS NOT NULL,1,0) + IIF(modulo_id IS NOT NULL,1,0)) = 1
+    ),
+    CONSTRAINT FK_bloque_terminal_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_bloque_terminal_caja FOREIGN KEY (caja_id, proyecto_id) REFERENCES nucleo.caja (id, proyecto_id),
+    CONSTRAINT FK_bloque_terminal_gabinete FOREIGN KEY (gabinete_id, proyecto_id) REFERENCES nucleo.gabinete (id, proyecto_id),
+    CONSTRAINT FK_bloque_terminal_modulo FOREIGN KEY (modulo_id, proyecto_id) REFERENCES nucleo.modulo (id, proyecto_id),
+    CONSTRAINT FK_bloque_terminal_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_bloque_terminal_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_bloque_terminal_caja_codigo
+    ON nucleo.bloque_terminal (caja_id, codigo) WHERE caja_id IS NOT NULL AND activo = 1;
+CREATE UNIQUE INDEX UX_bloque_terminal_gabinete_codigo
+    ON nucleo.bloque_terminal (gabinete_id, codigo) WHERE gabinete_id IS NOT NULL AND activo = 1;
+CREATE UNIQUE INDEX UX_bloque_terminal_modulo_codigo
+    ON nucleo.bloque_terminal (modulo_id, codigo) WHERE modulo_id IS NOT NULL AND activo = 1;
+
+-- ============================================================
+-- nucleo.terminal — terminal individual dentro de un bloque
+-- ============================================================
+CREATE TABLE nucleo.terminal (
+    id                  BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id         BIGINT NOT NULL,
+    bloque_terminal_id  BIGINT NOT NULL,
+    numero              NVARCHAR(20) NOT NULL,   -- 'F1-2', '10', 'IN-0'... texto real, no derivado por fórmula
+    activo              BIT NOT NULL CONSTRAINT DF_terminal_activo DEFAULT (1),
+    created_at          DATETIME2 NOT NULL CONSTRAINT DF_terminal_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at          DATETIME2 NULL,
+    created_by          BIGINT NULL,
+    updated_by          BIGINT NULL,
+    CONSTRAINT PK_terminal PRIMARY KEY (id),
+    CONSTRAINT UQ_terminal_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_terminal_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_terminal_bloque FOREIGN KEY (bloque_terminal_id, proyecto_id) REFERENCES nucleo.bloque_terminal (id, proyecto_id),
+    CONSTRAINT FK_terminal_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_terminal_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_terminal_bloque_numero
+    ON nucleo.terminal (bloque_terminal_id, numero) WHERE activo = 1;
+
+-- ============================================================
+-- nucleo.tramo_conductor — qué conductores participan en qué tramo (37.6)
+-- ============================================================
+CREATE TABLE nucleo.tramo_conductor (
+    id                 BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id        BIGINT NOT NULL,
+    tramo_conexion_id  BIGINT NOT NULL,
+    conductor_id       BIGINT NOT NULL,
+    activo             BIT NOT NULL CONSTRAINT DF_tramo_conductor_activo DEFAULT (1),
+    created_at         DATETIME2 NOT NULL CONSTRAINT DF_tramo_conductor_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at         DATETIME2 NULL,
+    created_by         BIGINT NULL,
+    updated_by         BIGINT NULL,
+    CONSTRAINT PK_tramo_conductor PRIMARY KEY (id),
+    CONSTRAINT UQ_tramo_conductor_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_tramo_conductor_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_tramo_conductor_tramo FOREIGN KEY (tramo_conexion_id, proyecto_id) REFERENCES nucleo.tramo_conexion (id, proyecto_id),
+    CONSTRAINT FK_tramo_conductor_conductor FOREIGN KEY (conductor_id, proyecto_id) REFERENCES nucleo.conductor (id, proyecto_id),
+    CONSTRAINT FK_tramo_conductor_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_tramo_conductor_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_tramo_conductor_tramo_conductor
+    ON nucleo.tramo_conductor (tramo_conexion_id, conductor_id) WHERE activo = 1;
+
+-- ============================================================
+-- nucleo.terminacion — el hecho físico: conductor+tramo+extremo→terminal
+-- ============================================================
+CREATE TABLE nucleo.terminacion (
+    id                  BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id         BIGINT NOT NULL,
+    tramo_conductor_id  BIGINT NOT NULL,
+    extremo             NVARCHAR(10) NOT NULL,   -- 'ORIGEN' | 'DESTINO' (37.8)
+    terminal_id         BIGINT NOT NULL,
+    activo              BIT NOT NULL CONSTRAINT DF_terminacion_activo DEFAULT (1),
+    created_at          DATETIME2 NOT NULL CONSTRAINT DF_terminacion_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at          DATETIME2 NULL,
+    created_by          BIGINT NULL,
+    updated_by          BIGINT NULL,
+    CONSTRAINT PK_terminacion PRIMARY KEY (id),
+    CONSTRAINT UQ_terminacion_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT CK_terminacion_extremo CHECK (extremo IN ('ORIGEN','DESTINO')),
+    CONSTRAINT FK_terminacion_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_terminacion_tramo_conductor FOREIGN KEY (tramo_conductor_id, proyecto_id) REFERENCES nucleo.tramo_conductor (id, proyecto_id),
+    CONSTRAINT FK_terminacion_terminal FOREIGN KEY (terminal_id, proyecto_id) REFERENCES nucleo.terminal (id, proyecto_id),
+    CONSTRAINT FK_terminacion_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_terminacion_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+-- un conductor, en un tramo, tiene a lo sumo una terminación por extremo
+CREATE UNIQUE INDEX UX_terminacion_tramo_conductor_extremo
+    ON nucleo.terminacion (tramo_conductor_id, extremo) WHERE activo = 1;
+-- ocupación: un terminal activo admite como máximo una terminación activa (37.12; relajable a futuro sin romper esto)
+CREATE UNIQUE INDEX UX_terminacion_terminal_ocupacion
+    ON nucleo.terminacion (terminal_id) WHERE activo = 1;
+
+-- ============================================================
+-- cat.cat_modulo_io_terminal — metadato de fábrica por (modelo, canal) (37.11)
+-- ============================================================
+CREATE TABLE cat.cat_modulo_io_terminal (
+    id                  BIGINT IDENTITY(1,1) NOT NULL,
+    catalogo_modulo_id  BIGINT NOT NULL,
+    numero_canal        INT NOT NULL,
+    etiqueta_terminal   NVARCHAR(50) NOT NULL,   -- ej. 'IN-0;L2-0', 'OUT-4;L1-4'
+    activo              BIT NOT NULL CONSTRAINT DF_cat_modulo_io_terminal_activo DEFAULT (1),
+    created_at          DATETIME2 NOT NULL CONSTRAINT DF_cat_modulo_io_terminal_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at          DATETIME2 NULL,
+    CONSTRAINT PK_cat_modulo_io_terminal PRIMARY KEY (id),
+    CONSTRAINT FK_cat_modulo_io_terminal_modulo FOREIGN KEY (catalogo_modulo_id) REFERENCES cat.cat_modulo_io (id)
+);
+CREATE UNIQUE INDEX UX_cat_modulo_io_terminal_modelo_canal
+    ON cat.cat_modulo_io_terminal (catalogo_modulo_id, numero_canal) WHERE activo = 1;
+
+-- ============================================================
+-- Sin cambios de esquema a: punto_conexion (se elimina la idea de agregarle terminal_id — 37.1/37.2),
+-- par_conductor (se conserva intacta — 37.4), tramo_conexion (par_conductor_id se deja intacta pero
+-- deprecada en código de aplicación — 37.5).
+-- ============================================================
+```
+
+### 37.15 Casos reales representados sin ambigüedad (demostración pedida, no simplificar por reducir tablas)
+
+**AI 2 hilos** (`620-PIT-5058`, cable `1-1p#16 AWG+SH`): 1 `par_conductor` → 2 `conductor` (par_conductor_id compartido) → 2 `tramo_conductor` (uno por conductor, mismo tramo instrumento→caja) → cada uno con 2 `terminacion` (ORIGEN en un terminal del bloque del instrumento/borne de campo, DESTINO en un terminal de `bloque_terminal` de la caja `620-TBJ-XXX1`). Cero ambigüedad: cada hilo del par tiene su propia fila de principio a fin.
+
+**RTD 3 hilos** (`620-TE-5041A`, `T_MODULO` con 3 partes `IN_0/A;IN_0/A;IN_0/RTD C`): 3 `conductor` del cable de instrumento (sin necesidad de forzarlos en pares — dos son "A" y uno es "RTD C", una terna, no un par), 3 `tramo_conductor` sobre el mismo tramo, 6 `terminacion` (3 ORIGEN en caja, 3 DESTINO en el módulo — cada una apuntando al `terminal` correcto derivado de `cat_modulo_io_terminal` para ese canal). El modelo no necesita "adivinar" que son 3 y no 2: cada conductor real tiene su fila.
+
+**`HYO` 5 hilos** (`620-HYO-5084`, cable `620HV5084-T01`, `BORNE_JB=10,11,12,13,14`): 5 `conductor` (numerados 1-5 dentro del cable de 19 conductores, `par_conductor_id = NULL` — no son pares, ver `"1-19c"` abajo), 5 `tramo_conductor` sobre el tramo instrumento→caja `620-TBC-XXX1`, 5 `terminacion` de ORIGEN (una por cada terminal de la caja, informativamente equivalentes a los `BORNE_JB` legacy `10..14` pero identificados por `terminal.id` real de SIEI, no por el número legacy reiniciable) + 5 `terminacion` de DESTINO si el tramo continúa hacia el gabinete/módulo. Este es exactamente el caso que 37.1 demostró que la propuesta anterior no podía representar, y aquí queda representado sin ambigüedad: 5 filas `tramo_conductor`, 10 filas `terminacion` (5 ORIGEN + 5 DESTINO), cada una con su propio `terminal_id`.
+
+**Cable `1-19c#14 AWG`** (19 conductores individuales, el propio cable de `620-HV-5084`): 19 filas `conductor` con `cable_id` apuntando a este cable y `par_conductor_id = NULL` en todas — nunca se fuerza una agrupación de a 2 donde físicamente no existe.
+
+**Cable `1-1p#18 AWG+SH`** (1 par blindado): 1 fila `par_conductor` + 2 filas `conductor` con `par_conductor_id` apuntando a esa fila — agrupación real, usada donde corresponde.
+
+### 37.16 Impacto sobre lo existente (punto 23) — todo vía migración nueva, `001`–`014` sin tocar
+
+| Tabla/objeto | Impacto |
+|---|---|
+| `nucleo.punto_conexion` | **Sin cambio de esquema.** Sigue siendo el extremo lógico del tramo; nunca gana `terminal_id` (37.1/37.2). |
+| `nucleo.tramo_conexion` | **Sin cambio de esquema.** `par_conductor_id` se deja intacta pero deprecada en código de aplicación (37.5); nuevas rutas la dejan `NULL` y usan `tramo_conductor` en su lugar. |
+| `nucleo.par_conductor` | **Sin cambio de esquema, sin dato tocado.** Pasa a ser una agrupación opcional referenciada desde `conductor.par_conductor_id`, no la unidad fundamental. |
+| Triggers de ruta (`TR_tramo_conexion_validar_secuencia`, `TR_senal_validar_canal_ruta`, `TR_tramo_conexion_validar_canal_ruta`) | **Sin cambio de lógica.** Siguen validando la secuencia/coherencia de `punto_conexion`/`tramo_conexion` exactamente igual — son ortogonales a `conductor`/`terminacion`, que operan un nivel más abajo. |
+| `backend/src/routes/connectionPoints.ts` | Sin cambio de contrato en 015 (los 6 campos de texto libre se mantienen, como deuda técnica reconocida — 36.10). Un futuro endpoint nuevo (`terminaciones.ts`, no creado en este turno) manejaría `conductor`/`tramo_conductor`/`terminacion`/`bloque_terminal`/`terminal`. |
+| Frontend / tests existentes | **Sin impacto** — ningún endpoint ni tabla existente cambia de forma. |
+
+### 37.17 Cableado interno de gabinete sin cable formal (punto 17)
+
+Confirmado que el tramo `Gabinete TB1 → conductor/jumper interno → Módulo/canal/terminal` se representa como **un tramo más** (`tramo_conexion` normal, con su `tramo_conductor`/`terminacion` normales) — no se inventa un concepto especial de "jumper". Para no obligar falsamente a que todo tramo tenga un cable externo identificado, `nucleo.conductor.cable_id` se diseña **NULLABLE** (ver DDL 37.14): un conductor interno/jumper puede existir con `cable_id = NULL`, conservando su propia identidad (`conductor.id`) y sus dos `terminacion` (ORIGEN/DESTINO), sin pertenecer a ningún `nucleo.cable` de proyecto. No se crea catálogo de jumpers.
+
+### 37.18 Tests que debería tener `015` (diseño, no se escriben en este turno)
+
+Creación de `bloque_terminal`/`terminal` para caja/gabinete/módulo (incluyendo el XOR) · `UNIQUE` filtrado de `terminal.numero` dentro de un bloque · creación de `conductor` con y sin `par_conductor_id` · creación de `conductor` con `cable_id = NULL` (jumper) · `tramo_conductor` ligando un conductor a un tramo · `terminacion` ORIGEN y DESTINO para el mismo `tramo_conductor` (caso 1 conductor) · caso multi-conductor tipo `HYO` (5 conductores, 10 terminaciones) sin colisión · rechazo de doble ocupación de un mismo `terminal` (`UX_terminacion_terminal_ocupacion`) · rechazo de dos `terminacion` del mismo extremo para el mismo `tramo_conductor` · aislamiento cross-project en las 5 tablas nuevas (mismo patrón FK compuesta) · soft delete (`activo`) en cada tabla · auditoría (`created_by`/`updated_by`) · `cat_modulo_io_terminal` determinístico por `(catalogo_modulo_id, numero_canal)`.
+
+### 37.19 Migración/backfill de fixtures existentes (punto 24)
+
+**No se migran datos automáticamente.** Los `par_conductor` de prueba ya existentes (fixtures de smoke tests) permanecen exactamente como están — no se les crea `conductor` retroactivo en `015`. Cualquier fixture nueva de prueba que se agregue durante la implementación de `015` deberá crear sus propios `conductor`/`tramo_conductor`/`terminacion` desde cero, sin depender de datos previos. Esto es consistente con "no cargar data real" y con el hecho de que ninguna de las tablas nuevas tiene aún una sola fila en ningún ambiente.
+
+### 37.20 Preguntas que realmente siguen abiertas (punto 25)
+
+1. **¿Cuándo/cómo se generan las filas `terminal` de un módulo?** (37.11) — ¿al crear el `modulo`, al crear cada `canal`, o bajo demanda/derivadas sin fila física? No resuelto — impacta si `terminacion.terminal_id` para el lado módulo siempre existe de antemano o debe crearse la primera vez que se usa.
+2. **Cardinalidad exacta de `par_conductor`**: ¿debe forzarse `= 2` conductores activos (con un trigger) o basta con "como máximo 2"? (37.4) — no decidido, es un detalle de implementación pendiente de confirmar.
+3. **Convención de `numero_conductor`**: ¿secuencial simple 1..N por cable (como se asumió en 37.15), o debe reflejar alguna convención de color/posición física del cable? No hay evidencia Excel que lo exija, pero tampoco se descartó explícitamente.
+4. Las 5 preguntas de 36.16 que no dependían de esta revisión (puentes reales, formato `"F1-F2-3-4"`, multi-bloque `TB1`/`TB2` sin evidencia real, `BORNERA` universal vs. proyecto — esta última ahora resuelta operativamente en 37.10) **siguen abiertas** en los mismos términos.
+
+### 37.21 Estado al cierre de esta revisión
+
+Solo rediseño, tal como se pidió. **No existe `015_terminaciones.sql`. No se aplicó SQL. No hay cambios en backend, frontend, tests ni commit. `001`–`014` sin modificar. No se cargó data real.** La decisión que reabre y reemplaza la de 36.10/36.11 es: `punto_conexion.terminal_id` descartado; `terminacion` + `conductor` + `tramo_conductor` confirmados como necesarios, con `extremo` explícito. Pendiente de aprobación del usuario antes de escribir `015_terminaciones.sql`.
+
+## 38. Último ajuste de diseño — `015_terminaciones` (SOLO DISEÑO, cuarta corrección)
+
+Disparado por "ÚLTIMO AJUSTE DE DISEÑO — 015 TERMINACIONES", que aprueba conceptualmente `CONDUCTOR`/`TRAMO_CONDUCTOR`/`TERMINACION`/`BLOQUE_TERMINAL`/`TERMINAL` de la sección 37 pero corrige 4 puntos antes de congelar. Sigue sin existir `015_terminaciones.sql`, sin SQL aplicado, sin backend/frontend/tests/commit, `001`–`014` sin tocar.
+
+### 38.1 Modelo final corregido
+
+```
+nucleo.cable
+  └── nucleo.conductor (cable_id NULL, par_conductor_id NULL)
+
+nucleo.ruta_conexion
+  └── nucleo.tramo_conexion
+         └── nucleo.tramo_conductor (tramo_conexion_id, conductor_id)
+                ├── nucleo.terminacion (extremo = ORIGEN)  → posicion_terminal_id
+                └── nucleo.terminacion (extremo = DESTINO) → posicion_terminal_id
+                       └── nucleo.posicion_terminal (terminal_id, codigo)
+                              └── nucleo.terminal (bloque_terminal_id, numero, catalogo_modulo_io_terminal_id NULL)
+                                     └── nucleo.bloque_terminal (caja_id XOR gabinete_id XOR modulo_id, codigo)
+
+cat.cat_modulo_io_terminal (catalogo_modulo_id, numero_canal, orden_terminal) → etiqueta_terminal   [1:N por canal]
+```
+
+Cambio central respecto a la sección 37: se inserta `posicion_terminal` entre `terminal` y `terminacion`. La ocupación exclusiva se mueve de `terminal` a `posicion_terminal` — un mismo `terminal` físico admite legítimamente 2+ aterrizajes simultáneos (campo + interno) siempre que sean posiciones/clamps distintos del mismo terminal.
+
+### 38.2-38.3 Tablas y columnas definitivas de `015`
+
+**`nucleo.conductor`** (sin cambio respecto a 37.14): `id, proyecto_id, cable_id NULL, numero_conductor, par_conductor_id NULL, etiqueta NULL, activo, created_at, updated_at, created_by, updated_by`.
+
+**`nucleo.bloque_terminal`** (sin cambio respecto a 37.14): `id, proyecto_id, caja_id NULL, gabinete_id NULL, modulo_id NULL, codigo, descripcion NULL, activo, auditoría` — XOR de 3 vías.
+
+**`nucleo.terminal`** (ajustada — agrega la FK de materialización de catálogo, punto 3 del pedido):
+`id, proyecto_id, bloque_terminal_id, numero NVARCHAR(20), catalogo_modulo_io_terminal_id NULL, activo, auditoría`.
+`catalogo_modulo_io_terminal_id` es la solución elegida (evaluada y confirmada, no la alternativa de una FK distinta por tipo de dueño): permite que **toda** `terminacion` llegue a un `terminal` por el mismo camino (`posicion_terminal → terminal`) sin importar si el dueño es caja, gabinete o módulo — para caja/gabinete queda `NULL` (dato manual); para módulo, cuando el terminal se materializa desde catálogo, queda poblada y trazable a la etiqueta de fábrica de origen.
+
+**`nucleo.posicion_terminal`** (nueva — punto 1 del pedido):
+`id, proyecto_id, terminal_id, codigo NVARCHAR(10), activo, auditoría`. `codigo` es texto libre (no se asume A/B universalmente) — para un terminal con un solo punto de aterrizaje se crea una única fila (ej. `codigo='A'` o `'1'`, a elección de quien la capture, sin significado especial); para un terminal de doble clamp físico (campo + interno) se crean 2 filas.
+
+Nombre elegido: **`posicion_terminal`** (patrón "cabeza-calificador" ya usado en el repo: `par_conductor`, `bloque_terminal`, `tramo_conexion` — el sustantivo nuevo va primero, el que ya existe va después). Se descartan `terminal_posicion` (invierte el orden que usa el resto del esquema) y `punto_terminal` (`punto_conexion` ya usa "punto" para el extremo de ruta lógica; reutilizar la palabra para un concepto físico distinto generaría confusión terminológica).
+
+**`nucleo.tramo_conductor`** (sin cambio respecto a 37.14): `id, proyecto_id, tramo_conexion_id, conductor_id, activo, auditoría`.
+
+**`nucleo.terminacion`** (corregida — punto 2 del pedido, sin columnas redundantes):
+`id, proyecto_id, tramo_conductor_id, posicion_terminal_id, extremo NVARCHAR(10), activo, auditoría`. Se eliminan `tramo_conexion_id`/`conductor_id` (ya inferibles vía `tramo_conductor_id`) y se reemplaza `terminal_id` por `posicion_terminal_id`.
+
+**`cat.cat_modulo_io_terminal`** (corregida a 1:N — punto 3 del pedido):
+`id, catalogo_modulo_id, numero_canal, orden_terminal INT NOT NULL, etiqueta_terminal NVARCHAR(50), activo, created_at, updated_at`. `orden_terminal` es lo que permite representar el caso RTD real (canal 0 → 3 filas: `orden=1 'IN_0/A'`, `orden=2 'IN_0/A'`, `orden=3 'IN_0/RTD C'` — dos etiquetas iguales son válidas, `orden_terminal` las distingue).
+
+### 38.4 FKs (todas compuestas `(hijo_id, proyecto_id) → (padre_id, proyecto_id)`, salvo `cat.*` que no lleva `proyecto_id`)
+
+- `conductor.cable_id` → `cable(id, proyecto_id)`, nullable.
+- `conductor.par_conductor_id` → `par_conductor(id, proyecto_id)`, nullable.
+- `bloque_terminal.caja_id/gabinete_id/modulo_id` → `caja/gabinete/modulo(id, proyecto_id)`, cada una nullable (XOR).
+- `terminal.bloque_terminal_id` → `bloque_terminal(id, proyecto_id)`, NOT NULL.
+- `terminal.catalogo_modulo_io_terminal_id` → `cat.cat_modulo_io_terminal(id)`, nullable, **sin `proyecto_id`** (tabla `cat` global).
+- `posicion_terminal.terminal_id` → `terminal(id, proyecto_id)`, NOT NULL.
+- `tramo_conductor.tramo_conexion_id` → `tramo_conexion(id, proyecto_id)`, NOT NULL.
+- `tramo_conductor.conductor_id` → `conductor(id, proyecto_id)`, NOT NULL.
+- `terminacion.tramo_conductor_id` → `tramo_conductor(id, proyecto_id)`, NOT NULL.
+- `terminacion.posicion_terminal_id` → `posicion_terminal(id, proyecto_id)`, NOT NULL.
+- `cat_modulo_io_terminal.catalogo_modulo_id` → `cat.cat_modulo_io(id)`.
+- Todas las tablas `nucleo.*` nuevas llevan además `FK_*_created_by`/`FK_*_updated_by` → `seguridad.usuario(id)` y `FK_*_proyecto` → `nucleo.proyecto(id)`, y su propio `UNIQUE(id, proyecto_id)` para soportar las FKs compuestas de sus hijos — mismo patrón que el resto del esquema.
+
+### 38.5 UNIQUE/índices (punto 8 del pedido, uno a uno)
+
+| Constraint pedida | Implementación exacta |
+|---|---|
+| `UNIQUE bloque_terminal + codigo terminal` | `UX_terminal_bloque_numero (bloque_terminal_id, numero) WHERE activo = 1` |
+| `UNIQUE terminal + codigo posicion` | `UX_posicion_terminal_terminal_codigo (terminal_id, codigo) WHERE activo = 1` |
+| `UNIQUE tramo_conexion + conductor` | `UX_tramo_conductor_tramo_conductor (tramo_conexion_id, conductor_id) WHERE activo = 1` |
+| `UNIQUE tramo_conductor + extremo en terminacion` | `UX_terminacion_tramo_conductor_extremo (tramo_conductor_id, extremo) WHERE activo = 1` |
+| `UNIQUE posicion_terminal ocupada` | `UX_terminacion_posicion_ocupacion (posicion_terminal_id) WHERE activo = 1` — **reemplaza** la `UX_terminacion_terminal_ocupacion` de 37.14, que queda retirada del diseño |
+
+Adicionales no pedidas explícitamente pero necesarias por consistencia:
+- `UX_bloque_terminal_caja_codigo` / `_gabinete_codigo` / `_modulo_codigo` (sin cambio respecto a 37.14).
+- `UX_cat_modulo_io_terminal_modelo_canal_orden (catalogo_modulo_id, numero_canal, orden_terminal) WHERE activo = 1` — reemplaza la versión 2-columnas de 37.14.
+- `UX_terminal_bloque_catalogo (bloque_terminal_id, catalogo_modulo_io_terminal_id) WHERE catalogo_modulo_io_terminal_id IS NOT NULL AND activo = 1` — evita materializar dos veces el mismo terminal de catálogo dentro del mismo bloque de módulo (punto 7 del apartado 38.6).
+
+### 38.6 Modelo terminal de módulo: catálogo → instancia (punto 3 del pedido)
+
+`cat.cat_modulo_io_terminal` es la **definición de fábrica** (1:N por canal, global, sin `proyecto_id`). Un módulo real instalado en un proyecto necesita filas físicas propias porque `terminacion` debe llegar a él por el mismo camino uniforme que caja/gabinete (`posicion_terminal → terminal → bloque_terminal`) — no una FK alternativa solo para módulos.
+
+**Materialización** (momento no resuelto aún, ver 38.14): cuando corresponda materializar un módulo, para cada fila de `cat_modulo_io_terminal` de su `catalogo_modulo_id` se crea:
+1. Un `bloque_terminal` con `modulo_id` poblado (uno por módulo, `codigo` fijo tipo `'MODULO'` o el nombre del módulo — dato real igual que cualquier `bloque_terminal.codigo`).
+2. Un `terminal` hijo con `numero = etiqueta_terminal` (copiado del catálogo) y `catalogo_modulo_io_terminal_id` apuntando a la fila de origen.
+3. Al menos un `posicion_terminal` (normalmente 1, salvo evidencia de que un terminal de módulo también necesite doble clamp — no evidenciado, se deja abierto).
+
+Esto resuelve el requisito explícito: **ninguna arquitectura donde caja/gabinete referencien `nucleo.terminal` pero módulo necesite una FK distinta** — `terminacion.posicion_terminal_id` es siempre el mismo tipo de columna sin importar el dueño final.
+
+### 38.7 Ejemplo `HYO` (5 conductores) con el modelo corregido
+
+Cable `620HV5084-T01` (`"1-19c#14 AWG"`, sin pares) → 5 `conductor` (`par_conductor_id = NULL`) → 5 `tramo_conductor` sobre el tramo instrumento→caja → por cada uno, 1 `terminacion` de ORIGEN (posición del lado instrumento) y, si el tramo continúa, 1 de DESTINO — cada `terminacion.posicion_terminal_id` apunta a una `posicion_terminal` distinta, cada una hija de un `terminal` distinto de la caja `620-TBC-XXX1` (5 terminales físicos separados, informativamente equivalentes a `BORNE_JB=10..14` pero con identidad real de SIEI). Sin cambio de fondo respecto a 37.15 — el ajuste de `posicion_terminal` no afecta este caso porque cada conductor sigue usando un terminal y una posición distintos, no comparte ninguno.
+
+### 38.8 Ejemplo AI 2 hilos con el modelo corregido
+
+`620-PIT-5058`, cable `1-1p#16 AWG+SH`: 1 `par_conductor` → 2 `conductor` → 2 `tramo_conductor` → 4 `terminacion` (2 ORIGEN + 2 DESTINO), cada una a su propia `posicion_terminal` (una por hilo del par, cada una hija de un `terminal` distinto de la caja `620-TBJ-XXX1`). El campo legacy `BORNERA=F1-F2-3-4` (anómalo, 37.13) permanece sin parsear — los 2 terminales reales del par se capturan individualmente (`terminal.numero='F1'`, `terminal.numero='F2'`, por ejemplo) sin depender de ese texto.
+
+### 38.9 Ejemplo RTD 3 hilos con el modelo corregido
+
+`620-TE-5041A`, `T_MODULO` de 3 partes: en el lado del módulo, `cat_modulo_io_terminal` tiene 3 filas para `(catalogo_modulo_id, numero_canal=0)`: `orden=1 'IN_0/A'`, `orden=2 'IN_0/A'`, `orden=3 'IN_0/RTD C'` — al materializar el módulo, esas 3 filas de catálogo generan 3 `terminal` reales (cada uno con su propia `posicion_terminal`). Del lado de la caja, 3 `conductor` (cable de instrumento) → 3 `tramo_conductor` → 3 `terminacion` DESTINO, una por cada `posicion_terminal` de los 3 terminales de módulo materializados. Nunca se fuerza a 2 conductores donde físicamente hay 3.
+
+### 38.10 Ejemplo gabinete `TB1` → módulo (punto 7 del pedido, doble aterrizaje del mismo terminal)
+
+```
+TRAMO A (cable de campo, instrumento → gabinete)
+  conductor 1 → tramo_conductor A1
+    terminacion ORIGEN → posición terminal del lado instrumento/caja
+    terminacion DESTINO → posicion_terminal "A" del terminal "15" del bloque_terminal TB1 (gabinete)
+
+TRAMO B (conductor interno / jumper, gabinete → módulo — cable_id NULL, ver 37.17)
+  conductor interno → tramo_conductor B1
+    terminacion ORIGEN  → posicion_terminal "B" del MISMO terminal "15" del bloque_terminal TB1
+    terminacion DESTINO → posicion_terminal del terminal "IN-2" del bloque_terminal del módulo (materializado desde catálogo)
+```
+
+El `terminal` con `numero='15'` tiene **2 filas `posicion_terminal`** (`codigo='A'`, `codigo='B'`), cada una con **su propia** `terminacion` activa — `UX_terminacion_posicion_ocupacion` no se viola porque la unicidad es por `posicion_terminal_id`, no por `terminal_id`: el mismo terminal físico legítimamente sostiene 2 aterrizajes simultáneos (campo + interno) sin que el modelo lo interprete como doble ocupación.
+
+### 38.11 Impacto sobre estructuras existentes (sin cambios respecto a 37.16, reconfirmado)
+
+`punto_conexion`, `tramo_conexion` (salvo `par_conductor_id` deprecada, no tocada de esquema) y `par_conductor` **sin cambios de esquema ni de datos**. Los triggers de ruta no se tocan. Todo lo nuevo (`conductor`, `bloque_terminal`, `terminal`, `posicion_terminal`, `tramo_conductor`, `terminacion`, `cat.cat_modulo_io_terminal`) vive en una migración `015` propia, aditiva, sin ningún `ALTER`/`DROP` sobre `001`–`014`.
+
+### 38.12 `par_conductor` — sin constraint de cardinalidad (punto 5 del pedido)
+
+Se retira la recomendación de 37.4 de "como máximo 2 conductores activos por par". Motivo: existen configuraciones de cable tipo triad (`Tr`) en los datos que no encajan en "par" ni tienen aún un concepto general de agrupación (`grupo_conductor`) diseñado. Para `015`: `conductor.par_conductor_id` sigue siendo nullable, **sin ningún CHECK/trigger de cardinalidad** — queda como agrupación opcional libre, sin reglas de conteo, hasta que una fase futura diseñe `grupo_conductor` de forma general (triads incluidos) si se confirma que hace falta. `par_conductor` en sí **no se toca** (ni esquema ni datos).
+
+### 38.13 `BORNERA` — terminales guardados individualmente (punto 4 del pedido)
+
+Se descarta la afirmación `BORNERA = terminal.numero` como regla general. Cada borne físico se guarda como su propio `terminal` (ej. `F1-2` → `terminal.numero='F1'` + `terminal.numero='F2'`, dos filas hermanas del mismo `bloque_terminal`). La reconstrucción de la presentación legacy (`"F1-2"`) es un problema de lectura/agrupación (ej. por rango numérico o por adyacencia de creación), no de almacenamiento — no se agrega ninguna columna de agrupación en `015` (ni falta: agregar un `terminal.grupo_legacy_bornera NVARCHAR(20) NULL` más adelante sería un cambio aditivo trivial si la reconstrucción de lectura resulta insuficiente, pero no se justifica todavía). El formato `"F1-F2-3-4"` sigue **sin parsear automáticamente** — se documenta como dato ambiguo para detectar+advertir en una futura importación, igual que en 37.13.
+
+### 38.14 Draft DDL final actualizado (SOLO DRAFT — no se crea ningún archivo)
+
+```sql
+-- nucleo.conductor — sin cambios respecto a 37.14 (cable_id NULL, par_conductor_id NULL, SIN constraint de cardinalidad de par)
+CREATE TABLE nucleo.conductor (
+    id                BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id       BIGINT NOT NULL,
+    cable_id          BIGINT NULL,
+    numero_conductor  INT NOT NULL,
+    par_conductor_id  BIGINT NULL,
+    etiqueta          NVARCHAR(10) NULL,
+    activo            BIT NOT NULL CONSTRAINT DF_conductor_activo DEFAULT (1),
+    created_at        DATETIME2 NOT NULL CONSTRAINT DF_conductor_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at        DATETIME2 NULL,
+    created_by        BIGINT NULL,
+    updated_by        BIGINT NULL,
+    CONSTRAINT PK_conductor PRIMARY KEY (id),
+    CONSTRAINT UQ_conductor_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_conductor_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_conductor_cable FOREIGN KEY (cable_id, proyecto_id) REFERENCES nucleo.cable (id, proyecto_id),
+    CONSTRAINT FK_conductor_par FOREIGN KEY (par_conductor_id, proyecto_id) REFERENCES nucleo.par_conductor (id, proyecto_id),
+    CONSTRAINT FK_conductor_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_conductor_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_conductor_cable_numero
+    ON nucleo.conductor (cable_id, numero_conductor) WHERE cable_id IS NOT NULL AND activo = 1;
+
+-- nucleo.bloque_terminal — sin cambios respecto a 37.14
+CREATE TABLE nucleo.bloque_terminal (
+    id            BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id   BIGINT NOT NULL,
+    caja_id       BIGINT NULL,
+    gabinete_id   BIGINT NULL,
+    modulo_id     BIGINT NULL,
+    codigo        NVARCHAR(20) NOT NULL,
+    descripcion   NVARCHAR(200) NULL,
+    activo        BIT NOT NULL CONSTRAINT DF_bloque_terminal_activo DEFAULT (1),
+    created_at    DATETIME2 NOT NULL CONSTRAINT DF_bloque_terminal_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at    DATETIME2 NULL,
+    created_by    BIGINT NULL,
+    updated_by    BIGINT NULL,
+    CONSTRAINT PK_bloque_terminal PRIMARY KEY (id),
+    CONSTRAINT UQ_bloque_terminal_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT CK_bloque_terminal_pertenencia_xor CHECK (
+        (IIF(caja_id IS NOT NULL,1,0) + IIF(gabinete_id IS NOT NULL,1,0) + IIF(modulo_id IS NOT NULL,1,0)) = 1
+    ),
+    CONSTRAINT FK_bloque_terminal_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_bloque_terminal_caja FOREIGN KEY (caja_id, proyecto_id) REFERENCES nucleo.caja (id, proyecto_id),
+    CONSTRAINT FK_bloque_terminal_gabinete FOREIGN KEY (gabinete_id, proyecto_id) REFERENCES nucleo.gabinete (id, proyecto_id),
+    CONSTRAINT FK_bloque_terminal_modulo FOREIGN KEY (modulo_id, proyecto_id) REFERENCES nucleo.modulo (id, proyecto_id),
+    CONSTRAINT FK_bloque_terminal_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_bloque_terminal_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_bloque_terminal_caja_codigo ON nucleo.bloque_terminal (caja_id, codigo) WHERE caja_id IS NOT NULL AND activo = 1;
+CREATE UNIQUE INDEX UX_bloque_terminal_gabinete_codigo ON nucleo.bloque_terminal (gabinete_id, codigo) WHERE gabinete_id IS NOT NULL AND activo = 1;
+CREATE UNIQUE INDEX UX_bloque_terminal_modulo_codigo ON nucleo.bloque_terminal (modulo_id, codigo) WHERE modulo_id IS NOT NULL AND activo = 1;
+
+-- cat.cat_modulo_io_terminal — 1:N por canal (orden_terminal)
+CREATE TABLE cat.cat_modulo_io_terminal (
+    id                  BIGINT IDENTITY(1,1) NOT NULL,
+    catalogo_modulo_id  BIGINT NOT NULL,
+    numero_canal        INT NOT NULL,
+    orden_terminal      INT NOT NULL,
+    etiqueta_terminal   NVARCHAR(50) NOT NULL,
+    activo              BIT NOT NULL CONSTRAINT DF_cat_modulo_io_terminal_activo DEFAULT (1),
+    created_at          DATETIME2 NOT NULL CONSTRAINT DF_cat_modulo_io_terminal_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at          DATETIME2 NULL,
+    CONSTRAINT PK_cat_modulo_io_terminal PRIMARY KEY (id),
+    CONSTRAINT FK_cat_modulo_io_terminal_modulo FOREIGN KEY (catalogo_modulo_id) REFERENCES cat.cat_modulo_io (id)
+);
+CREATE UNIQUE INDEX UX_cat_modulo_io_terminal_modelo_canal_orden
+    ON cat.cat_modulo_io_terminal (catalogo_modulo_id, numero_canal, orden_terminal) WHERE activo = 1;
+
+-- nucleo.terminal — agrega catalogo_modulo_io_terminal_id NULL
+CREATE TABLE nucleo.terminal (
+    id                            BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id                   BIGINT NOT NULL,
+    bloque_terminal_id            BIGINT NOT NULL,
+    numero                        NVARCHAR(20) NOT NULL,
+    catalogo_modulo_io_terminal_id BIGINT NULL,
+    activo                        BIT NOT NULL CONSTRAINT DF_terminal_activo DEFAULT (1),
+    created_at                    DATETIME2 NOT NULL CONSTRAINT DF_terminal_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at                    DATETIME2 NULL,
+    created_by                    BIGINT NULL,
+    updated_by                    BIGINT NULL,
+    CONSTRAINT PK_terminal PRIMARY KEY (id),
+    CONSTRAINT UQ_terminal_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_terminal_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_terminal_bloque FOREIGN KEY (bloque_terminal_id, proyecto_id) REFERENCES nucleo.bloque_terminal (id, proyecto_id),
+    CONSTRAINT FK_terminal_catalogo FOREIGN KEY (catalogo_modulo_io_terminal_id) REFERENCES cat.cat_modulo_io_terminal (id),
+    CONSTRAINT FK_terminal_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_terminal_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_terminal_bloque_numero ON nucleo.terminal (bloque_terminal_id, numero) WHERE activo = 1;
+CREATE UNIQUE INDEX UX_terminal_bloque_catalogo ON nucleo.terminal (bloque_terminal_id, catalogo_modulo_io_terminal_id)
+    WHERE catalogo_modulo_io_terminal_id IS NOT NULL AND activo = 1;
+
+-- nucleo.posicion_terminal — NUEVA
+CREATE TABLE nucleo.posicion_terminal (
+    id            BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id   BIGINT NOT NULL,
+    terminal_id   BIGINT NOT NULL,
+    codigo        NVARCHAR(10) NOT NULL,
+    activo        BIT NOT NULL CONSTRAINT DF_posicion_terminal_activo DEFAULT (1),
+    created_at    DATETIME2 NOT NULL CONSTRAINT DF_posicion_terminal_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at    DATETIME2 NULL,
+    created_by    BIGINT NULL,
+    updated_by    BIGINT NULL,
+    CONSTRAINT PK_posicion_terminal PRIMARY KEY (id),
+    CONSTRAINT UQ_posicion_terminal_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_posicion_terminal_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_posicion_terminal_terminal FOREIGN KEY (terminal_id, proyecto_id) REFERENCES nucleo.terminal (id, proyecto_id),
+    CONSTRAINT FK_posicion_terminal_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_posicion_terminal_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_posicion_terminal_terminal_codigo ON nucleo.posicion_terminal (terminal_id, codigo) WHERE activo = 1;
+
+-- nucleo.tramo_conductor — sin cambios respecto a 37.14
+CREATE TABLE nucleo.tramo_conductor (
+    id                 BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id        BIGINT NOT NULL,
+    tramo_conexion_id  BIGINT NOT NULL,
+    conductor_id       BIGINT NOT NULL,
+    activo             BIT NOT NULL CONSTRAINT DF_tramo_conductor_activo DEFAULT (1),
+    created_at         DATETIME2 NOT NULL CONSTRAINT DF_tramo_conductor_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at         DATETIME2 NULL,
+    created_by         BIGINT NULL,
+    updated_by         BIGINT NULL,
+    CONSTRAINT PK_tramo_conductor PRIMARY KEY (id),
+    CONSTRAINT UQ_tramo_conductor_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_tramo_conductor_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_tramo_conductor_tramo FOREIGN KEY (tramo_conexion_id, proyecto_id) REFERENCES nucleo.tramo_conexion (id, proyecto_id),
+    CONSTRAINT FK_tramo_conductor_conductor FOREIGN KEY (conductor_id, proyecto_id) REFERENCES nucleo.conductor (id, proyecto_id),
+    CONSTRAINT FK_tramo_conductor_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_tramo_conductor_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_tramo_conductor_tramo_conductor ON nucleo.tramo_conductor (tramo_conexion_id, conductor_id) WHERE activo = 1;
+
+-- nucleo.terminacion — corregida: sin columnas redundantes, apunta a posicion_terminal
+CREATE TABLE nucleo.terminacion (
+    id                    BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id           BIGINT NOT NULL,
+    tramo_conductor_id    BIGINT NOT NULL,
+    posicion_terminal_id  BIGINT NOT NULL,
+    extremo               NVARCHAR(10) NOT NULL,
+    activo                BIT NOT NULL CONSTRAINT DF_terminacion_activo DEFAULT (1),
+    created_at            DATETIME2 NOT NULL CONSTRAINT DF_terminacion_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at            DATETIME2 NULL,
+    created_by            BIGINT NULL,
+    updated_by            BIGINT NULL,
+    CONSTRAINT PK_terminacion PRIMARY KEY (id),
+    CONSTRAINT UQ_terminacion_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT CK_terminacion_extremo CHECK (extremo IN ('ORIGEN','DESTINO')),
+    CONSTRAINT FK_terminacion_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_terminacion_tramo_conductor FOREIGN KEY (tramo_conductor_id, proyecto_id) REFERENCES nucleo.tramo_conductor (id, proyecto_id),
+    CONSTRAINT FK_terminacion_posicion FOREIGN KEY (posicion_terminal_id, proyecto_id) REFERENCES nucleo.posicion_terminal (id, proyecto_id),
+    CONSTRAINT FK_terminacion_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_terminacion_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_terminacion_tramo_conductor_extremo ON nucleo.terminacion (tramo_conductor_id, extremo) WHERE activo = 1;
+CREATE UNIQUE INDEX UX_terminacion_posicion_ocupacion ON nucleo.terminacion (posicion_terminal_id) WHERE activo = 1;
+
+-- Sin cambios a: punto_conexion, tramo_conexion (par_conductor_id deprecada, no tocada), par_conductor (sin constraint de cardinalidad).
+```
+
+### 38.15 Preguntas realmente bloqueantes (punto 14 del pedido)
+
+1. **Momento de materialización de `terminal` de módulo** (38.6): ¿al crear el `modulo`, al crear cada `canal`, o bajo demanda? Bloqueante para el backend de `015` (no para el esquema, que ya lo soporta sin importar la respuesta).
+2. **¿Todo terminal de módulo necesita 2 `posicion_terminal` o basta 1 por defecto?** No hay evidencia de doble clamp en el lado módulo (solo se confirmó en gabinete, caso 38.10) — se asume 1 salvo evidencia contraria, pero no está confirmado.
+3. Las preguntas de 37.20 que no dependían de este ajuste siguen abiertas en los mismos términos: convención de `numero_conductor`, puentes/terminal común más allá del caso ya resuelto de doble-clamp, formato `"F1-F2-3-4"`, multi-bloque `TB1`/`TB2` sin evidencia real, `BORNERA` universal vs. proyecto (resuelta operativamente en 37.10, no bloqueante).
+
+### 38.16 Estado al cierre de este ajuste
+
+Solo diseño. **No existe `015_terminaciones.sql`. No se aplicó SQL. No hay cambios en backend, frontend, tests ni commit. `001`–`014` sin modificar. No se cargó data real.** El modelo queda: `conductor` (sin constraint de par) → `tramo_conductor` → `terminacion` (solo `tramo_conductor_id` + `posicion_terminal_id` + `extremo`) → `posicion_terminal` → `terminal` (con `catalogo_modulo_io_terminal_id` opcional) → `bloque_terminal`. Pendiente de aprobación final antes de escribir `015_terminaciones.sql`.
+
+## 39. Corrección final del draft — incompatibilidad real con el esquema congelado (SOLO DISEÑO)
+
+Disparado por "FASE 015 — CORRECCIÓN FINAL DEL DRAFT ANTES DE IMPLEMENTAR". El usuario encontró y reportó una incompatibilidad bloqueante entre la sección 38 y el esquema realmente aplicado, **verificada con evidencia de código en este apartado antes de aceptarla** (no se acepta por autoridad, se confirma con `grep`/lectura directa de `001_initial_schema.sql`). Sigue sin existir `015_terminaciones.sql`, sin SQL aplicado, sin backend/frontend/tests/commit, `001`–`014` sin tocar.
+
+### 39.1 Confirmación de la incompatibilidad (punto 1 del pedido)
+
+Verificado línea por línea en `database/migrations/001_initial_schema.sql`:
+- Línea 599: `par_conductor_id BIGINT NOT NULL` en la definición de `nucleo.tramo_conexion`.
+- Línea 740-742: `CREATE UNIQUE INDEX UX_tramo_conexion_par_conductor_id ON nucleo.tramo_conexion (par_conductor_id) WHERE activo = 1` — **sin** filtro `IS NOT NULL` (no hacía falta mientras la columna era `NOT NULL`).
+- Línea 1018 (`TR_tramo_conexion_validar_secuencia`, recreado en `012_gabinetes.sql` línea 303 con el mismo cuerpo salvo `rio_id`→`gabinete_id`): la tabla variable `@activos` declara **su propia columna** `par_conductor_id BIGINT NOT NULL` — si esta columna recibiera un `NULL` al poblarse desde `nucleo.tramo_conexion`, el `INSERT INTO @activos` fallaría de inmediato, **para cualquier tramo activo de la ruta afectada**, no solo para el nuevo — porque el trigger repuebla `@activos` con todos los tramos activos de las rutas tocadas, no solo la fila insertada.
+- Línea 1075: dentro del mismo trigger, `JOIN nucleo.par_conductor pc ON pc.id = a.par_conductor_id` (para el chequeo "Punto 4": cable activo) — un `INNER JOIN`, así que un tramo sin `par_conductor_id` simplemente desaparecería de ese chequeo específico si la columna fuera nullable sin ajustar el trigger.
+- Línea 1471-1472 (`TR_cable_validar_desactivacion`): `JOIN nucleo.par_conductor pc ON pc.cable_id = i.id JOIN nucleo.tramo_conexion t ON t.par_conductor_id = pc.id AND t.activo = 1` — la única forma en que hoy se detecta "este cable está en uso por un tramo activo".
+- Confirmado además (`grep`) que **ningún otro trigger** de `001_initial_schema.sql` referencia `tramo_conexion.par_conductor_id` — `TR_senal_validar_canal_ruta` y `TR_tramo_conexion_validar_canal_ruta` no la tocan.
+
+**Conclusión**: la afirmación de la sección 38 ("`tramo_conexion` sin cambios de esquema, `par_conductor_id` simplemente deprecada") es **incorrecta** y queda retirada. Un cable `"19c"` nuevo, sin par real, no podría crear ningún `tramo_conexion` bajo el modelo nuevo sin inventar un `par_conductor` ficticio — exactamente el problema que el usuario identificó. `015` **no es 100% aditiva**: además de las tablas nuevas, requiere un `ALTER` real sobre `nucleo.tramo_conexion` y la recreación de exactamente 2 triggers existentes. `001`–`014` no se tocan como archivos — el cambio vive íntegramente en `015_terminaciones.sql`, igual que migraciones anteriores ya alteraron columnas de tablas creadas en `001` (`011` sobre `revision_entregable_fila.instrumento_id`, `013` sobre `senal.tag_senal`).
+
+### 39.2 Cambio exacto a `tramo_conexion.par_conductor_id` (punto 2)
+
+```sql
+ALTER TABLE nucleo.tramo_conexion ALTER COLUMN par_conductor_id BIGINT NULL;
+```
+
+La FK existente (`FK_tramo_conexion_par_conductor`) no requiere cambio — una FK de SQL Server ya tolera valores `NULL` en la columna referenciante sin verificarlos contra la tabla padre. Los datos legacy (fixtures de smoke tests con `par_conductor_id` poblado) permanecen intactos. Política explícita: **legacy** = `par_conductor_id` puede seguir poblado (comportamiento histórico sin cambios); **modelo nuevo** = `par_conductor_id = NULL` y los conductores viven exclusivamente en `tramo_conductor`.
+
+### 39.3 Índice legacy corregido (punto 3)
+
+```sql
+DROP INDEX UX_tramo_conexion_par_conductor_id ON nucleo.tramo_conexion;
+GO
+CREATE UNIQUE INDEX UX_tramo_conexion_par_conductor_id
+    ON nucleo.tramo_conexion (par_conductor_id)
+    WHERE par_conductor_id IS NOT NULL AND activo = 1;
+GO
+```
+
+Necesario porque un índice único de SQL Server (a diferencia de una `UNIQUE CONSTRAINT` ANSI estándar) trata múltiples `NULL` como valores en conflicto si no se filtra explícitamente — sin `IS NOT NULL`, un segundo tramo nuevo con `par_conductor_id = NULL` violaría el índice apenas existiera el primero. Mismo patrón ya usado en `011`/`013` (`UX_senal_proyecto_tag`, `revision_entregable_fila` sobre `instrumento_id`).
+
+### 39.4 Triggers existentes afectados — exactamente 2, ninguno más (punto 3/4 del pedido)
+
+**`TR_tramo_conexion_validar_secuencia`** (recreado, `DROP`+`CREATE` como ya hicieron `009`/`012` sobre otros triggers): dos cambios puntuales, resto del cuerpo idéntico.
+1. `@activos.par_conductor_id` pasa de `BIGINT NOT NULL` a `BIGINT NULL`.
+2. El bloque "Punto 4" (chequeo de recursos activos) cambia sus `JOIN` a `nucleo.par_conductor`/`nucleo.cable` de `INNER` a `LEFT`, y la condición pasa de `... OR cb.activo = 0` a `... OR (pc.id IS NOT NULL AND cb.activo = 0)` — así un tramo del modelo nuevo (`par_conductor_id NULL`) sigue validando que sus `punto_conexion` estén activos (chequeo que no depende de `par_conductor_id`), simplemente no evalúa el sub-chequeo de "cable activo" por esa vía legacy. La validación equivalente para el modelo nuevo (¿el/los `cable` de los `conductor` de ese tramo siguen activos?) se cubre aparte, extendiendo `TR_cable_validar_desactivacion` (ver abajo) — no hace falta duplicarla aquí.
+
+```sql
+    DECLARE @activos TABLE (
+        tramo_id            BIGINT PRIMARY KEY,
+        ruta_conexion_id    BIGINT   NOT NULL,
+        numero_orden        SMALLINT NOT NULL,
+        punto_origen_id     BIGINT   NOT NULL,
+        punto_destino_id    BIGINT   NOT NULL,
+        par_conductor_id    BIGINT   NULL,          -- <-- antes NOT NULL
+        rn                  BIGINT   NOT NULL,
+        total               INT      NOT NULL,
+        siguiente_origen    BIGINT   NULL
+    );
+    ...
+    IF EXISTS (
+        SELECT 1
+        FROM @activos a
+        JOIN nucleo.punto_conexion po ON po.id = a.punto_origen_id
+        JOIN nucleo.punto_conexion pd ON pd.id = a.punto_destino_id
+        LEFT JOIN nucleo.par_conductor pc ON pc.id = a.par_conductor_id   -- <-- antes INNER
+        LEFT JOIN nucleo.cable cb ON cb.id = pc.cable_id                  -- <-- antes INNER
+        WHERE po.activo = 0 OR pd.activo = 0 OR (pc.id IS NOT NULL AND cb.activo = 0)
+    )
+    BEGIN
+        ROLLBACK TRANSACTION;
+        THROW 51015, 'Un tramo activo no puede usar puntos de conexion o cable inactivos.', 1;
+    END
+```
+
+**`TR_cable_validar_desactivacion`** (recreado): se **extiende** (no solo se adapta) con una segunda condición `OR EXISTS` cubriendo el camino nuevo — un cable puede estar "en uso" tanto por un `par_conductor` legacy referenciado desde `tramo_conexion.par_conductor_id` como por un `conductor` propio referenciado desde `tramo_conductor.conductor_id`:
+
+```sql
+CREATE TRIGGER nucleo.TR_cable_validar_desactivacion ON nucleo.cable
+AFTER UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF NOT UPDATE(activo) RETURN;
+
+    IF EXISTS (
+        SELECT 1 FROM inserted i JOIN deleted d ON d.id = i.id
+        WHERE d.activo = 1 AND i.activo = 0
+          AND (
+                EXISTS (  -- camino legacy: par_conductor + tramo_conexion.par_conductor_id
+                    SELECT 1 FROM nucleo.par_conductor pc
+                    JOIN nucleo.tramo_conexion t ON t.par_conductor_id = pc.id AND t.activo = 1
+                    WHERE pc.cable_id = i.id
+                )
+             OR EXISTS (  -- camino nuevo: conductor + tramo_conductor
+                    SELECT 1 FROM nucleo.conductor c
+                    JOIN nucleo.tramo_conductor tc ON tc.conductor_id = c.id AND tc.activo = 1
+                    WHERE c.cable_id = i.id
+                )
+          )
+    )
+    BEGIN
+        ROLLBACK TRANSACTION;
+        THROW 51021, 'No se puede desactivar un CABLE en uso (legacy o nuevo modelo).', 1;
+    END
+END
+GO
+```
+
+Ningún otro trigger de `001`/`012` necesita tocarse — confirmado por búsqueda exhaustiva (39.1).
+
+**Nota de secuenciación explícita** (pedida en el punto 3 del mensaje): `tramo_conexion` puede seguir creándose sola, sin exigir que ya existan sus `tramo_conductor` en el mismo `INSERT` — la integridad de "todo conductor del tramo pertenece a este tramo y está activo" se valida en `tramo_conductor`/`terminacion` (triggers nuevos, 39.5/39.9), no en `TR_tramo_conexion_validar_secuencia`. Esto respeta el ciclo padre-primero-hijos-después ya usado en el resto del esquema.
+
+### 39.5 Diseño definitivo `CONDUCTOR` (punto 5/6)
+
+`cable_id BIGINT NOT NULL` (corrige 38.14: ya no nullable). Esto reabre la pregunta de cómo representar un jumper interno gabinete→módulo sin cable formal (37.17) — **resuelto sin romper "no inventar catálogo de jumpers"**: un jumper interno sigue usando una fila real de `nucleo.cable` (no una fila de catálogo — `cable` nunca fue un catálogo, es una entidad de proyecto con `tipo_cable` de texto libre) con, por ejemplo, `tipo_cable = 'JUMPER INTERNO'` o similar texto libre. No se necesita `cable_id NULL` ni ninguna tabla nueva — se reutiliza `nucleo.cable` tal cual, con datos que documenten que es interno. Este punto no fue mencionado explícitamente en el pedido, se deja registrado aquí para que quede explícita la reconciliación entre ambas decisiones.
+
+`codigo NVARCHAR(20) NOT NULL` — identidad visible dentro del cable (`'1'`, `'2'`, `'BK'`, `'WH'`, `'+'`, `'-'`), reemplaza `numero_conductor INT`. `orden SMALLINT NULL` — puramente para ordenamiento de presentación, sin significado de identidad. `UNIQUE(cable_id, codigo) WHERE activo = 1`.
+
+### 39.6 Constraints CONDUCTOR ↔ PAR ↔ CABLE (punto 5)
+
+Se agrega, de forma aditiva, una clave candidata sobre `par_conductor` (tabla de `001`, no se toca su archivo — el `ALTER` vive en `015`):
+
+```sql
+ALTER TABLE nucleo.par_conductor
+    ADD CONSTRAINT UQ_par_conductor_id_cable_proyecto UNIQUE (id, cable_id, proyecto_id);
+```
+
+Y la FK de `conductor` hacia `par_conductor` se define sobre las 3 columnas (reemplaza la FK 2-columnas de 38.14):
+
+```sql
+CONSTRAINT FK_conductor_par_mismo_cable
+    FOREIGN KEY (par_conductor_id, cable_id, proyecto_id)
+    REFERENCES nucleo.par_conductor (id, cable_id, proyecto_id)
+```
+
+Cuando `par_conductor_id IS NULL`, SQL Server no evalúa esta FK (semántica `MATCH SIMPLE`: si cualquier columna del FK es `NULL`, la fila no se valida contra la tabla padre) — sin restricción para conductores sin par. Cuando `par_conductor_id IS NOT NULL`, `cable_id` es siempre `NOT NULL` (39.5) y la FK exige que exista una fila `par_conductor` con exactamente ese `(id, cable_id, proyecto_id)` — es decir, **la base de datos rechaza** un `conductor` cuyo `par_conductor_id` apunte a un par de un cable distinto al suyo propio, sin depender del backend.
+
+### 39.7 Diseño definitivo `TRAMO_CONDUCTOR` (punto 7) y exclusividad de conductor (punto 8)
+
+Estructura sin cambio respecto a 38.14 (`tramo_conexion_id`, `conductor_id`). Cambia el índice de unicidad:
+
+**¿Son necesarios ambos `UNIQUE(tramo_conexion_id, conductor_id)` y `UNIQUE(conductor_id)`?** No — matemáticamente, `UNIQUE(conductor_id) WHERE activo = 1` es **estrictamente más fuerte** e implica la otra: si un `conductor_id` admite como máximo una fila activa en toda la tabla, automáticamente admite como máximo una fila activa para cualquier `tramo_conexion_id` particular. Se **reemplaza** `UX_tramo_conductor_tramo_conductor` (38.14) por una sola:
+
+```sql
+CREATE UNIQUE INDEX UX_tramo_conductor_conductor_exclusivo
+    ON nucleo.tramo_conductor (conductor_id) WHERE activo = 1;
+```
+
+Esto es exactamente la regla de negocio pedida ("un CONDUCTOR físico → máximo un tramo_conductor activo", igual que el legacy `UX_tramo_conexion_par_conductor_id` protegía el PAR) y simplifica el diseño (un índice menos) sin perder nada.
+
+### 39.8 Diseño definitivo `TERMINACION` (punto 9)
+
+Sin cambios de columnas respecto a 38.14 (`tramo_conductor_id`, `posicion_terminal_id`, `extremo`, `activo`, auditoría). Los cambios de esta fase son de **triggers nuevos** que la validan (39.9/39.10), no de su forma.
+
+### 39.9 Validación extremo ↔ punto_conexion (punto 10) y canal ↔ terminal de módulo (punto 11)
+
+Ambas se implementan en un único trigger nuevo `AFTER INSERT, UPDATE ON nucleo.terminacion` (mismo criterio que agrupa varios `IF EXISTS` en un solo trigger ya usado por `TR_tramo_conexion_validar_secuencia`):
+
+```sql
+CREATE TRIGGER nucleo.TR_terminacion_validar_propietario_y_canal ON nucleo.terminacion
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- (a) el propietario del bloque_terminal debe coincidir con el propietario
+    --     real del punto_conexion del extremo correspondiente del tramo.
+    IF EXISTS (
+        SELECT 1
+        FROM inserted te
+        JOIN nucleo.tramo_conductor tcd ON tcd.id = te.tramo_conductor_id
+        JOIN nucleo.tramo_conexion tc   ON tc.id = tcd.tramo_conexion_id
+        JOIN nucleo.punto_conexion pto  ON pto.id = CASE te.extremo WHEN 'ORIGEN' THEN tc.punto_origen_id ELSE tc.punto_destino_id END
+        JOIN nucleo.posicion_terminal pos ON pos.id = te.posicion_terminal_id
+        JOIN nucleo.terminal ter        ON ter.id = pos.terminal_id
+        JOIN nucleo.bloque_terminal bt  ON bt.id = ter.bloque_terminal_id
+        WHERE te.activo = 1
+          AND (
+                (pto.caja_id       IS NOT NULL AND ISNULL(bt.caja_id, -1)     <> pto.caja_id)
+             OR (pto.gabinete_id   IS NOT NULL AND ISNULL(bt.gabinete_id, -1) <> pto.gabinete_id)
+             OR (pto.modulo_id     IS NOT NULL AND ISNULL(bt.modulo_id, -1)   <> pto.modulo_id)
+             OR (pto.instrumento_id IS NOT NULL)   -- 39.11: sin bloque_terminal de instrumento en 015
+             OR (pto.equipo_id      IS NOT NULL)   -- idem equipo
+          )
+    )
+    BEGIN
+        ROLLBACK TRANSACTION;
+        THROW 51030, 'La terminacion no pertenece al mismo propietario que el punto_conexion del extremo del tramo.', 1;
+    END
+
+    -- (b) si el terminal es de modulo y viene de catalogo, el numero_canal del
+    --     catalogo debe coincidir con el canal real de la senal de esa ruta.
+    IF EXISTS (
+        SELECT 1
+        FROM inserted te
+        JOIN nucleo.tramo_conductor tcd ON tcd.id = te.tramo_conductor_id
+        JOIN nucleo.tramo_conexion tc   ON tc.id = tcd.tramo_conexion_id
+        JOIN nucleo.ruta_conexion rc    ON rc.id = tc.ruta_conexion_id
+        JOIN nucleo.senal sg            ON sg.id = rc.senal_id AND sg.canal_id IS NOT NULL
+        JOIN nucleo.canal cn            ON cn.id = sg.canal_id
+        JOIN nucleo.posicion_terminal pos ON pos.id = te.posicion_terminal_id
+        JOIN nucleo.terminal ter        ON ter.id = pos.terminal_id
+        JOIN nucleo.bloque_terminal bt  ON bt.id = ter.bloque_terminal_id AND bt.modulo_id IS NOT NULL
+        JOIN cat.cat_modulo_io_terminal cmit ON cmit.id = ter.catalogo_modulo_io_terminal_id
+        WHERE te.activo = 1
+          AND (cn.modulo_id <> bt.modulo_id OR cn.numero_canal <> cmit.numero_canal)
+    )
+    BEGIN
+        ROLLBACK TRANSACTION;
+        THROW 51031, 'La terminacion en un terminal de modulo no corresponde al canal real de la senal.', 1;
+    END
+END
+GO
+```
+
+### 39.10 Alcance explícito: terminaciones en instrumento/equipo quedan fuera de `015` (aclaración de 39.9-a)
+
+`bloque_terminal` solo tiene dueño XOR de 3 vías (caja/gabinete/modulo) — no incluye instrumento ni equipo (ningún hallazgo del diagnóstico evidenció necesidad de modelar el bloque de terminales propio de un instrumento). Por lo tanto el chequeo (a) de 39.9 **rechaza cualquier intento** de crear una `terminacion` cuyo extremo corresponda a un `punto_conexion` de tipo instrumento/equipo — en la práctica, el extremo instrumento-side de un tramo instrumento→caja simplemente **no tiene fila `terminacion`** en `015` (el conductor existe vía `tramo_conductor`, pero su aterrizaje físico del lado del instrumento no se modela todavía). Se documenta como límite de alcance explícito, no como omisión — coherente con "dejar como pregunta abierta lo que no está evidenciado" del resto del diagnóstico.
+
+### 39.11 Materialización de terminales de módulo (punto 12 — decisión cerrada: trigger, simétrico a `TR_modulo_generar_canales`)
+
+Se diseña `TR_modulo_generar_terminales AFTER INSERT, UPDATE ON nucleo.modulo`, mismo idioma que `TR_modulo_generar_canales` (línea 804 de `001_initial_schema.sql`): `IF NOT UPDATE(catalogo_modulo_id) RETURN` como filtro barato; opera solo sobre módulos nuevos o cuyo `catalogo_modulo_id` cambió de valor real (mismo patrón `LEFT JOIN deleted ... WHERE d.id IS NULL OR d.catalogo_modulo_id <> i.catalogo_modulo_id`).
+
+Para cada módulo afectado:
+1. **Idempotencia** — asegura que exista exactamente un `bloque_terminal` con `modulo_id = <este módulo>` (crear solo si `NOT EXISTS`; nunca duplicar).
+2. Para cada fila de `cat.cat_modulo_io_terminal` cuyo `catalogo_modulo_id` sea el nuevo catálogo del módulo, asegura que exista un `terminal` hijo de ese `bloque_terminal` con `catalogo_modulo_io_terminal_id` apuntando a esa fila (`numero` copiado de `etiqueta_terminal`) — crear solo si `NOT EXISTS` (usa `UX_terminal_bloque_catalogo`, 38.5, como guardia natural). Cada `terminal` recién creado recibe **1** `posicion_terminal` por defecto (punto 13, decisión cerrada, sin doble clamp del lado módulo salvo evidencia futura).
+3. **Bloqueo, no regeneración silenciosa, cuando el catálogo cambia** (`UPDATE` con `catalogo_modulo_id` distinto): antes de desactivar los `terminal` que ya no correspondan al nuevo catálogo, verifica si alguno tiene una `posicion_terminal` con una `terminacion` activa (`EXISTS` vía join `terminal→posicion_terminal→terminacion WHERE activo=1`). Si la hay, `ROLLBACK TRANSACTION` + `THROW` (mismo criterio que el bloqueo de `TR_modulo_generar_canales` cuando hay `senal` activa en un canal que quedaría fuera de rango, línea 854-865) — **nunca** destruye/regenera un terminal ocupado. Si no hay ocupación, desactiva (`activo = 0`) los `terminal`/`posicion_terminal` obsoletos y crea los nuevos del catálogo entrante — nunca reactiva una fila histórica (mismo criterio "FIX #3" que ya usa `TR_modulo_generar_canales` con los canales).
+
+No se necesita backend transaccional adicional para la materialización en sí (el trigger la cubre igual que ya cubre canales) — el backend solo necesita, al crear/editar un `modulo`, dejar que el trigger actúe (no debe intentar crear `bloque_terminal`/`terminal` manualmente para el caso derivado de catálogo).
+
+### 39.12 Política de posiciones de terminal de módulo (punto 13 — decisión cerrada)
+
+Confirmado: 1 `posicion_terminal` por terminal de módulo por defecto, sin asumir universalmente A/B. Caja y gabinete siguen permitiendo `1..N` posiciones libres (dato manual, sin generación automática — solo módulo se materializa desde catálogo).
+
+### 39.13 Catálogo de terminales de módulo — agrupación en `bloque_terminal` (punto 11 del pedido original, cerrado aquí)
+
+No se inventa un "código de bloque de fabricante" — no hay evidencia de que exista. El `bloque_terminal` de un módulo usa un `codigo` neutro y constante por convención de aplicación (ej. `'MODULO'`), ya que para un módulo no existen múltiples bloques nombrados distintos como sí ocurre en caja/gabinete (`TB1`/`TB2`/`X1`) — un módulo tiene un único bloque de terminales propio, todos sus `terminal` cuelgan de él. Esto no requiere ninguna columna ni catálogo nuevo — es una decisión de valor de datos, no de esquema.
+
+### 39.14 Soft delete / cascada lógica (punto 12 del pedido de esta fase, punto 12 original)
+
+**Cascada hacia abajo** (mismo principio ya documentado del repo: "la desactivación cascada hacia abajo, nunca hacia arriba"):
+- `tramo_conexion.activo` 1→0 (transición real) ⇒ nuevo trigger `TR_tramo_conexion_desactivar_conductores` cascada `tramo_conductor.activo → 0` para sus hijos activos.
+- `tramo_conductor.activo` 1→0 (incluida la cascada anterior) ⇒ nuevo trigger `TR_tramo_conductor_desactivar_terminaciones` cascada `terminacion.activo → 0` para sus hijas activas.
+Mismo patrón exacto que `TR_ruta_conexion_desactivar_tramos` (línea 1116 de `001`).
+
+**Recursos en uso no se desactivan** (mismo principio: "canal, módulo, punto_conexion y cable en uso se rechazan, nunca se desasignan silenciosamente"), extendido a las 4 entidades nuevas de tipo recurso:
+- `conductor`: rechazar desactivación si tiene un `tramo_conductor` activo (`UX_tramo_conductor_conductor_exclusivo` ya lo hace único, pero la desactivación del propio `conductor` necesita su propio trigger de rechazo, ej. `TR_conductor_validar_desactivacion`).
+- `posicion_terminal`: rechazar si tiene una `terminacion` activa (`TR_posicion_terminal_validar_desactivacion`).
+- `terminal`: rechazar si alguna de sus `posicion_terminal` está ocupada (tiene `terminacion` activa) — no solo si el `terminal` mismo tiene hijos activos, sino transitivamente ocupados (`TR_terminal_validar_desactivacion`).
+- `bloque_terminal`: rechazar si alguno de sus `terminal` tiene una posición ocupada (`TR_bloque_terminal_validar_desactivacion`).
+
+Los 4 siguen el mismo idioma exacto que `TR_punto_conexion_validar_desactivacion`/`TR_cable_validar_desactivacion` (`AFTER UPDATE`, `IF NOT UPDATE(activo) RETURN`, comparar `inserted`/`deleted` para detectar la transición real 1→0, `ROLLBACK`+`THROW` si está en uso).
+
+### 39.15 Draft DDL final corregido — solo los deltas respecto a 38.14 (SOLO DRAFT)
+
+```sql
+-- conductor: cable_id ahora NOT NULL, codigo reemplaza numero_conductor, agrega orden
+CREATE TABLE nucleo.conductor (
+    id                BIGINT IDENTITY(1,1) NOT NULL,
+    proyecto_id       BIGINT NOT NULL,
+    cable_id          BIGINT NOT NULL,                 -- <-- antes NULL
+    codigo            NVARCHAR(20) NOT NULL,            -- <-- antes numero_conductor INT
+    orden             SMALLINT NULL,                    -- <-- nuevo, solo presentación
+    par_conductor_id  BIGINT NULL,
+    activo            BIT NOT NULL CONSTRAINT DF_conductor_activo DEFAULT (1),
+    created_at        DATETIME2 NOT NULL CONSTRAINT DF_conductor_created_at DEFAULT SYSUTCDATETIME(),
+    updated_at        DATETIME2 NULL,
+    created_by        BIGINT NULL,
+    updated_by        BIGINT NULL,
+    CONSTRAINT PK_conductor PRIMARY KEY (id),
+    CONSTRAINT UQ_conductor_id_proyecto UNIQUE (id, proyecto_id),
+    CONSTRAINT FK_conductor_proyecto FOREIGN KEY (proyecto_id) REFERENCES nucleo.proyecto (id),
+    CONSTRAINT FK_conductor_cable FOREIGN KEY (cable_id, proyecto_id) REFERENCES nucleo.cable (id, proyecto_id),
+    CONSTRAINT FK_conductor_par_mismo_cable FOREIGN KEY (par_conductor_id, cable_id, proyecto_id)
+        REFERENCES nucleo.par_conductor (id, cable_id, proyecto_id),   -- <-- antes 2 columnas
+    CONSTRAINT FK_conductor_created_by FOREIGN KEY (created_by) REFERENCES seguridad.usuario (id),
+    CONSTRAINT FK_conductor_updated_by FOREIGN KEY (updated_by) REFERENCES seguridad.usuario (id)
+);
+CREATE UNIQUE INDEX UX_conductor_cable_codigo ON nucleo.conductor (cable_id, codigo) WHERE activo = 1;
+
+-- tramo_conductor: sin cambio de columnas, cambia el índice
+CREATE UNIQUE INDEX UX_tramo_conductor_conductor_exclusivo
+    ON nucleo.tramo_conductor (conductor_id) WHERE activo = 1;   -- <-- reemplaza UX_tramo_conductor_tramo_conductor
+
+-- ALTER aditivo sobre par_conductor (tabla de 001, no se toca su archivo)
+ALTER TABLE nucleo.par_conductor
+    ADD CONSTRAINT UQ_par_conductor_id_cable_proyecto UNIQUE (id, cable_id, proyecto_id);
+
+-- ALTER sobre tramo_conexion (tabla de 001) + índice reemplazado
+ALTER TABLE nucleo.tramo_conexion ALTER COLUMN par_conductor_id BIGINT NULL;
+DROP INDEX UX_tramo_conexion_par_conductor_id ON nucleo.tramo_conexion;
+CREATE UNIQUE INDEX UX_tramo_conexion_par_conductor_id
+    ON nucleo.tramo_conexion (par_conductor_id) WHERE par_conductor_id IS NOT NULL AND activo = 1;
+
+-- terminacion, posicion_terminal, terminal, bloque_terminal, cat.cat_modulo_io_terminal: sin cambios respecto a 38.14
+-- (ver esa sección para su DDL completo; los deltas de esta fase son índices/triggers, no columnas)
+
+-- Triggers recreados: TR_tramo_conexion_validar_secuencia, TR_cable_validar_desactivacion (39.4)
+-- Triggers nuevos: TR_terminacion_validar_propietario_y_canal (39.9),
+--                  TR_modulo_generar_terminales (39.11),
+--                  TR_tramo_conexion_desactivar_conductores, TR_tramo_conductor_desactivar_terminaciones (39.14, cascada),
+--                  TR_conductor_validar_desactivacion, TR_posicion_terminal_validar_desactivacion,
+--                  TR_terminal_validar_desactivacion, TR_bloque_terminal_validar_desactivacion (39.14, bloqueo por uso)
+```
+
+### 39.16 Tests adicionales que nacen de estos cambios (punto 16)
+
+Además de los ya listados en 37.18: migración legacy→nuevo conviviendo (un tramo con `par_conductor_id` poblado y otro con `NULL` en la misma tabla, ambos pasando `TR_tramo_conexion_validar_secuencia`) · rechazo de `conductor.par_conductor_id` apuntando a un par de otro cable (`FK_conductor_par_mismo_cable`) · rechazo de reutilizar el mismo `conductor` en dos `tramo_conductor` activos de tramos distintos · rechazo de `TR_cable_validar_desactivacion` por el camino nuevo (conductor en tramo activo) y por el legacy, ambos cubiertos · rechazo de `terminacion` cuyo `posicion_terminal` pertenece a una caja distinta de `punto_conexion.caja_id` (39.9-a) · rechazo de `terminacion` en terminal de módulo cuyo canal de catálogo no coincide con `senal.canal_id` (39.9-b) · rechazo de `terminacion` en extremo instrumento/equipo (39.10) · `TR_modulo_generar_terminales` idempotente (ejecutar dos veces, sin duplicados) · `TR_modulo_generar_terminales` bloqueando cambio de catálogo con terminal ocupado · cascada `tramo_conexion→tramo_conductor→terminacion` al desactivar · bloqueo de desactivación de `conductor`/`posicion_terminal`/`terminal`/`bloque_terminal` en uso.
+
+### 39.17 Preguntas que sigan siendo realmente bloqueantes (punto 17)
+
+Con esta corrección, las dos preguntas que 38.15 marcaba como bloqueantes para backend **quedan cerradas** (materialización = trigger simétrico a canales, posiciones de módulo = 1 por defecto). Sigue abierto, sin bloquear el `DDL`:
+1. Convención exacta de `conductor.codigo` para conductores del modelo nuevo sin dato legacy que lo sugiera (¿siempre secuencial `'1'`,`'2'`... salvo que el usuario capture un color/signo real?) — dato de captura, no de esquema.
+2. Las preguntas ya heredadas de 37.20/38.15 que no dependían de esta corrección: formato `"F1-F2-3-4"`, multi-bloque `TB1`/`TB2` sin evidencia real, puentes/terminal común más allá del caso de doble-clamp ya resuelto.
+
+### 39.18 Estado al cierre de esta corrección
+
+Solo diseño. **No existe `015_terminaciones.sql`. No se aplicó SQL. No hay cambios en backend, frontend, tests ni commit. `001`–`014` sin modificar (como archivos) — el `ALTER`/recreación de triggers vive en el futuro `015_terminaciones.sql`, no en los archivos congelados. No se cargó data real.** El diseño de `015` queda: **no 100% aditivo** — crea 6 tablas nuevas (`conductor`, `bloque_terminal`, `terminal`, `posicion_terminal`, `tramo_conductor`, `terminacion`) + `cat.cat_modulo_io_terminal`, altera `tramo_conexion.par_conductor_id` a `NULL` y su índice, agrega una `UNIQUE` aditiva a `par_conductor`, recrea 2 triggers existentes y agrega ~8 triggers nuevos. Pendiente de aprobación final antes de escribir `015_terminaciones.sql`.
+
+## 40. Implementación de `015_terminaciones` (CIERRE — migración aplicada)
+
+Disparado por "IMPLEMENTACIÓN — `015_terminaciones` El diseño de `015_terminaciones` queda APROBADO." Este apartado documenta lo que realmente se construyó, marca como **superado** cualquier punto del draft (secciones 37-39) donde la implementación final difiere, y deja el estado de cierre. **Sección de referencia para entender el estado real del esquema — las secciones 36-39 documentan el proceso de diseño que llevó hasta aquí y siguen siendo válidas como historial, pero donde haya discrepancia, esta sección 40 manda.**
+
+### 40.1 Corrección encontrada durante la implementación (no estaba en el draft 38/39)
+
+El draft de la sección 39 (punto 17, "soft delete") diseñó los triggers `TR_bloque_terminal_validar_desactivacion`/`TR_terminal_validar_desactivacion` **solo como bloqueo** ("si existe ocupación → bloquear"), sin la mitad de cascada ("si no existe ocupación → desactivar lógicamente descendientes") que el propio pedido de implementación pedía explícitamente para esta pareja. Se detectó al ejecutar `terminaciones.api.test.ts`: desactivar un `bloque_terminal` sin ocupación dejaba sus `terminal`/`posicion_terminal` **activos** por debajo — exactamente el estado "padre inactivo, hijo activo" que el propio diseño prohíbe en el mismo párrafo para `tramo_conexion`/`tramo_conductor`/`terminacion`.
+
+**Corregido antes de cerrar la fase**: `TR_terminal_validar_desactivacion` y `TR_bloque_terminal_validar_desactivacion` ahora combinan, en el mismo trigger, las dos mitades de la política — bloquean si hay ocupación (sin cambio), y si no la hay, cascadean (`UPDATE` sobre la tabla hija dentro del mismo cuerpo del trigger). La cascada de 2 saltos (`bloque_terminal → terminal → posicion_terminal`) se logra por disparo anidado de triggers (habilitado por defecto en SQL Server, mismo mecanismo ya documentado para `senal → ruta_conexion → tramo_conexion`), no por una tabla `@variable` compartida entre triggers. `TR_posicion_terminal_validar_desactivacion` y `TR_conductor_validar_desactivacion` se mantienen bloqueo-puro sin cambios (son hojas, sin hijos que cascadear).
+
+Verificado en vivo contra SIEI_DEV: se recrearon ambos triggers, se limpió el residuo huérfano que había dejado la version anterior (terminales/posiciones activos bajo un bloque ya inactivo), y se confirmó con una consulta directa que tras el fix, desactivar un bloque sin ocupación cascada correctamente hasta sus posiciones.
+
+### 40.2 Resultado final — tablas, triggers y procedimiento
+
+Sin cambios respecto al draft de la sección 39.14/39.15 salvo el punto 40.1: `cat.cat_modulo_io_terminal`, `nucleo.conductor`, `nucleo.bloque_terminal`, `nucleo.terminal`, `nucleo.posicion_terminal`, `nucleo.tramo_conductor`, `nucleo.terminacion`; `ALTER TABLE nucleo.tramo_conexion ALTER COLUMN par_conductor_id BIGINT NULL` + índice reemplazado; `ALTER TABLE nucleo.par_conductor ADD CONSTRAINT UQ_par_conductor_id_cable_proyecto`; 2 triggers recreados (`TR_tramo_conexion_validar_secuencia`, `TR_cable_validar_desactivacion`); 9 triggers nuevos (`TR_terminal_validar_catalogo_modulo`, `TR_terminacion_validar_propietario_y_canal`, `TR_modulo_generar_terminales`, `TR_tramo_conexion_desactivar_conductores`, `TR_tramo_conductor_desactivar_terminaciones`, `TR_conductor_validar_desactivacion`, `TR_posicion_terminal_validar_desactivacion`, `TR_terminal_validar_desactivacion`, `TR_bloque_terminal_validar_desactivacion`); 1 procedimiento nuevo (`nucleo.sp_sincronizar_terminales_modulo`).
+
+### 40.3 Backend y frontend implementados
+
+Backend: `backend/src/routes/conductors.ts`, `backend/src/routes/bloquesTerminal.ts`, `backend/src/routes/tramoConductores.ts` (nuevos); `modules.ts` (+`GET .../terminales`, `+POST .../sync-terminales`), `moduleTypes.ts` (+`GET`/`POST .../terminals`), `connectionRoutes.ts` (`parConductorId` opcional en `POST /routes`, +`GET /routes/:id/conexionado`) modificados; montados en `server.ts`. Frontend: `components/BornerasSection.tsx` (nuevo, usado por `BoxDetailPage`/`GabineteDetailPage`), `ModuloTerminalesView` (nuevo, dentro de `GabineteDetailPage`), sección "Conexionado detallado" en `RouteDetailPage`; `api/terminaciones.ts` (nuevo) + tipos nuevos en `api/types.ts`.
+
+**Hallazgo de implementación no anticipado en el draft**: toda inserción/actualización con `OUTPUT INSERTED.*` sin `INTO` contra una de las 6 tablas nuevas falla con el error 334 de SQL Server ("no puede tener triggers habilitados si el statement usa OUTPUT sin INTO") — las 6 tablas nuevas tienen al menos un trigger `AFTER INSERT` o `AFTER UPDATE`. Se corrigió sistemáticamente en `conductors.ts`/`bloquesTerminal.ts`/`tramoConductores.ts` usando el patrón ya establecido en el resto del repo (`DECLARE @tabla; ...OUTPUT...INTO @tabla; SELECT * FROM @tabla;`). Detectado por la suite de pruebas de API, no por inspección — confirma el valor de tener esa suite.
+
+### 40.4 Verificación
+
+`database/tests/027_smoke_terminaciones.sql` (34 casos) y `backend/tests/terminaciones.api.test.ts` (35 casos): **verde en ambos**, tanto contra SIEI_DEV como contra una instalación limpia `001→015` construida desde los archivos versionados (2 corridas completas: una antes y otra después del fix de 40.1, ambas verdes). Regresión completa del backend ejecutada (`signals`, `equipment`, `hierarchy`, `comm-links`, `connections`, `loops`, `projects-admin`, `users-members`, `catalogs`, `pnid-imports`, `entregables-ldi`, `equipos-instrumentacion`, `instrumento-eliminacion`, `planos`) — todas en verde. Frontend: `tsc -b` limpio, `vite build` exitoso, `oxlint` sin hallazgos.
+
+### 40.5 Preguntas que siguen abiertas (heredadas de 37.20/38.15/39.17, sin cambio)
+
+Convención exacta de `conductor.codigo` para conductores sin dato legacy que lo sugiera; formato legacy ambiguo `"F1-F2-3-4"`; multi-bloque `TB1`/`TB2` sin evidencia real todavía; puentes/terminal común más allá del caso de doble-clamp ya resuelto; momento exacto en que el backend decide materializar un módulo nuevo más allá del trigger automático (cubierto por el trigger + el procedimiento de sincronización, pero la política de "¿cuándo llamar sync manualmente vs. confiar en el trigger?" queda como criterio de uso, no de esquema).
+
+### 40.6 Estado final
+
+`015_terminaciones.sql` implementada, aplicada en SIEI_DEV y en una instalación limpia `001→015`, con backend y frontend mínimos funcionando end-to-end, tests SQL y de API en verde, y regresión completa sin romper nada de `001`–`014`. **`001`–`014` permanecen exactamente como estaban (commit `98e61bc`) — ningún archivo de migración congelada fue modificado.** Sin commit todavía (pendiente de instrucción explícita del usuario).
+
+## 41. Revisión bloqueante final — topología GABINETE intermedio (CIERRE)
+
+Disparado por "REVISIÓN BLOQUEANTE FINAL — TOPOLOGÍA GABINETE → MÓDULO EN 015": la primera implementación de `015` (secciones 36-40) no soportaba GABINETE como nodo intermedio de una ruta — un caso físico real (cable de campo → terminal de gabinete + cableado interno → terminal de módulo) que el usuario aprobó explícitamente durante el diagnóstico (memoria `siei-terminal-blocks-015`, punto 3A/38.10) pero cuya consecuencia sobre `TR_tramo_conexion_validar_secuencia` no se había verificado hasta este punto.
+
+### 41.1 Regla vieja exacta encontrada (evidencia, no suposición)
+
+Búsqueda exhaustiva confirmada por `grep` en migraciones (`001`-`015`), triggers, backend y tests: el **único** punto de bloqueo era el bloque "Punto 6" de `TR_tramo_conexion_validar_secuencia` (`001_initial_schema.sql` línea 968, recreado sin cambio funcional en `012_gabinetes.sql` línea 268 salvo `rio_id→gabinete_id`, y de nuevo en `015` con los cambios de nullability de `par_conductor_id`):
+
+```sql
+-- Punto 6: un nodo intermedio (no es el ultimo tramo) debe ser CAJA
+IF EXISTS (
+    SELECT 1 FROM @activos a
+    JOIN nucleo.punto_conexion p ON p.id = a.punto_destino_id
+    WHERE a.rn < a.total AND p.caja_id IS NULL
+)
+BEGIN
+    ROLLBACK TRANSACTION;
+    THROW 51017, 'Un nodo intermedio de la ruta debe corresponder a una CAJA.', 1;
+END
+```
+
+Cualquier punto intermedio (`rn < total`) con `caja_id IS NULL` — incluido uno gabinete-owned — era rechazado sin excepción. Confirmado con evidencia, no supuesto, que **ningún otro trigger** necesitaba cambio: `TR_senal_validar_canal_ruta` (`001` línea 1277, recreado en `012` línea 411) y `TR_tramo_conexion_validar_canal_ruta` (`001` línea 1373, recreado en `012` línea 522) solo validan el **nodo FINAL** de la ruta (vía `@ultimo`, `rn=1 ORDER BY numero_orden DESC` / `rn = a.total`), comparando `pd.modulo_id` contra `canal.modulo_id` y `pd.gabinete_id` (si está poblado) contra el gabinete real del canal — en la topología nueva el nodo final sigue siendo un punto de MODULO exactamente como siempre, así que ninguno de los dos necesitó tocarse. Backend: `connectionRoutes.ts` no tenía validación propia de "intermedios = solo caja" — solo traduce el `51017` de la BD a HTTP (`mapRouteSqlError`), confirmando que la única fuente de la regla era la base de datos.
+
+### 41.2 Cambio realizado (dentro de `015`, `001`-`014` sin tocar)
+
+Se dividió "Punto 6" en 3 chequeos dentro de la **misma** recreación de `TR_tramo_conexion_validar_secuencia` que `015` ya hacía (no una recreación adicional):
+
+1. Un nodo estrictamente antes del penúltimo (`rn < total - 1`) sigue exigiendo CAJA sin excepción — sin cambio de fondo.
+2. El **penúltimo** nodo (`rn = total - 1`, solo si `total > 1`) admite CAJA **o, novedad de 015, GABINETE** — nunca MODULO (un módulo solo puede ser el nodo final).
+3. Si el penúltimo es GABINETE, el **último** debe ser un MODULO que pertenezca físicamente a ese mismo gabinete (`modulo → slot → rack → gabinete`), error nuevo `51034` — rechaza GABINETE A → MODULO de GABINETE B aunque sean del mismo proyecto.
+
+Backend: `connectionRoutes.ts` — mensaje de `51017` actualizado para reflejar que el penúltimo ahora admite CAJA o GABINETE, y se agregó el mapeo de `51034` (`route_gabinete_modulo_mismatch`, 400). Se corrigió además, de paso, un mensaje de `51007` que todavía decía "RIO" en vez de "GABINETE" (residuo textual de antes de la migración 012, sin relación funcional con esta revisión).
+
+### 41.3 Nueva topología permitida — las 3 familias exactas pedidas
+
+```
+A) INSTRUMENTO/EQUIPO → 0..N CAJAS → GABINETE
+B) INSTRUMENTO/EQUIPO → 0..N CAJAS → MODULO
+C) INSTRUMENTO/EQUIPO → 0..N CAJAS → GABINETE → MODULO (mismo gabinete)
+```
+
+Siguen rechazadas: GABINETE→CAJA, GABINETE→GABINETE, MODULO como no-final, GABINETE en cualquier posición anterior al penúltimo, y GABINETE A→MODULO de GABINETE B — todas verificadas con un caso SQL dedicado (36.4 abajo).
+
+### 41.4 Validación "mismo gabinete del módulo"
+
+`modulo → slot → rack → gabinete_id` comparado contra el `gabinete_id` del punto penúltimo — mismo patrón de navegación de jerarquía física ya usado en `TR_senal_validar_canal_ruta`/`TR_tramo_conexion_validar_canal_ruta` para el nodo final, reutilizado aquí para el penúltimo.
+
+### 41.5 Casos SQL nuevos y resultado
+
+`database/tests/027_smoke_terminaciones.sql` ampliado (no se creó un archivo nuevo — seguía sin congelar, tal como el propio pedido prefería) con los casos 28-33:
+
+| Caso | Escenario | Resultado |
+|---|---|---|
+| 28a/28b | INSTRUMENTO→GABINETE→MODULO directo (sin caja), con terminaciones reales ORIGEN (terminal de gabinete)/DESTINO (terminal de módulo) | PASS |
+| 29a/29b | INSTRUMENTO→CAJA→GABINETE TB1 terminal 15 (posición A, cable de campo)→[interno, posición B]→MODULO/canal correcto — caso real completo pedido explícitamente | PASS |
+| 30 | GABINETE A→MODULO perteneciente a GABINETE B | PASS (rechazo `51034` confirmado) |
+| 31 | INSTRUMENTO→GABINETE→CAJA→MODULO (gabinete antes del penúltimo) | PASS (rechazo `51017` confirmado) |
+| 32 | INSTRUMENTO→GABINETE→GABINETE | PASS (rechazo `51034` confirmado) |
+| 33 | INSTRUMENTO→MODULO→GABINETE (módulo como intermedio) | PASS (rechazo `51017` confirmado) |
+
+**Total: 42/42 casos PASS** (34 de la implementación original + 8 de esta revisión — nota: son 6 escenarios nuevos pero 8 assertions PASS nuevas, 28 y 29 tienen 2 cada uno). Además se encontró y corrigió un **caso de prueba pre-existente desactualizado**: `database/tests/007_smoke_secuencia_ruta.sql` "CASO 2" afirmaba textualmente lo contrario de la regla ahora aprobada ("GABINETE COMO NODO INTERMEDIO DEBE SER RECHAZADO", con el mismo `@gabinete_id`/`@modulo_id` que además están relacionados entre sí por el propio fixture del archivo). Se actualizó ese caso (no una migración — un archivo de prueba, editable igual que ya se hizo en fases previas cuando una regla de negocio evoluciona con aprobación explícita) para reflejar la regla vigente, dejando documentado en el propio archivo por qué cambió y dónde vive ahora la cobertura del caso rechazado (`027`, casos 30-33).
+
+### 41.6 Casos API nuevos y resultado
+
+`backend/tests/terminaciones.api.test.ts` ampliado con una sección "TOPOLOGIA GABINETE INTERMEDIO": ruta INSTRUMENTO→GABINETE→MODULO (mismo gabinete) vía `POST /routes` con 2 segmentos (`parConductorId: null` en ambos) → `201`; ruta GABINETE A→MODULO de GABINETE B → `400`; `GET .../conexionado` de la ruta aceptada confirmado con **2 segmentos distintos** en el arreglo de respuesta (caja/gabinete y gabinete/módulo nunca se colapsan en una sola terminación — la respuesta ya era, por construcción, un arreglo de segmentos por `tramo_conexion`, así que este comportamiento no necesitó cambio de código, solo verificación). **38/38 PASS** (35 de la implementación original + 3 nuevas).
+
+### 41.7 Regresiones
+
+Además de las 14 suites de backend ya verificadas en el cierre anterior (todas re-ejecutadas de nuevo, sin cambio: verdes), se ejecutaron explícitamente `database/tests/004_smoke_ruta_directa.sql`, `005_smoke_ruta_canal.sql`, `006_smoke_ruta_caja.sql`, `007_smoke_secuencia_ruta.sql` (corregido, ver 41.5), `008_smoke_recursos_en_uso.sql`, `009_smoke_desactivar_senal.sql` y `024_smoke_gabinete_migracion.sql` contra SIEI_DEV — **todas en verde**, confirmando que instrumento→módulo, instrumento→gabinete, instrumento→caja→módulo, instrumento→caja→gabinete, N cajas→módulo y N cajas→gabinete (topologías ya existentes desde `001`/`012`) siguen funcionando exactamente igual.
+
+### 41.8 Clean install
+
+`001→015` reaplicado desde cero en una tercera base de datos temporal (`SIEI_CLEAN_TEST3`) con el archivo `015_terminaciones.sql` ya corregido — **15/15 migraciones con exit 0**. `007_smoke_secuencia_ruta.sql` corregido (2/2 PASS) y `027_smoke_terminaciones.sql` (42/42 PASS) ejecutados sobre esa instalación limpia. Base de datos temporal destruida al finalizar.
+
+### 41.9 Aclaraciones del reporte anterior (punto 14 del pedido)
+
+**Conteo de suites de regresión**: el reporte anterior dijo "13 suites adicionales" pero listó 14 (`signals, equipment, hierarchy, comm-links, connections, loops, projects-admin, users-members, catalogs, pnid-imports, entregables-ldi, equipos-instrumentacion, instrumento-eliminacion, planos`) — **el número correcto es 14**, el "13" fue un error de conteo en el texto del reporte, la lista misma siempre fue completa y correcta.
+
+**Residuo en SIEI_DEV — origen exacto de cada uno, y si es deliberado**:
+- `cat.cat_modulo_io` (catálogo global, sin `activo`, sin soft delete posible por diseño — ver `moduleTypes.ts`): cada corrida de `physical-hierarchy.api.test.ts` y de `terminaciones.api.test.ts` deja 1-3 filas de prueba (fabricante `SIEI-TEST`/`API TEST`). **Deliberado y ya documentado por el propio `physical-hierarchy.api.test.ts` antes de esta fase** ("inherente al esquema, no un residuo evitable por este test") — `terminaciones.api.test.ts` hereda exactamente el mismo patrón, no es un caso nuevo.
+- `nucleo.par_conductor` (sin columna `activo` desde `001`, registro histórico permanente por diseño): `physical-connections.api.test.ts` deja pares de prueba tras desactivar su cable — **deliberado y ya documentado por ese test antes de esta fase**, sin relación con `015`.
+- Catálogos de dominio abierto (`interface-types`/`com-types`/`com-media-types`, sin `activo`): `catalogs.api.test.ts` deja códigos de prueba — **deliberado y ya documentado por ese test**, sin relación con `015`.
+- `nucleo.bloque_terminal`/`terminal`/`posicion_terminal` ligados a los módulos de prueba de `terminaciones.api.test.ts` (4-6 filas): mismo patrón que el primer punto — el módulo de prueba nunca se desactiva en el test (no era necesario para lo que prueba), así que su bloque/terminal/posición materializados tampoco. Nuevo en el sentido de que es específico de `015`, pero de la misma naturaleza que el resto (fixture de módulo/rack/slot de prueba nunca limpiado, patrón ya aceptado en `physical-hierarchy.api.test.ts`).
+- `nucleo.conductor` de pruebas simples (CRUD directo, sin ruta): unas pocas filas por corrida sin `DELETE` explícito en el test — análogo exacto a `par_conductor`.
+
+**¿Afecta producción o el clean install?** No, en ningún caso: (1) SIEI_DEV es explícitamente la base de datos de desarrollo/pruebas compartida, no existe todavía una base de producción; (2) el clean install parte siempre de una base de datos completamente vacía, nunca de SIEI_DEV — se verificó 3 veces de forma independiente en bases de datos temporales descartables sin ningún dato preexistente, y las 3 veces el resultado fue limpio. El residuo de SIEI_DEV es acumulación de fixtures de sesiones de prueba repetidas contra una base compartida, exactamente la misma categoría de fenómeno que el propio repositorio ya documenta para `cat_modulo_io`/`par_conductor`/catálogos abiertos desde antes de que existiera `015` — no se modificó código solo por esto, tal como el pedido autorizó explícitamente.
+
+### 41.10 Estado final de esta revisión
+
+**Sin commit.** `git diff --stat`: 12 archivos modificados (+1905/−18 líneas) + 8 archivos nuevos ya reportados en el cierre anterior — el único archivo adicional tocado por esta revisión es `database/tests/007_smoke_secuencia_ruta.sql` (test, no migración). `git diff --check` limpio. `001`–`014` confirmadas byte-idénticas al commit `98e61bc` (verificado de nuevo con `git diff --stat` dirigido a los 14 archivos, salida vacía). Pendiente de aprobación final del usuario antes de commit.
+
+## 42. Auditoría final pre-commit (sin rediseño, solo correcciones de implementación)
+
+Disparada por "AUDITORÍA FINAL DE `015_terminaciones` — PRE-COMMIT". Revisión completa del diff real, migración línea por línea, y backend/frontend, buscando defectos de implementación (no de diseño). Confirmado de nuevo: 20 archivos (12 modificados + 8 nuevos), `001`–`014` byte-idénticas a `98e61bc` (verificado con `md5sum` contra el blob de git, no solo `git status`).
+
+**Hallazgos y correcciones** (ninguno cambia esquema, reglas de negocio ni alcance — todos son bugs de implementación del diseño ya aprobado):
+
+1. **Path-scoping incompleto en 4 endpoints anidados** (`bloquesTerminal.ts`: `DELETE .../terminales/:id`, `POST .../terminales/:id/posiciones`, `DELETE .../terminales/:id/posiciones/:id`; `tramoConductores.ts`: `DELETE .../:id/terminaciones/:id`) — el `WHERE` solo filtraba por `proyecto_id` + el id del recurso final, sin verificar que ese recurso realmente perteneciera al padre indicado en la URL (`:bloqueId`/`:terminalId`/`:id`). No era un hueco de seguridad cross-project (`proyecto_id` seguía protegiendo eso), pero sí una inconsistencia real frente al contrato REST anidado ya establecido en `planos.ts`. **Corregido**: las 4 consultas ahora exigen también la coincidencia del padre en el `WHERE`. Verificado con un caso nuevo en `terminaciones.api.test.ts` (bloque ajeno del mismo proyecto → `404`) — **39/39 PASS** tras el fix (era 38/38 antes de agregar el caso).
+2. **`ModuloTerminalesView.handleSync` sin manejo de error** (`GabineteDetailPage.tsx`) — un fallo de `POST .../sync-terminales` no se mostraba al usuario (sin `catch`, solo `finally`). **Corregido**: se agregó estado de error y `<ErrorMessage>`, consistente con el resto del archivo. `tsc -b`/`vite build`/`oxlint` verificados de nuevo, limpios.
+3. **Comentarios obsoletos con "RIO"** (residuo textual de antes de la migración 012, no introducido por 015 pero en el mismo bloque de código tocado) en `connectionRoutes.ts` (cabecera del router y mensaje de error `51007`) — **corregidos** a "GABINETE", y la cabecera ahora menciona explícitamente la topología nueva (`CAJAS -> GABINETE -> MODULO`).
+
+**No se encontraron**: FKs incorrectas, nullability incorrecta, índices redundantes o demasiado restrictivos, CHECK contradictorios, triggers no set-based, triggers sensibles a INSERT multi-fila, `OUTPUT` sin `INTO` en tabla con trigger, ciclos de trigger, soft-delete inconsistente, ni referencias vivas a `rio_id`/`par_conductor_id NOT NULL` en `015_terminaciones.sql` — confirmado por lectura completa línea por línea más `grep` dirigido.
+
+**Regresión completa re-ejecutada tras los 3 fixes**: 15 suites de backend (14 + `terminaciones`) con conteo exacto — `signals` 35, `equipment` 20, `hierarchy` 34, `comm-links` 31, `connections` 37, `loops` 18, `projects-admin` 22, `users-members` 27, `catalogs` 49, `planos` 33, `pnid-imports` 86, `entregables-ldi` 73, `equipos-instrumentacion` 40, `instrumento-eliminacion` 24, `terminaciones` 39 — **568 PASS / 0 FAIL en total**. SQL: `004`/`005`/`006`/`007`/`008`/`009`/`024` sin cambio, `027` = **42/42**. Clean install `001→015` repetido una cuarta vez en una BD temporal nueva (`SIEI_AUDIT_FINAL`) — 15/15 exit 0, `007`=2/2, `027`=42/42, BD destruida.
+
+**Residuo en SIEI_DEV** (tras toda la sesión de auditoría, que re-ejecutó `terminaciones.api.test.ts` varias veces más): `nucleo.conductor` 28 activos/12 inactivos, `nucleo.bloque_terminal` 19 activos/21 inactivos, `nucleo.terminal` 30/27, `nucleo.posicion_terminal` 30/27 — **`nucleo.tramo_conductor` y `nucleo.terminacion` activos: 0 en ambos**, confirmando que ninguna cascada dejó una conexión física huérfana activa. El residuo activo restante son fixtures CRUD simples (conductores sueltos sin ruta, bloques/terminales de módulos de prueba) nunca explícitamente desactivados por los tests — misma categoría, ya documentada, que `cat.cat_modulo_io`/`nucleo.par_conductor`/catálogos abiertos desde antes de `015`. Confirmado: `015_terminaciones.sql` en sí **no contiene una sola sentencia `INSERT` de datos de proyecto** — 100% DDL (tablas, índices, triggers, un procedimiento), verificado por lectura completa del archivo.
+
+**Veredicto: APTO PARA COMMIT.**

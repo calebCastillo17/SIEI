@@ -180,8 +180,26 @@ END CATCH;
 
 /* ============================================================
    CASO 2
-   GABINETE COMO NODO INTERMEDIO
-   DEBE SER RECHAZADO
+   GABINETE COMO NODO INTERMEDIO (PENULTIMO) SEGUIDO DEL MODULO QUE
+   FISICAMENTE LE PERTENECE -> DEBE SER ACEPTADO.
+
+   ACTUALIZADO EN MIGRACION 015 (revision de topologia aprobada
+   explicitamente por el usuario, ver database/migrations/
+   015_terminaciones.sql seccion 41 del diagnostico): la regla
+   original de este caso ("GABINETE intermedio siempre se rechaza")
+   quedo SUPERADA — la regla fisica real exige soportar CABLE DE
+   CAMPO -> TERMINAL DE GABINETE + CABLEADO INTERNO -> TERMINAL DE
+   MODULO, es decir GABINETE debe poder ser el nodo PENULTIMO de una
+   ruta cuando el ultimo nodo es un MODULO que pertenece fisicamente
+   a ese mismo gabinete (@modulo_id/@gabinete_id de este archivo ya
+   vienen relacionados por el mismo join canal->modulo->slot->rack->
+   gabinete de la cabecera). Este archivo de PRUEBA (no una migracion
+   congelada) se actualiza para reflejar la regla aprobada — mismo
+   criterio ya usado para 24_smoke_gabinete_migracion.sql y otros
+   smoke tests cuando una regla de negocio evoluciona con aprobacion
+   explicita. La cobertura de "GABINETE de un dueño distinto al del
+   modulo final SI se rechaza" vive en database/tests/
+   027_smoke_terminaciones.sql (casos 30-33), no aqui.
    ============================================================ */
 
 BEGIN TRY
@@ -255,11 +273,12 @@ BEGIN TRY
 
     SET @p_inst2 = SCOPE_IDENTITY();
 
-    -- ERROR INTENCIONAL: GABINETE como nodo intermedio
+    -- GABINETE como nodo penultimo, seguido del MODULO que le pertenece
+    -- fisicamente — valido desde la migracion 015 (ver cabecera del caso).
     INSERT INTO nucleo.punto_conexion
         (proyecto_id, gabinete_id, descripcion)
     VALUES
-        (@proyecto_id, @gabinete_id, N'GABINETE usado incorrectamente como nodo intermedio');
+        (@proyecto_id, @gabinete_id, N'GABINETE como nodo penultimo (valido desde 015)');
 
     SET @p_gabinete = SCOPE_IDENTITY();
 
@@ -286,7 +305,10 @@ BEGIN TRY
         (@proyecto_id, @ruta2, @par3, @p_inst2, @p_gabinete, 1),
         (@proyecto_id, @ruta2, @par4, @p_gabinete, @p_mod2, 2);
 
-    PRINT 'FAIL 2: SQL Server permitio un GABINETE como nodo intermedio.';
+    IF @p_gabinete IS NOT NULL AND @p_mod2 IS NOT NULL
+        PRINT 'PASS 2: GABINETE como nodo penultimo (seguido del MODULO que le pertenece) fue aceptado (regla vigente desde 015).';
+    ELSE
+        PRINT 'FAIL 2: la ruta con GABINETE penultimo no quedo en el estado esperado.';
 
     ROLLBACK TRANSACTION;
 END TRY
@@ -294,8 +316,7 @@ BEGIN CATCH
     IF XACT_STATE() <> 0
         ROLLBACK TRANSACTION;
 
-    PRINT 'PASS 2: SQL Server rechazo el nodo intermedio que no es CAJA.';
-    PRINT 'Error esperado:';
+    PRINT 'FAIL 2: se rechazo GABINETE como nodo penultimo (deberia aceptarse desde 015).';
     PRINT ERROR_MESSAGE();
 END CATCH;
 

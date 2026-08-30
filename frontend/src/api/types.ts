@@ -728,7 +728,13 @@ export interface RouteSegment {
   id: string;
   routeId: string;
   numeroOrden: number;
-  parConductorId: string;
+  /**
+   * NULL desde la migración 015 (nucleo.tramo_conexion.par_conductor_id
+   * ahora es opcional): un tramo del modelo nuevo declara sus
+   * conductores aparte, uno a uno, vía tramo-conductores — ver
+   * api/terminaciones.ts y la sección "Conexionado" de RouteDetailPage.
+   */
+  parConductorId: string | null;
   puntoOrigenId: string;
   puntoDestinoId: string;
   active: boolean;
@@ -763,9 +769,11 @@ export interface RouteResponse {
   route: ConnectionRouteWithSegments;
 }
 
-/** Body de POST /routes — ver connectionRoutes.ts: un solo INSERT atómico. */
+/** Body de POST /routes — ver connectionRoutes.ts: un solo INSERT atómico.
+ * parConductorId es opcional desde 015: null/ausente crea un tramo del
+ * modelo nuevo (sin par legacy). */
 export interface RouteSegmentInput {
-  parConductorId: string;
+  parConductorId: string | null;
   puntoOrigenId: string;
   puntoDestinoId: string;
 }
@@ -773,6 +781,162 @@ export interface RouteSegmentInput {
 export interface RouteInput {
   senalId: string;
   segments: RouteSegmentInput[];
+}
+
+/* ---- Terminaciones (migración 015): conductor, bloque_terminal,
+   terminal, posicion_terminal, tramo_conductor, terminacion ---------- */
+
+export interface Conductor {
+  id: string;
+  projectId: string;
+  cableId: string;
+  codigo: string;
+  orden: number | null;
+  parConductorId: string | null;
+  active: boolean;
+  /** Derivado: hay un tramo_conductor activo que lo usa. */
+  inUse: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface ConductorsListResponse {
+  projectId: string;
+  conductors: Conductor[];
+}
+
+export interface ConductorResponse {
+  conductor: Conductor;
+}
+
+export interface ConductorInput {
+  cableId: string;
+  codigo: string;
+  orden?: number | null;
+  parConductorId?: string | null;
+}
+
+export interface PosicionTerminal {
+  id: string;
+  projectId: string;
+  terminalId: string;
+  codigo: string;
+  active: boolean;
+  /** Derivado: hay una terminacion activa ocupándola. */
+  inUse: boolean;
+}
+
+export interface TerminalConBloque {
+  id: string;
+  projectId: string;
+  bloqueTerminalId: string;
+  numero: string;
+  catalogoModuloIoTerminalId: string | null;
+  active: boolean;
+  posiciones?: PosicionTerminal[];
+}
+
+export interface BloqueTerminal {
+  id: string;
+  projectId: string;
+  cajaId: string | null;
+  gabineteId: string | null;
+  moduloId: string | null;
+  codigo: string;
+  descripcion: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+}
+
+export interface BloqueTerminalConTerminales extends BloqueTerminal {
+  terminales: TerminalConBloque[];
+}
+
+export interface BloquesTerminalListResponse {
+  projectId: string;
+  bloquesTerminal: BloqueTerminal[];
+}
+
+export interface BloqueTerminalResponse {
+  bloqueTerminal: BloqueTerminalConTerminales;
+}
+
+/** XOR: exactamente uno de cajaId/gabineteId (moduloId nunca se crea a mano, ver bloquesTerminal.ts). */
+export interface BloqueTerminalInput {
+  cajaId?: string | null;
+  gabineteId?: string | null;
+  codigo: string;
+  descripcion?: string | null;
+}
+
+export interface ModuloTerminalesResponse {
+  bloqueTerminal: { id: string; codigo: string; descripcion: string | null; active: boolean } | null;
+  terminales: Array<{
+    id: string;
+    numero: string;
+    numeroCanal: number | null;
+    ordenTerminal: number | null;
+    posiciones: PosicionTerminal[];
+  }>;
+}
+
+export interface TramoConductor {
+  id: string;
+  projectId: string;
+  tramoConexionId: string;
+  conductorId: string;
+  active: boolean;
+}
+
+export type TerminacionExtremo = 'ORIGEN' | 'DESTINO';
+
+export interface Terminacion {
+  id: string;
+  projectId: string;
+  tramoConductorId: string;
+  posicionTerminalId: string;
+  extremo: TerminacionExtremo;
+  active: boolean;
+}
+
+export interface TramoConductorConTerminaciones extends TramoConductor {
+  terminaciones: Terminacion[];
+}
+
+export interface TramoConductorResponse {
+  tramoConductor: TramoConductorConTerminaciones;
+}
+
+/** GET /routes/:id/conexionado — árbol de solo lectura tramo -> conductor -> terminación. */
+export interface ConexionadoTerminacion {
+  id: string;
+  extremo: TerminacionExtremo;
+  posicionTerminal: { id: string; codigo: string };
+  terminal: { id: string; numero: string };
+  bloqueTerminal: { id: string; codigo: string; cajaId: string | null; gabineteId: string | null; moduloId: string | null };
+}
+
+export interface ConexionadoConductor {
+  tramoConductorId: string;
+  conductorId: string;
+  conductorCodigo: string;
+  terminaciones: ConexionadoTerminacion[];
+}
+
+export interface ConexionadoSegmento {
+  tramoConexionId: string;
+  numeroOrden: number;
+  conductores: ConexionadoConductor[];
+}
+
+export interface RouteConexionadoResponse {
+  routeId: string;
+  conexionado: ConexionadoSegmento[];
 }
 
 /* ---- Lazo (documento de lazo de un instrumento) ------------------------ */

@@ -1,0 +1,15 @@
+{
+  "name": "SIEI",
+  "image": "mcr.microsoft.com/devcontainers/base:noble",
+  "forwardPorts": [3000, 5173],
+  "portsAttributes": {
+    "3000": {
+      "label": "SIEI backend",
+      "onAutoForward": "notify"
+    },
+    "5173": {
+      "label": "SIEI frontend",
+      "onAutoForward": "openPreview"
+    }
+  }
+}

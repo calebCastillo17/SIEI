@@ -42,6 +42,7 @@ import { tiposEntregableRouter } from './routes/tiposEntregable.js';
 import { ordenTipoInstrumentoRouter } from './routes/ordenTipoInstrumento.js';
 import { tiposEquipoRouter } from './routes/tiposEquipo.js';
 import { tiposGabineteRouter } from './routes/tiposGabinete.js';
+import { controlOverviewRouter } from './routes/controlOverview.js';
 
 const app = express();
 
@@ -210,6 +211,10 @@ app.use(
 app.use(
   '/api/projects/:projectId/entregables',
   entregablesRouter
+);
+app.use(
+  '/api/projects/:projectId/control',
+  controlOverviewRouter
 );
 
 app.use('/api/projects', projectsRouter);

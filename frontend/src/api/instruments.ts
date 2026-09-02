@@ -72,7 +72,11 @@ export function deactivateInstrument(
  * real, SOLO para un instrumento con estado P&ID = NO_EXISTE_EN_PNID.
  * Requiere permiso de administración del proyecto: 403 si el rol actual
  * no lo tiene, 409 si el instrumento no está en ese estado o si todavía
- * tiene señales/puntos de conexión/lazos/enlaces de comunicación reales. */
+ * tiene lazos/enlaces de comunicación reales. Las señales (migración 016)
+ * y los puntos de conexión propios (pedido explícito posterior) YA NO
+ * bloquean: las señales sobreviven activas marcadas `duenoAusente`, y el
+ * punto de conexión se cascada físicamente (tramo borrado, ruta
+ * desactivada, punto borrado) — ver `limpieza` en la respuesta. */
 export function deleteInstrumentDefinitivamente(
   projectId: string,
   instrumentId: string,

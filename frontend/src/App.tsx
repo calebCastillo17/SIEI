@@ -40,6 +40,11 @@ import { RevisionFormPage } from './pages/RevisionFormPage';
 import { RevisionDetailPage } from './pages/RevisionDetailPage';
 import { ProjectDocumentacionPage } from './pages/ProjectDocumentacionPage';
 import { ProjectPlantillasPage } from './pages/ProjectPlantillasPage';
+import { ControlSignalsPage } from './pages/ControlSignalsPage';
+import { ControlHardwarePage } from './pages/ControlHardwarePage';
+import { ControlGroupsPage } from './pages/ControlGroupsPage';
+import { ControlPlanosPage } from './pages/ControlPlanosPage';
+import { ControlSignalDetailPage } from './pages/ControlSignalDetailPage';
 
 function App() {
   return (
@@ -78,6 +83,14 @@ function App() {
         <Route
           path="/projects/:projectId/equipment/:equipmentId"
           element={<EquipmentDetailPage />}
+        />
+        <Route path="/projects/:projectId/control" element={<ControlSignalsPage />} />
+        <Route path="/projects/:projectId/control/hardware" element={<ControlHardwarePage />} />
+        <Route path="/projects/:projectId/control/groups" element={<ControlGroupsPage />} />
+        <Route path="/projects/:projectId/control/planos" element={<ControlPlanosPage />} />
+        <Route
+          path="/projects/:projectId/control/signals/:signalId"
+          element={<ControlSignalDetailPage />}
         />
         <Route path="/projects/:projectId/gabinetes" element={<GabinetesListPage />} />
         <Route path="/projects/:projectId/gabinetes/:gabineteId" element={<GabineteDetailPage />} />

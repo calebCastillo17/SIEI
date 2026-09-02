@@ -240,6 +240,7 @@ const SIGNAL_SELECT_COLUMNS = `
   s.retardo,
   s.enclavamiento,
   s.observacion,
+  s.dueno_ausente,
   s.activo,
   s.created_at,
   s.updated_at,
@@ -305,6 +306,8 @@ function serializeSignal(row: Record<string, any>) {
     retardo: row.retardo,
     enclavamiento: row.enclavamiento,
     observacion: row.observacion,
+
+    duenoAusente: Boolean(row.dueno_ausente),
 
     active: Boolean(row.activo),
 

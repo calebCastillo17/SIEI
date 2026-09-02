@@ -5,6 +5,7 @@ import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import {
   deactivateInstrument,
+  deleteInstrumentDefinitivamente,
   getInstrument,
   updateInstrument
 } from '../api/instruments';
@@ -66,6 +67,7 @@ export function InstrumentDetailPage() {
   const project = findProject(projectId);
   const canWrite = project?.access.permissions.write ?? false;
   const canDeactivate = project?.access.permissions.deactivate ?? false;
+  const canAdminister = project?.access.permissions.administer ?? false;
 
   const fetchInstrument = useCallback(() => {
     if (!projectId || !instrumentId) return Promise.resolve<Instrument | null>(null);
@@ -93,6 +95,7 @@ export function InstrumentDetailPage() {
   const [editing, setEditing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
+  const [deletingDefinitivamente, setDeletingDefinitivamente] = useState(false);
   const [actionError, setActionError] = useState<Error | null>(null);
 
   if (!projectId || !instrumentId) {
@@ -134,10 +137,39 @@ export function InstrumentDetailPage() {
     }
   }
 
+  /** Borrado físico real (migración 011 + 016) — SOLO habilitado cuando el
+   * estado P&ID es NO_EXISTE_EN_PNID. Las señales que tenían a este
+   * instrumento como dueño sobreviven activas marcadas "sin dueño"; solo
+   * puntos de conexión/lazos/enlaces de comunicación reales siguen
+   * bloqueando (409 `instrument_in_use`), igual que antes de la 016. */
+  async function handleDeleteDefinitivamente() {
+    if (!instrument) return;
+
+    const confirmed = window.confirm(
+      `¿ELIMINAR DEFINITIVAMENTE el instrumento "${instrument.tagInstrumento}"? ` +
+        'Esto lo borra de forma permanente — no hay forma de deshacerlo. ' +
+        'Las señales que dependían de él quedarán activas pero marcadas "sin dueño". ' +
+        'Si tiene puntos de conexión, lazos o enlaces de comunicación reales, la operación se rechaza.'
+    );
+    if (!confirmed) return;
+
+    setDeletingDefinitivamente(true);
+    setActionError(null);
+
+    try {
+      await deleteInstrumentDefinitivamente(projectId!, instrumentId!, devUser.email);
+      navigate(`/projects/${projectId}/instruments`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err : new Error('Error desconocido.'));
+      setDeletingDefinitivamente(false);
+    }
+  }
+
   const error = actionError ?? loadError ?? optionsError;
   const estadoPnidCodigo = instrument?.estadoPnidId
     ? (pnidEstadosById.get(instrument.estadoPnidId)?.codigo ?? null)
     : null;
+  const elegibleParaEliminacion = estadoPnidCodigo === 'NO_EXISTE_EN_PNID';
 
   return (
     <section>
@@ -167,6 +199,21 @@ export function InstrumentDetailPage() {
               onClick={handleDeactivate}
             >
               {deactivating ? 'Desactivando…' : 'Desactivar'}
+            </button>
+            <button
+              type="button"
+              className="button button--danger"
+              disabled={!canAdminister || !elegibleParaEliminacion || deletingDefinitivamente}
+              title={
+                !canAdminister
+                  ? 'Eliminar definitivamente un instrumento requiere permiso de administración en el proyecto.'
+                  : !elegibleParaEliminacion
+                    ? 'Solo se puede eliminar definitivamente un instrumento cuyo estado P&ID sea "No existe en P&ID".'
+                    : 'Borra el instrumento de forma permanente.'
+              }
+              onClick={handleDeleteDefinitivamente}
+            >
+              {deletingDefinitivamente ? 'Eliminando…' : 'Eliminar definitivamente'}
             </button>
           </div>
         )}

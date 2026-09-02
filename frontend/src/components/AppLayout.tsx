@@ -78,6 +78,9 @@ export function AppLayout() {
               >
                 Señales
               </NavLink>
+              <NavLink to={`/projects/${currentProject.id}/control`} className="app-nav__link">
+                Control
+              </NavLink>
               <NavLink to={`/projects/${currentProject.id}/gabinetes`} className="app-nav__link">
                 Gabinetes
               </NavLink>

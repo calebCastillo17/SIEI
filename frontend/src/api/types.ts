@@ -86,6 +86,24 @@ export interface Instrument {
   equipoAsociadoTag: string | null;
   instrumentoAsociadoId: string | null;
   instrumentoAsociadoTag: string | null;
+  /** Calculado (no una columna en la base, ver instruments.ts) — solo
+   * GET lista/detalle lo devuelven, no viene en la respuesta de POST/PATCH
+   * (que igual el frontend nunca renderiza directo, siempre refresca con
+   * un GET después). true si algún otro instrumento activo lo señala como
+   * su `instrumentoAsociadoId` — o sea, es la cabeza de un grupo. */
+  esCabezaDeGrupo?: boolean;
+  /** Calculado — el tag del PADRE del grupo al que pertenece este
+   * instrumento (su propio tag si es cabeza, o `instrumentoAsociadoTag` si
+   * es hijo). `null` si no pertenece a ningún grupo. */
+  grupoTag?: string | null;
+  /** Calculado, solo en GET lista — clave de orden que SÍ incluye el
+   * fallback por texto (tipo+correlativo, mismo motor que el LDI, ver
+   * backend/src/lib/instrumentGrouping.ts), a diferencia de `grupoTag`
+   * (arriba, solo relación curada real). Nunca se muestra al usuario como
+   * "Grupo" — solo sirve para que el orden por defecto de la lista
+   * clusterice instrumentos sueltos del mismo tipo (ej. "los PIT
+   * juntos"), igual que ya hace el LDI. */
+  ordenGrupoTag?: string;
   fechaAgregado: string | null;
   fechaUltimaRevision: string | null;
   active: boolean;
@@ -131,6 +149,21 @@ export interface InstrumentEliminacionResponse {
     resultadosPnidDesvinculados: number;
     asociacionesInstrumentoAsociadoLimpiadas: number;
     filasRevisionEntregableDesvinculadas: number;
+    /** Señales que tenían a este instrumento como dueño directo — quedan
+     * activas con `duenoAusente: true` (migración 016), no se borran. */
+    senalesMarcadasSinDueno: number;
+    /** Señales que solo tenían a este instrumento como agrupador (no como
+     * dueño) — se les limpia `instrumentoAgrupadorId`, sin marcarlas. */
+    senalesAgrupadorDesvinculado: number;
+    /** punto_conexion propio del instrumento, borrado físicamente (ya no
+     * bloquea la eliminación como lazo/enlace_com). */
+    puntosConexionEliminados: number;
+    /** tramo_conexion que usaba esos puntos como origen/destino, borrado
+     * físicamente junto con ellos. */
+    tramosConexionEliminados: number;
+    /** ruta_conexion que se quedó sin tramos activos por lo anterior —
+     * se desactiva (no se borra), conservando el historial señal↔ruta. */
+    rutasConexionDesactivadas: number;
   };
 }
 
@@ -306,6 +339,9 @@ export interface Signal {
   retardo: string | null;
   enclavamiento: string | null;
   observacion: string | null;
+  /** Migración 016 — true solo cuando el instrumento que era su dueño fue
+   * eliminado definitivamente (nunca alcanzable de otra forma). */
+  duenoAusente: boolean;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -1140,6 +1176,18 @@ export type PnidDiferencias = PnidFieldDiff[] | { detalle: string } | null;
  * pnidLabels.ts). null si no hay fila fuente (NO_EXISTE_EN_PNID). */
 export type PnidDatosPropuestos = Record<string, string | null> | null;
 
+/** Recursos que un instrumento NO_EXISTE_EN_PNID tiene hoy, calculados en
+ * vivo — advertencia informativa, nunca elimina nada por sí misma.
+ * senalesActivas por sí solas NO bloquean la eliminación definitiva
+ * (migración 016 — la señal queda "sin dueño"); puntosConexion/lazos/
+ * enlacesCom SÍ la siguen bloqueando por completo (instruments.ts). */
+export interface PnidRecursosEnRiesgo {
+  senalesActivas: number;
+  puntosConexion: number;
+  lazos: number;
+  enlacesCom: number;
+}
+
 /** Forma de cada resultado dentro de la respuesta de POST /preview. */
 export interface PnidPreviewResultado {
   filaIndex: number | null;
@@ -1149,6 +1197,9 @@ export interface PnidPreviewResultado {
   resultado: string;
   diferencias: PnidDiferencias;
   requiereRevision: boolean;
+  /** Solo poblado para resultado = NO_EXISTE_EN_PNID con al menos uno de
+   * los cuatro recursos > 0. null en cualquier otro caso. */
+  recursosEnRiesgo: PnidRecursosEnRiesgo | null;
   datosPropuestos: PnidDatosPropuestos;
 }
 
@@ -1166,6 +1217,8 @@ export interface PnidDetailResultado {
   requiereRevision: boolean;
   aplicado: boolean;
   aplicadoAt: string | null;
+  /** Recalculado en vivo contra el estado actual — ver PnidRecursosEnRiesgo. */
+  recursosEnRiesgo: PnidRecursosEnRiesgo | null;
   datosPropuestos: PnidDatosPropuestos;
 }
 
@@ -1272,7 +1325,7 @@ export interface PlantillaMutationResponse {
   plantilla: PlantillaEntregable;
 }
 
-/** Los mismos 11 campos válidos que backend/src/lib/ldi/order.ts
+/** Los mismos 12 campos válidos que backend/src/lib/ldi/order.ts
  * CAMPOS_ORDEN_VALIDOS — si el backend agrega uno nuevo, agregarlo acá y
  * a CAMPO_LABELS en OrderCriteriaEditor.tsx es lo único que hace falta. */
 export type OrdenCampo =
@@ -1286,7 +1339,8 @@ export type OrdenCampo =
   | 'locacion'
   | 'equipo_asociado'
   | 'instrumento_asociado'
-  | 'orden_instrumentos_asociados';
+  | 'orden_instrumentos_asociados'
+  | 'pnid';
 
 export interface CriterioOrden {
   campo: OrdenCampo;
@@ -1366,7 +1420,7 @@ export interface RevisionesListResponse {
   revisiones: RevisionEntregable[];
 }
 
-/** Las 19 columnas del LDI ya resueltas — ver backend/src/lib/ldi/
+/** Las 20 columnas del LDI ya resueltas — ver backend/src/lib/ldi/
  * snapshot.ts. Genérico a propósito en el backend (JSON), tipado acá solo
  * para este entregable. */
 export interface LdiSnapshotRow {
@@ -1375,6 +1429,7 @@ export interface LdiSnapshotRow {
   tipo: string;
   tecnologia: string;
   conexionProceso: string;
+  instrumentoAsociado: string;
   linea: string;
   equipoAsociado: string;
   servicio: string;
@@ -1535,4 +1590,156 @@ export interface PlanoInput {
   codigoAnterior: string | null;
   descripcion: string;
   tipoPlanoId: string;
+}
+
+/* ---- Sección CONTROL (vistas de solo lectura, ver controlOverview.ts) -- */
+
+export interface ControlSignalDueno {
+  tipo: 'instrumento' | 'equipo';
+  id: string;
+  tag: string;
+  descripcion: string | null;
+  // Solo cuando tipo === 'instrumento':
+  tipoInstrumento?: string | null;
+  servicio?: string | null;
+  sistema?: string | null;
+  ubicacion?: string | null;
+  nodo?: string | null;
+  pnpid?: string | null;
+  planoPnid?: string | null;
+  tecnologia?: string | null;
+  funcionamiento?: string | null;
+  cuerpoInstrumento?: string | null;
+  linea?: string | null;
+  equipoAsociadoTag?: string | null;
+  // Solo cuando tipo === 'equipo':
+  panel?: string | null;
+}
+
+export interface ControlSignalIo {
+  canalId: string;
+  numeroCanal: number;
+  moduloId: string | null;
+  fabricante: string | null;
+  modelo: string | null;
+  numeroSlot: number | null;
+  numeroRack: number | null;
+  gabineteId: string | null;
+  tagGabinete: string | null;
+  tipoGabineteCodigo: string | null;
+}
+
+export type EstadoConexionado = 'IO_PENDIENTE' | 'RUTA_PENDIENTE' | 'RUTA_CARGADA';
+
+export interface ControlSignal {
+  id: string;
+  codigoSenal: string | null;
+  tagSenal: string | null;
+  nombreCorto: string | null;
+  descripcion: string | null;
+  tipoIoCodigo: string | null;
+  dueno: ControlSignalDueno | null;
+  agrupador: { id: string; tag: string } | null;
+  io: ControlSignalIo | null;
+  cajaTag: string | null;
+  rutaId: string | null;
+  estadoConexionado: EstadoConexionado;
+  /** true solo cuando el instrumento que era su dueño fue eliminado
+   * definitivamente (migración 016) — la señal sigue activa, sin dueño. */
+  duenoAusente: boolean;
+}
+
+export interface ControlRutaNodo {
+  tipo: 'instrumento' | 'equipo' | 'caja' | 'gabinete' | 'modulo' | 'desconocido';
+  tag: string;
+  extra?: string;
+}
+
+export interface ControlSignalDetail extends ControlSignal {
+  rutaNodos: ControlRutaNodo[];
+}
+
+export interface ControlSignalsResponse {
+  projectId: string;
+  signals: ControlSignal[];
+}
+
+export interface ControlCanalSenal {
+  id: string;
+  codigoSenal: string | null;
+  tagSenal: string | null;
+  nombreCorto: string | null;
+  duenoTag: string | null;
+  duenoTipo: 'instrumento' | 'equipo' | null;
+  agrupadorTag: string | null;
+  cajaTag: string | null;
+  duenoAusente: boolean;
+  estadoConexionado: EstadoConexionado;
+}
+
+export interface ControlCanal {
+  id: string;
+  numeroCanal: number;
+  senal: ControlCanalSenal | null;
+  estado: 'OCUPADO' | 'RESERVA';
+}
+
+export interface ControlGrupo {
+  clave: string;
+  tipo: 'agrupador' | 'individual';
+  gabinetes: string[];
+  nMiembros: number;
+  miembros: ControlSignal[];
+}
+
+export interface ControlGroupsResponse {
+  projectId: string;
+  grupos: ControlGrupo[];
+}
+
+export interface ControlModulo {
+  id: string;
+  fabricante: string | null;
+  modelo: string | null;
+  tipoIoCodigo: string | null;
+  canales: ControlCanal[];
+}
+
+export interface ControlSlot {
+  id: string;
+  numeroSlot: number;
+  modulo: ControlModulo | null;
+}
+
+export interface ControlRack {
+  id: string;
+  numeroRack: number;
+  slots: ControlSlot[];
+}
+
+export interface ControlGabinete {
+  id: string;
+  tagGabinete: string;
+  tipoGabineteCodigo: string;
+  racks: ControlRack[];
+}
+
+export interface ControlHardwareResponse {
+  projectId: string;
+  gabinetes: ControlGabinete[];
+}
+
+export interface ControlPlanoAsociacion {
+  entidadTipo: 'gabinete' | 'caja';
+  entidadId: string;
+  entidadTag: string;
+  planoId: string;
+  codigoPlano: string | null;
+  descripcion: string;
+  tipoPlanoCodigo: string;
+}
+
+export interface ControlPlanosResponse {
+  projectId: string;
+  planos: ControlPlanoAsociacion[];
 }

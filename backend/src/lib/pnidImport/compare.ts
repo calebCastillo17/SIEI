@@ -26,6 +26,22 @@ export interface InstrumentSnapshot {
   tipoSenalPnid: string | null;
   equipoAsociadoTag: string | null;
   instrumentoAsociadoTag: string | null;
+  /** Señales CONTROL/COM activas que hoy lo tienen como dueño o como
+   * instrumento agrupador — solo importa para advertir en NO_EXISTE_EN_PNID
+   * (ver migración 016, nucleo.senal.dueno_ausente): si el usuario elimina
+   * definitivamente este instrumento más adelante, esas señales quedarían
+   * "sin dueño" (activas, pero sin instrumento). El PREVIEW nunca elimina
+   * nada — es solo una advertencia informativa. */
+  senalesActivas: number;
+  /** Puntos de conexión, lazos y enlaces de comunicación que referencian
+   * al instrumento — a diferencia de las señales, estos SÍ siguen
+   * bloqueando la eliminación definitiva por completo (instruments.ts,
+   * "Opción A" — sin cambio de esquema ahí). Se muestran igual en la
+   * advertencia para que el usuario sepa, ANTES de intentar eliminar, que
+   * ni siquiera va a poder hacerlo hasta resolver esto a mano. */
+  puntosConexion: number;
+  lazos: number;
+  enlacesCom: number;
 }
 
 export interface FieldDiff {
@@ -54,6 +70,17 @@ export interface ComparisonResultEntry {
   diferencias: FieldDiff[] | DetalleTexto | null;
   requiereRevision: boolean;
   instrumentoUpdatedAtPreview: string | null;
+  /** Solo poblado para resultadoCodigo = NO_EXISTE_EN_PNID cuando el
+   * instrumento tiene AL MENOS UNO de estos cuatro recursos — advertencia
+   * informativa (nunca elimina nada), null en cualquier otro caso.
+   * senalesActivas: no bloquea la eliminación (queda dueno_ausente=1).
+   * puntosConexion/lazos/enlacesCom: SÍ siguen bloqueando por completo. */
+  recursosEnRiesgo: {
+    senalesActivas: number;
+    puntosConexion: number;
+    lazos: number;
+    enlacesCom: number;
+  } | null;
 }
 
 export interface ComparisonPlanInput {
@@ -107,7 +134,13 @@ function makeEntry(
     resultadoCodigo,
     diferencias,
     requiereRevision,
-    instrumentoUpdatedAtPreview: instrumento ? (instrumento.updatedAt ?? null) : null
+    instrumentoUpdatedAtPreview: instrumento ? (instrumento.updatedAt ?? null) : null,
+    recursosEnRiesgo: (() => {
+      if (resultadoCodigo !== 'NO_EXISTE_EN_PNID' || !instrumento) return null;
+      const { senalesActivas, puntosConexion, lazos, enlacesCom } = instrumento;
+      if (senalesActivas === 0 && puntosConexion === 0 && lazos === 0 && enlacesCom === 0) return null;
+      return { senalesActivas, puntosConexion, lazos, enlacesCom };
+    })()
   };
 }
 

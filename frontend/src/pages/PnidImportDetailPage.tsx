@@ -54,6 +54,39 @@ function ResultRowDetail({ resultado }: { resultado: PnidDetailResultado }) {
         </p>
       )}
 
+      {resultado.recursosEnRiesgo && (
+        <div className="error-message">
+          <p>⚠ Este instrumento todavía tiene recursos asociados en SIEI:</p>
+          <ul>
+            {resultado.recursosEnRiesgo.senalesActivas > 0 && (
+              <li>
+                <strong>{resultado.recursosEnRiesgo.senalesActivas}</strong> señal(es) CONTROL/COM
+                activa(s) — si lo eliminas definitivamente, se conservarán activas pero quedarán
+                marcadas "sin dueño" (esto NO bloquea la eliminación).
+              </li>
+            )}
+            {resultado.recursosEnRiesgo.puntosConexion > 0 && (
+              <li>
+                <strong>{resultado.recursosEnRiesgo.puntosConexion}</strong> punto(s) de conexión
+                — esto SÍ bloquea la eliminación definitiva por completo hasta que lo resuelvas.
+              </li>
+            )}
+            {resultado.recursosEnRiesgo.lazos > 0 && (
+              <li>
+                <strong>{resultado.recursosEnRiesgo.lazos}</strong> lazo(s) — esto SÍ bloquea la
+                eliminación definitiva por completo hasta que lo resuelvas.
+              </li>
+            )}
+            {resultado.recursosEnRiesgo.enlacesCom > 0 && (
+              <li>
+                <strong>{resultado.recursosEnRiesgo.enlacesCom}</strong> enlace(s) de comunicación
+                — esto SÍ bloquea la eliminación definitiva por completo hasta que lo resuelvas.
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+
       {resultado.datosPropuestos !== null && (
         <>
           <h4>Datos del reporte</h4>

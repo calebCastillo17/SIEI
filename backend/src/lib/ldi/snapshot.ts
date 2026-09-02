@@ -1,7 +1,7 @@
 import type { LdiOrderableInstrumento } from './order.js';
 
 /**
- * Forma de `revision_entregable_fila.datos_snapshot` para el LDI — las 19
+ * Forma de `revision_entregable_fila.datos_snapshot` para el LDI — las 20
  * columnas de este entregable (sin `tagAnterior`, ver columns.ts), ya
  * resueltas. Los 5 campos sin fuente van como "" explícito (nunca
  * ausentes, nunca null) para que el snapshot sea autocontenido: una
@@ -20,6 +20,7 @@ export interface LdiSnapshotRow {
   tipo: string;
   tecnologia: string;
   conexionProceso: string;
+  instrumentoAsociado: string;
   linea: string;
   equipoAsociado: string;
   servicio: string;
@@ -45,6 +46,7 @@ export function construirSnapshotFila(
     tipo: instrumento.tipoInstrumento ?? '',
     tecnologia: instrumento.tecnologia ?? '',
     conexionProceso: instrumento.conexionProceso ?? '',
+    instrumentoAsociado: instrumento.instrumentoAsociadoTag ?? '',
     linea: instrumento.lineaPnid ?? '',
     equipoAsociado: instrumento.equipoAsociadoTag ?? '',
     servicio: instrumento.servicio ?? '',

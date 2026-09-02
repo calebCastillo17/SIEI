@@ -18,7 +18,7 @@ import { RevisionEstadoBadge } from '../components/RevisionEstadoBadge';
 import { OrderCriteriaEditor } from '../components/OrderCriteriaEditor';
 import { ordenCampoLabel } from '../components/orderCriteriaLabels';
 
-const PREVIEW_ROW_LIMIT = 20;
+const PREVIEW_ROW_LIMIT = 100;
 
 interface Draft {
   codigoRevision: string;
@@ -469,6 +469,7 @@ export function RevisionDetailPage() {
                       <th>Ítem</th>
                       <th>TAG</th>
                       <th>Descripción</th>
+                      <th>Instrumento Asociado</th>
                       <th>Locación</th>
                       <th>Servicio</th>
                       <th>Rev</th>
@@ -480,6 +481,7 @@ export function RevisionDetailPage() {
                         <td>{fila.item}</td>
                         <td>{fila.snapshot.tag}</td>
                         <td>{fila.snapshot.descripcion || '—'}</td>
+                        <td>{fila.snapshot.instrumentoAsociado || '—'}</td>
                         <td>{fila.snapshot.locacion || '—'}</td>
                         <td>{fila.snapshot.servicio || '—'}</td>
                         <td>{fila.snapshot.rev}</td>

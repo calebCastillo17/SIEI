@@ -16,6 +16,11 @@
  * el nombre aprobado es `orden_instrumentos_asociados`.
  */
 
+import {
+  obtenerPrefijoTag,
+  resolverGrupoInstrumentoAsociado
+} from '../instrumentGrouping.js';
+
 export interface LdiOrderableInstrumento {
   id: string;
   tagInstrumento: string;
@@ -51,63 +56,20 @@ const CAMPOS_ORDEN_VALIDOS = new Set([
   'locacion', // instrumento.ubicacion — mismo nombre que la columna LOCACIÓN del LDI, no "ubicacion"
   'equipo_asociado',
   'instrumento_asociado',
-  'orden_instrumentos_asociados'
+  'orden_instrumentos_asociados',
+  'pnid' // instrumento.plano_pnid — mismo nombre que la columna P&ID del LDI
 ]);
 
 export function esCampoOrdenValido(campo: string): boolean {
   return CAMPOS_ORDEN_VALIDOS.has(campo);
 }
 
-function splitTagParts(tag: string): string[] {
-  return tag.toUpperCase().trim().split('-');
-}
-
-/** Segundo segmento del TAG separado por "-" (ej. "620-LV-5003A" -> "LV")
- * — mismo criterio que ObtenerPrefijoTag de la macro legacy. */
-export function obtenerPrefijoTag(tag: string): string {
-  const partes = splitTagParts(tag);
-  if (partes.length >= 3) return partes[1];
-  if (partes.length >= 2) return partes[0];
-  return partes[0] ?? '';
-}
-
-/** Último segmento del TAG sin la letra final si termina en letra (ej.
- * "620-LV-5003A" -> "5003") — mismo criterio que ObtenerGrupoTag. */
-export function obtenerGrupoTagInferido(tag: string): string {
-  const partes = splitTagParts(tag);
-  if (partes.length >= 3) {
-    const base = partes[partes.length - 1];
-    if (/[A-Z]$/.test(base)) return base.slice(0, -1);
-    return base;
-  }
-  return tag.toUpperCase().trim();
-}
-
-/** Grupo efectivo para "instrumento_asociado": prioriza la relación
- * explícita (por id, resuelto a su TAG si el instrumento asociado sigue
- * activo en el dataset; si no, su tag libre); si no hay relación
- * explícita, cae al grupo inferido por texto del propio TAG.
- *
- * Importante: el TAG resuelto de la relación explícita se pasa por
- * `obtenerGrupoTagInferido` igual que cualquier otro — si no, un
- * instrumento con relación explícita nunca terminaría adyacente al
- * instrumento asociado mismo (que calcula SU PROPIO grupo con esa misma
- * función): las dos claves tienen que vivir en el mismo "espacio" para
- * poder empatar al ordenar. La relación explícita decide A QUÉ grupo se
- * une, no inventa un espacio de claves aparte. */
-export function resolverGrupoInstrumentoAsociado(
-  row: LdiOrderableInstrumento,
-  tagPorInstrumentoId: Map<string, string>
-): string {
-  if (row.instrumentoAsociadoId) {
-    const tagResuelto = tagPorInstrumentoId.get(row.instrumentoAsociadoId);
-    if (tagResuelto) return obtenerGrupoTagInferido(tagResuelto);
-  }
-  if (row.instrumentoAsociadoTag) {
-    return obtenerGrupoTagInferido(row.instrumentoAsociadoTag);
-  }
-  return obtenerGrupoTagInferido(row.tagInstrumento);
-}
+// obtenerPrefijoTag / obtenerGrupoTagInferido / resolverGrupoInstrumentoAsociado
+// se movieron a ../instrumentGrouping.ts (importadas arriba) — compartidas
+// con el listado de Instrumentos del Master (instruments.ts), que pidió
+// exactamente el mismo agrupamiento visual ("los PIT juntos" / "cada LV
+// con su propio LY"). Nadie fuera de este archivo las importaba desde
+// acá, así que no quedó re-export de compatibilidad.
 
 export function resolverOrdenInstrumentosAsociados(
   row: LdiOrderableInstrumento,
@@ -120,6 +82,10 @@ export function resolverOrdenInstrumentosAsociados(
 interface OrderContext {
   grupoPorId: Map<string, string>;
   ordenPorId: Map<string, number>;
+  /** ids que son PADRE de al menos un grupo (algún otro row del dataset
+   * los señala vía instrumentoAsociadoId) — usado solo para el desempate
+   * "padre primero" del criterio instrumento_asociado, ver más abajo. */
+  cabezaIds: Set<string>;
 }
 
 function buildContext(
@@ -127,15 +93,25 @@ function buildContext(
   ordenPorPrefijo: Map<string, number>
 ): OrderContext {
   const tagPorInstrumentoId = new Map(rows.map((r) => [r.id, r.tagInstrumento]));
+
+  // Quién es padre de alguien — lo usa tanto resolverGrupoInstrumentoAsociado
+  // (para decidir si un row sin relación propia es de todos modos cabeza de
+  // otros) como el desempate "padre primero" del comparador principal (ver
+  // ordenarInstrumentosLdi).
+  const cabezaIds = new Set<string>();
+  for (const row of rows) {
+    if (row.instrumentoAsociadoId) cabezaIds.add(row.instrumentoAsociadoId);
+  }
+
   const grupoPorId = new Map<string, string>();
   const ordenPorId = new Map<string, number>();
 
   for (const row of rows) {
-    grupoPorId.set(row.id, resolverGrupoInstrumentoAsociado(row, tagPorInstrumentoId));
+    grupoPorId.set(row.id, resolverGrupoInstrumentoAsociado(row, tagPorInstrumentoId, cabezaIds));
     ordenPorId.set(row.id, resolverOrdenInstrumentosAsociados(row, ordenPorPrefijo));
   }
 
-  return { grupoPorId, ordenPorId };
+  return { grupoPorId, ordenPorId, cabezaIds };
 }
 
 function resolveSortValue(
@@ -153,6 +129,7 @@ function resolveSortValue(
     case 'tecnologia': return row.tecnologia ?? '';
     case 'locacion': return row.ubicacion ?? '';
     case 'equipo_asociado': return row.equipoAsociadoTag ?? '';
+    case 'pnid': return row.planoPnid ?? '';
     case 'instrumento_asociado': return ctx.grupoPorId.get(row.id) ?? '';
     case 'orden_instrumentos_asociados': return ctx.ordenPorId.get(row.id) ?? 99;
     default: return '';
@@ -188,6 +165,19 @@ export function ordenarInstrumentosLdi(
         if (aVacia !== bVacia) return aVacia ? 1 : -1;
       }
 
+      // Dentro del mismo grupo (mismo valor de instrumento_asociado), el
+      // PADRE siempre va antes que sus hijos — pedido explícito del
+      // usuario ("no se agrupa poniendo el padre primero?"). Sin esto, el
+      // empate en este criterio caía en lo que viniera después (o el
+      // orden original), y el padre podía terminar después de un hijo.
+      // Independiente de ASC/DESC, igual que la regla de LOCACIÓN arriba
+      // — no es un valor de dato que deba invertirse con la dirección.
+      if (campo === 'instrumento_asociado' && va === vb) {
+        const aCabeza = ctx.cabezaIds.has(a.id);
+        const bCabeza = ctx.cabezaIds.has(b.id);
+        if (aCabeza !== bCabeza) return aCabeza ? -1 : 1;
+      }
+
       let cmp: number;
       if (typeof va === 'number' && typeof vb === 'number') {
         cmp = va - vb;
@@ -197,6 +187,34 @@ export function ordenarInstrumentosLdi(
 
       if (cmp !== 0) return direccion === 'DESC' ? -cmp : cmp;
     }
-    return 0;
+
+    /*
+     * Desempate final IMPLÍCITO — pedido explícito del usuario: "el orden
+     * principal para el entregable es el que tiene el listado [Master]...
+     * dentro de cada locación sigue manteniendo el mismo orden que tenía
+     * el Master". Si los criterios configurados (los que el usuario eligió
+     * a mano, ej. solo P&ID) empatan, en vez de caer en un orden arbitrario
+     * (el de llegada del arreglo, típicamente TAG alfabético plano de la
+     * consulta SQL), se usa SIEMPRE el mismo orden agrupado que ya usa el
+     * listado de Instrumentos del Master (`ctx.grupoPorId`/`cabezaIds`, ya
+     * calculados arriba para el criterio "instrumento_asociado" — no hace
+     * falta que el usuario lo agregue a mano para que esto aplique, y
+     * agregarlo explícitamente sigue siendo válido si quiere subirlo de
+     * prioridad por encima de otro criterio). Nunca ASC/DESC: es el orden
+     * de base, no un valor de dato de la fila.
+     */
+    const grupoA = ctx.grupoPorId.get(a.id) ?? '';
+    const grupoB = ctx.grupoPorId.get(b.id) ?? '';
+    if (grupoA !== grupoB) {
+      return grupoA.localeCompare(grupoB, 'es', { sensitivity: 'base' });
+    }
+
+    const aCabezaFinal = ctx.cabezaIds.has(a.id);
+    const bCabezaFinal = ctx.cabezaIds.has(b.id);
+    if (aCabezaFinal !== bCabezaFinal) {
+      return aCabezaFinal ? -1 : 1;
+    }
+
+    return a.tagInstrumento.localeCompare(b.tagInstrumento, 'es', { sensitivity: 'base' });
   });
 }

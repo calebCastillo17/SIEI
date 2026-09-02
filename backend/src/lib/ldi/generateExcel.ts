@@ -143,10 +143,10 @@ function findHeaderRow(ws: ExcelJS.Worksheet): number {
   throw new LdiTemplateError('No se encontró la fila de encabezado (columna "Ítem") en la hoja de datos.');
 }
 
-/** Ubica cada una de las 19 columnas de este entregable por texto de
+/** Ubica cada una de las 20 columnas de este entregable por texto de
  * encabezado (tolerante a que otra plantilla las reordene) y reescribe el
  * encabezado si la columna trae `newHeaderLabel`. En la plantilla oficial
- * vigente las 19 caen exactamente en A:S, sin columnas intermedias
+ * vigente las 20 caen exactamente en A:T, sin columnas intermedias
  * ajenas al LDI — no hay ningún "N° TAG WSP"/"SISTEMA" huérfano que
  * ocultar como en la plantilla anterior, pero la función no lo asume: si
  * una plantilla futura vuelve a intercalar columnas ajenas,
@@ -194,7 +194,7 @@ function locateColumns(ws: ExcelJS.Worksheet, headerRow: number): Map<LdiFieldKe
  * en vez de borrarlas físicamente de la plantilla: evita el riesgo de
  * tener que recalcular merges/anchors de imágenes que dependan de
  * posiciones de columna en otras zonas de la hoja. En la plantilla
- * oficial vigente esto es un no-op (las 19 columnas A:S son exactamente
+ * oficial vigente esto es un no-op (las 20 columnas A:T son exactamente
  * las de este LDI, sin ninguna intermedia ajena como el "N° TAG WSP" de
  * la plantilla anterior) — se conserva para no depender de que eso siga
  * siendo cierto en una plantilla futura.

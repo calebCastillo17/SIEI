@@ -1,8 +1,8 @@
 /*
- * Las 19 columnas del Listado de Instrumentos (LDI) para este entregable,
- * en el mismo orden que la hoja Hoja1 de la plantilla oficial vigente
+ * Las 20 columnas del Listado de Instrumentos (LDI) para este entregable,
+ * en el mismo orden que la hoja Lista de la plantilla oficial vigente
  * (reference_excel/Lista_instrumentos_plantilla.xlsx, fila de encabezado
- * 9, columnas A:S).
+ * 9, columnas A:T).
  *
  * Historial: de las 20 originalmente confirmadas, una primera ronda de
  * correcciones quitó "N° TAG ANTERIOR" y "SISTEMA". La plantilla oficial
@@ -12,6 +12,17 @@
  * existe ninguna columna para ese dato en la hoja). `instrumento.
  * tag_anterior` sigue existiendo íntegro en el Master; simplemente no se
  * imprime en este entregable ni aparece en su snapshot.
+ *
+ * El usuario agregó después una nueva columna G "INSTRUMENTO ASOCIADO"
+ * (todas las columnas de la G en adelante se recorrieron una posición,
+ * LÍNEA pasó de G a H y EQUIPO ASOCIADO de H a I) — vuelve a subir el
+ * conteo a 20. La fuente es `instrumento.instrumento_asociado_tag`
+ * (migración 005), el mismo tipo de campo curado/libre que ya alimentaba
+ * "EQUIPO ASOCIADO" (se imprime el tag tal cual está en el Master, no se
+ * resuelve vía `instrumento_asociado_id`; esa resolución vía id solo la
+ * usa el motor de orden en order.ts para agrupar). Como cada columna se
+ * ubica por texto de encabezado y no por letra fija, este reacomodo no
+ * requirió ningún otro cambio.
  *
  * `headerAliases` es la lista de textos de encabezado que identifican esa
  * columna en la plantilla — se busca por texto normalizado (mayúsculas,
@@ -32,6 +43,7 @@ export type LdiFieldKey =
   | 'tipo'
   | 'tecnologia'
   | 'conexionProceso'
+  | 'instrumentoAsociado'
   | 'linea'
   | 'equipoAsociado'
   | 'servicio'
@@ -59,6 +71,7 @@ export const LDI_COLUMNS: LdiColumnSpec[] = [
   { key: 'tipo', headerAliases: ['TIPO'] },
   { key: 'tecnologia', headerAliases: ['TECNOLOGÍA', 'TECNOLOGIA'] },
   { key: 'conexionProceso', headerAliases: ['CONEXIÓN A PROCESO', 'CONEXION A PROCESO'] },
+  { key: 'instrumentoAsociado', headerAliases: ['INSTRUMENTO ASOCIADO'] },
   { key: 'linea', headerAliases: ['LÍNEA', 'LINEA'] },
   { key: 'equipoAsociado', headerAliases: ['EQUIPO ASOCIADO'] },
   { key: 'servicio', headerAliases: ['SERVICIO'] },

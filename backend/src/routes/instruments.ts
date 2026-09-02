@@ -10,6 +10,7 @@ import sql from 'mssql';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireProjectPermission } from '../middleware/requireProjectPermission.js';
 import { getDbPool } from '../db/sql.js';
+import { calcularOrdenAgrupado } from '../lib/instrumentGrouping.js';
 
 export const instrumentsRouter = Router({ mergeParams: true });
 
@@ -51,42 +52,89 @@ instrumentsRouter.get(
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .query(`
           SELECT
-            id,
-            proyecto_id,
-            estado_pnid_id,
-            tag_instrumento,
-            pnpid,
-            fuente_pnpid,
-            descripcion,
-            tipo_instrumento,
-            servicio,
-            sistema,
-            ubicacion,
-            nodo,
-            tag_anterior,
-            tecnologia,
-            funcionamiento,
-            cuerpo_instrumento,
-            conexion_proceso,
-            plano_pnid,
-            linea_pnid,
-            tipo_senal_pnid,
-            equipo_asociado_id,
-            equipo_asociado_tag,
-            instrumento_asociado_id,
-            instrumento_asociado_tag,
-            fecha_agregado,
-            fecha_ultima_revision,
-            activo,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-          FROM nucleo.instrumento
-          WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1
-          ORDER BY tag_instrumento;
+            i.id,
+            i.proyecto_id,
+            i.estado_pnid_id,
+            i.tag_instrumento,
+            i.pnpid,
+            i.fuente_pnpid,
+            i.descripcion,
+            i.tipo_instrumento,
+            i.servicio,
+            i.sistema,
+            i.ubicacion,
+            i.nodo,
+            i.tag_anterior,
+            i.tecnologia,
+            i.funcionamiento,
+            i.cuerpo_instrumento,
+            i.conexion_proceso,
+            i.plano_pnid,
+            i.linea_pnid,
+            i.tipo_senal_pnid,
+            i.equipo_asociado_id,
+            i.equipo_asociado_tag,
+            i.instrumento_asociado_id,
+            i.instrumento_asociado_tag,
+            i.fecha_agregado,
+            i.fecha_ultima_revision,
+            i.activo,
+            i.created_at,
+            i.updated_at,
+            i.created_by,
+            i.updated_by,
+            -- Agrupamiento por Instrumento Asociado (migración 005, sin
+            -- columna nueva — se calcula acá en vez de duplicarlo en una
+            -- columna porque siempre es derivable y nunca debe
+            -- desincronizarse). es_cabeza_de_grupo = algún otro
+            -- instrumento activo lo señala como su instrumento_asociado.
+            -- grupo_tag = el tag del PADRE del grupo (el propio tag si es
+            -- cabeza, o su instrumento_asociado_tag si es hijo — el mismo
+            -- campo "curado" que ya imprime EQUIPO/INSTRUMENTO ASOCIADO,
+            -- no resuelto vía id) — NULL si no pertenece a ningún grupo.
+            CASE WHEN EXISTS (
+              SELECT 1 FROM nucleo.instrumento h
+              WHERE h.proyecto_id = i.proyecto_id
+                AND h.instrumento_asociado_id = i.id
+                AND h.activo = 1
+            ) THEN 1 ELSE 0 END AS es_cabeza_de_grupo,
+            CASE
+              WHEN i.instrumento_asociado_tag IS NOT NULL THEN i.instrumento_asociado_tag
+              WHEN EXISTS (
+                SELECT 1 FROM nucleo.instrumento h
+                WHERE h.proyecto_id = i.proyecto_id
+                  AND h.instrumento_asociado_id = i.id
+                  AND h.activo = 1
+              ) THEN i.tag_instrumento
+              ELSE NULL
+            END AS grupo_tag
+          FROM nucleo.instrumento i
+          WHERE i.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND i.activo = 1
+          ORDER BY i.tag_instrumento;
         `);
+
+      /*
+       * ordenGrupoTag: clave de orden que SÍ usa el fallback por texto
+       * (mismo motor que el LDI, ver lib/instrumentGrouping.ts) — a
+       * diferencia de `grupoTag` (arriba, calculado en SQL, solo relación
+       * curada real), esto agrupa también instrumentos SUELTOS que
+       * comparten tipo+correlativo, para que el listado del Master salga
+       * clusterizado igual que el LDI ("los PIT juntos") — pedido
+       * explícito del usuario tras ver el mismo fix ya aplicado ahí. No
+       * se usa para lo que se le MUESTRA al usuario como "Grupo" (eso
+       * sigue siendo solo la relación real), únicamente para el orden por
+       * defecto que arma el frontend.
+       */
+      const ordenAgrupado = calcularOrdenAgrupado(
+        result.recordset.map((row) => ({
+          id: String(row.id),
+          tagInstrumento: row.tag_instrumento as string,
+          instrumentoAsociadoId:
+            row.instrumento_asociado_id === null ? null : String(row.instrumento_asociado_id),
+          instrumentoAsociadoTag: row.instrumento_asociado_tag as string | null
+        }))
+      );
 
       res.status(200).json({
         projectId,
@@ -120,6 +168,9 @@ instrumentsRouter.get(
           instrumentoAsociadoId:
             row.instrumento_asociado_id === null ? null : String(row.instrumento_asociado_id),
           instrumentoAsociadoTag: row.instrumento_asociado_tag,
+          esCabezaDeGrupo: Boolean(row.es_cabeza_de_grupo),
+          grupoTag: row.grupo_tag,
+          ordenGrupoTag: ordenAgrupado.get(String(row.id))!.ordenGrupoTag,
 
           fechaAgregado: row.fecha_agregado,
           fechaUltimaRevision: row.fecha_ultima_revision,
@@ -167,41 +218,60 @@ instrumentsRouter.get(
         .input('instrumento_id', sql.NVarChar(30), instrumentId)
         .query(`
           SELECT
-            id,
-            proyecto_id,
-            estado_pnid_id,
-            tag_instrumento,
-            pnpid,
-            fuente_pnpid,
-            descripcion,
-            tipo_instrumento,
-            servicio,
-            sistema,
-            ubicacion,
-            nodo,
-            tag_anterior,
-            tecnologia,
-            funcionamiento,
-            cuerpo_instrumento,
-            conexion_proceso,
-            plano_pnid,
-            linea_pnid,
-            tipo_senal_pnid,
-            equipo_asociado_id,
-            equipo_asociado_tag,
-            instrumento_asociado_id,
-            instrumento_asociado_tag,
-            fecha_agregado,
-            fecha_ultima_revision,
-            activo,
-            created_at,
-            updated_at,
-            created_by,
-            updated_by
-          FROM nucleo.instrumento
-          WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
-            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1;
+            i.id,
+            i.proyecto_id,
+            i.estado_pnid_id,
+            i.tag_instrumento,
+            i.pnpid,
+            i.fuente_pnpid,
+            i.descripcion,
+            i.tipo_instrumento,
+            i.servicio,
+            i.sistema,
+            i.ubicacion,
+            i.nodo,
+            i.tag_anterior,
+            i.tecnologia,
+            i.funcionamiento,
+            i.cuerpo_instrumento,
+            i.conexion_proceso,
+            i.plano_pnid,
+            i.linea_pnid,
+            i.tipo_senal_pnid,
+            i.equipo_asociado_id,
+            i.equipo_asociado_tag,
+            i.instrumento_asociado_id,
+            i.instrumento_asociado_tag,
+            i.fecha_agregado,
+            i.fecha_ultima_revision,
+            i.activo,
+            i.created_at,
+            i.updated_at,
+            i.created_by,
+            i.updated_by,
+            -- Mismo cálculo de agrupamiento que GET / (ver comentario ahí) —
+            -- se mantiene igual en detalle para no romper el contrato
+            -- compartido del tipo Instrument entre lista y detalle.
+            CASE WHEN EXISTS (
+              SELECT 1 FROM nucleo.instrumento h
+              WHERE h.proyecto_id = i.proyecto_id
+                AND h.instrumento_asociado_id = i.id
+                AND h.activo = 1
+            ) THEN 1 ELSE 0 END AS es_cabeza_de_grupo,
+            CASE
+              WHEN i.instrumento_asociado_tag IS NOT NULL THEN i.instrumento_asociado_tag
+              WHEN EXISTS (
+                SELECT 1 FROM nucleo.instrumento h
+                WHERE h.proyecto_id = i.proyecto_id
+                  AND h.instrumento_asociado_id = i.id
+                  AND h.activo = 1
+              ) THEN i.tag_instrumento
+              ELSE NULL
+            END AS grupo_tag
+          FROM nucleo.instrumento i
+          WHERE i.id = TRY_CONVERT(BIGINT, @instrumento_id)
+            AND i.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND i.activo = 1;
         `);
 
       const row = result.recordset[0];
@@ -246,6 +316,8 @@ instrumentsRouter.get(
           instrumentoAsociadoId:
             row.instrumento_asociado_id === null ? null : String(row.instrumento_asociado_id),
           instrumentoAsociadoTag: row.instrumento_asociado_tag,
+          esCabezaDeGrupo: Boolean(row.es_cabeza_de_grupo),
+          grupoTag: row.grupo_tag,
 
           fechaAgregado: row.fecha_agregado,
           fechaUltimaRevision: row.fecha_ultima_revision,
@@ -580,6 +652,7 @@ instrumentsRouter.patch(
   '/:instrumentId',
   requireProjectPermission('write'),
   async (req: Request, res: Response, next: NextFunction) => {
+    let transaction: sql.Transaction | undefined;
     try {
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
@@ -794,7 +867,9 @@ instrumentsRouter.patch(
       }
 
       const pool = await getDbPool();
-      const request = pool.request();
+      transaction = new sql.Transaction(pool);
+      await transaction.begin();
+      const request = new sql.Request(transaction);
 
       request
         .input('proyecto_id', sql.NVarChar(30), projectId)
@@ -910,13 +985,58 @@ instrumentsRouter.patch(
           INSERTED.created_at,
           INSERTED.updated_at,
           INSERTED.created_by,
-          INSERTED.updated_by
+          INSERTED.updated_by,
+          DELETED.tag_instrumento AS tag_instrumento_anterior
         WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
           AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
           AND activo = 1;
       `);
 
       const row = result.recordset[0];
+
+      /*
+       * Re-derivación del TAG de señal cuando cambia el TAG del
+       * instrumento (confirmado explícitamente por el usuario): la
+       * convención observada en los datos reales es
+       * `tag_senal = tagDelDueñoOAgrupador + '_' + nombre_corto` (p. ej.
+       * `620-PIT-5058_PI`, o `620-HV-5084_REM` cuando el agrupador es
+       * 620-HV-5084 aunque el dueño real de esa señal sea 620-HS-5084 —
+       * el agrupador manda sobre el dueño directo cuando existe).
+       *
+       * Guardado a propósito: solo se toca una señal si su tag_senal
+       * ACTUAL todavía coincide exactamente con `tagAnterior + '_' +
+       * nombreCorto` — si alguien ya lo personalizó a mano rompiendo esa
+       * convención, no se sobrescribe. Es una convención de este dataset,
+       * no una regla de negocio universal (puede no aplicar a otro
+       * proyecto), así que se resuelve acá en el backend, no con un
+       * trigger de base de datos.
+       */
+      if ('tagInstrumento' in body && row.tag_instrumento_anterior && row.tag_instrumento_anterior !== row.tag_instrumento) {
+        const syncRequest = new sql.Request(transaction);
+        await syncRequest
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .input('tag_anterior', sql.NVarChar(50), row.tag_instrumento_anterior)
+          .input('tag_nuevo', sql.NVarChar(50), row.tag_instrumento)
+          .input('updated_by', sql.NVarChar(30), userId)
+          .query(`
+            UPDATE nucleo.senal
+            SET tag_senal = @tag_nuevo + '_' + nombre_corto,
+                updated_at = SYSUTCDATETIME(),
+                updated_by = TRY_CONVERT(BIGINT, @updated_by)
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND activo = 1
+              AND nombre_corto IS NOT NULL
+              AND tag_senal = @tag_anterior + '_' + nombre_corto
+              AND LEN(@tag_nuevo + '_' + nombre_corto) <= 80
+              AND (
+                instrumento_agrupador_id = TRY_CONVERT(BIGINT, @instrumento_id)
+                OR (instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id) AND instrumento_agrupador_id IS NULL)
+              );
+          `);
+      }
+
+      await transaction.commit();
 
       res.status(200).json({
         instrument: {
@@ -972,6 +1092,8 @@ instrumentsRouter.patch(
       });
 
     } catch (error) {
+      if (transaction) await transaction.rollback().catch(() => {});
+
       const number = sqlErrorNumber(error);
 
       if (
@@ -1150,30 +1272,58 @@ instrumentsRouter.delete(
       // Recursos "duros" (nunca se cascadea un borrado sobre estos —
       // el usuario tiene que resolverlos a mano primero, mismo principio
       // de "resources in use cannot be deactivated" del resto de SIEI).
+      //
+      // nucleo.senal quedó deliberadamente FUERA de este bloqueo desde la
+      // migración 016 (nucleo.senal.dueno_ausente): una señal referenciando
+      // a este instrumento ya NO impide la eliminación — se resuelve más
+      // abajo, dentro de la transacción, marcándola "dueño ausente" en vez
+      // de bloquear.
+      //
+      // punto_conexion salió de este bloqueo después (pedido explícito del
+      // usuario, sobre datos reales del proyecto 22043/620: instrumentos
+      // placeholder tipo "620-HS-XXX1" con NO_EXISTE_EN_PNID que ya tenían
+      // un punto de conexión propio y una ruta real de 1 solo tramo, sin
+      // TRAMO_CONDUCTOR/TERMINACION todavía). Ahora se cascada físicamente
+      // dentro de la transacción (ver más abajo: TRAMO_CONEXION que usa el
+      // punto se borra, la RUTA_CONEXION dueña se desactiva —conserva el
+      // historial señal↔ruta—, y el PUNTO_CONEXION se borra al final). Esto
+      // SOLO es seguro para rutas de un tramo sin conductores materializados
+      // — no se investigó el caso de una ruta multi-tramo con TERMINACION
+      // real, así que si aparece se deja que el error de SQL Server lo
+      // frene (nunca se ignora silenciosamente).
+      //
+      // lazo/enlace_com siguen bloqueando exactamente igual que antes
+      // ("Opción A": ver 016_senal_dueno_ausente.sql).
       const usoReal = await pool
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('instrumento_id', sql.NVarChar(30), instrumentId)
         .query(`
           SELECT
-            (SELECT COUNT(*) FROM nucleo.senal WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND (instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id) OR instrumento_agrupador_id = TRY_CONVERT(BIGINT, @instrumento_id))) AS senales,
-            (SELECT COUNT(*) FROM nucleo.punto_conexion WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id)) AS puntos_conexion,
             (SELECT COUNT(*) FROM nucleo.lazo WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id)) AS lazos,
             (SELECT COUNT(*) FROM nucleo.enlace_com WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id)) AS enlaces_com;
         `);
 
-      const { senales, puntos_conexion, lazos, enlaces_com } = usoReal.recordset[0];
+      const { lazos, enlaces_com } = usoReal.recordset[0];
 
-      if (senales > 0 || puntos_conexion > 0 || lazos > 0 || enlaces_com > 0) {
+      if (lazos > 0 || enlaces_com > 0) {
+        const detalle = {
+          lazos: Number(lazos),
+          enlacesCom: Number(enlaces_com)
+        };
+        // El desglose va también en el texto del mensaje (no solo en
+        // `detalle`) porque el cliente HTTP del frontend (ApiError, ver
+        // frontend/src/api/client.ts) descarta cualquier campo que no sea
+        // error/message — sin esto el usuario ve el genérico "tiene
+        // lazos o enlaces..." sin saber cuál ni cuántos.
+        const partes: string[] = [];
+        if (detalle.lazos > 0) partes.push(`${detalle.lazos} lazo(s)`);
+        if (detalle.enlacesCom > 0) partes.push(`${detalle.enlacesCom} enlace(s) de comunicación`);
+
         res.status(409).json({
           error: 'instrument_in_use',
-          message: 'No se puede eliminar: el instrumento tiene señales, puntos de conexión, lazos o enlaces de comunicación asociados.',
-          detalle: {
-            senales: Number(senales),
-            puntosConexion: Number(puntos_conexion),
-            lazos: Number(lazos),
-            enlacesCom: Number(enlaces_com)
-          }
+          message: `No se puede eliminar: el instrumento tiene ${partes.join(', ')} asociados. Elimina o reasigna esos recursos primero.`,
+          detalle
         });
         return;
       }
@@ -1248,6 +1398,113 @@ instrumentsRouter.delete(
               AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id);
           `);
 
+        /*
+         * Migración 016: señales cuyo DUEÑO real era este instrumento se
+         * conservan activas, marcadas dueno_ausente=1 — nunca se bloquea
+         * el borrado por esto (ver comentario más arriba). tag_senal NO
+         * se toca: queda como historial legible aunque ya no coincida con
+         * ningún instrumento vivo (la re-derivación automática de
+         * tag_senal, ver PATCH .../instruments/:id, solo actúa sobre
+         * instrumentos que siguen existiendo).
+         */
+        const senalesSinDueno = await new sql.Request(transaction)
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .input('updated_by', sql.NVarChar(30), userId)
+          .query(`
+            UPDATE nucleo.senal
+            SET instrumento_id = NULL,
+                dueno_ausente = 1,
+                updated_at = SYSUTCDATETIME(),
+                updated_by = TRY_CONVERT(BIGINT, @updated_by)
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id);
+          `);
+
+        // Señales que solo tenían a este instrumento como AGRUPADOR (no
+        // como dueño) — se limpia la referencia sin marcar dueno_ausente:
+        // el dueño real de esas señales sigue existiendo, solo se pierde
+        // el agrupador (mismo criterio ya usado para instrumento_asociado
+        // más arriba: limpiar en vez de bloquear una asociación curada).
+        const agrupadorDesvinculado = await new sql.Request(transaction)
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .input('updated_by', sql.NVarChar(30), userId)
+          .query(`
+            UPDATE nucleo.senal
+            SET instrumento_agrupador_id = NULL,
+                updated_at = SYSUTCDATETIME(),
+                updated_by = TRY_CONVERT(BIGINT, @updated_by)
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND instrumento_agrupador_id = TRY_CONVERT(BIGINT, @instrumento_id);
+          `);
+
+        /*
+         * punto_conexion propio de este instrumento (ver comentario más
+         * arriba, "Recursos duros") — se cascada físicamente. El punto del
+         * instrumento es siempre el ORIGEN del primer tramo de su ruta
+         * (regla de negocio: INSTRUMENTO nunca es nodo intermedio ni
+         * final), así que si la ruta tiene más de un tramo (ej.
+         * INSTRUMENTO -> CAJA -> GABINETE) hay que borrar TODOS los tramos
+         * de esa ruta, no solo el que toca el punto — borrar únicamente el
+         * primero deja los tramos restantes con numero_orden no
+         * consecutivo y dispara 51004 en TR_tramo_conexion_validar_
+         * secuencia (comprobado en vivo). La RUTA_CONEXION completa se
+         * desactiva después (conserva el historial señal↔ruta en vez de
+         * borrarla), y el propio PUNTO_CONEXION se borra al final. Sin
+         * esto el DELETE de nucleo.instrumento de más abajo fallaría por
+         * la FK punto_conexion.instrumento_id (única FK real hacia
+         * punto_conexion, confirmado contra sys.foreign_keys). Los ids
+         * salen siempre de una SELECT propia (nunca de input de usuario),
+         * así que se interpolan directo en el IN (...) sin riesgo de
+         * inyección.
+         */
+        const puntosPropios = await new sql.Request(transaction)
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('instrumento_id', sql.NVarChar(30), instrumentId)
+          .query(`
+            SELECT id FROM nucleo.punto_conexion
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND instrumento_id = TRY_CONVERT(BIGINT, @instrumento_id);
+          `);
+
+        const puntoIds = puntosPropios.recordset.map((r) => String(r.id));
+        let tramosConexionEliminados = 0;
+        let rutasConexionDesactivadas = 0;
+        let puntosConexionEliminados = 0;
+
+        if (puntoIds.length > 0) {
+          const puntoIdsSql = puntoIds.join(',');
+
+          const rutasTocadas = await new sql.Request(transaction).query(`
+            SELECT DISTINCT ruta_conexion_id FROM nucleo.tramo_conexion
+            WHERE punto_origen_id IN (${puntoIdsSql}) OR punto_destino_id IN (${puntoIdsSql});
+          `);
+
+          const rutaIds = rutasTocadas.recordset.map((r) => String(r.ruta_conexion_id));
+
+          if (rutaIds.length > 0) {
+            const tramoBorrado = await new sql.Request(transaction).query(`
+              DELETE FROM nucleo.tramo_conexion WHERE ruta_conexion_id IN (${rutaIds.join(',')});
+            `);
+            tramosConexionEliminados = tramoBorrado.rowsAffected[0];
+
+            const rutaDesactivada = await new sql.Request(transaction)
+              .input('updated_by', sql.NVarChar(30), userId)
+              .query(`
+                UPDATE nucleo.ruta_conexion
+                SET activo = 0, updated_at = SYSUTCDATETIME(), updated_by = TRY_CONVERT(BIGINT, @updated_by)
+                WHERE id IN (${rutaIds.join(',')}) AND activo = 1;
+              `);
+            rutasConexionDesactivadas = rutaDesactivada.rowsAffected[0];
+          }
+
+          const puntoBorrado = await new sql.Request(transaction).query(`
+            DELETE FROM nucleo.punto_conexion WHERE id IN (${puntoIdsSql});
+          `);
+          puntosConexionEliminados = puntoBorrado.rowsAffected[0];
+        }
+
         const eliminado = await new sql.Request(transaction)
           .input('proyecto_id', sql.NVarChar(30), projectId)
           .input('instrumento_id', sql.NVarChar(30), instrumentId)
@@ -1280,7 +1537,12 @@ instrumentsRouter.delete(
             resultadosPnidBorrados: resultadosBorrados.rowsAffected[0],
             resultadosPnidDesvinculados: resultadosDesvinculados.rowsAffected[0],
             asociacionesInstrumentoAsociadoLimpiadas: asociacionesLimpiadas.rowsAffected[0],
-            filasRevisionEntregableDesvinculadas: filasDesvinculadas.rowsAffected[0]
+            filasRevisionEntregableDesvinculadas: filasDesvinculadas.rowsAffected[0],
+            senalesMarcadasSinDueno: senalesSinDueno.rowsAffected[0],
+            senalesAgrupadorDesvinculado: agrupadorDesvinculado.rowsAffected[0],
+            puntosConexionEliminados,
+            tramosConexionEliminados,
+            rutasConexionDesactivadas
           }
         });
       } catch (error) {

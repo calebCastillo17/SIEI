@@ -42,6 +42,7 @@ export function InstrumentsListPage() {
   const [sistemaFilter, setSistemaFilter] = useState('');
   const [nodoFilter, setNodoFilter] = useState('');
   const [planoPnidFilter, setPlanoPnidFilter] = useState('');
+  const [grupoFilter, setGrupoFilter] = useState('');
 
   const items = useMemo(() => instruments ?? [], [instruments]);
 
@@ -60,6 +61,10 @@ export function InstrumentsListPage() {
     () => [...new Set(items.map((i) => i.planoPnid).filter((v): v is string => Boolean(v)))].sort(),
     [items]
   );
+  const grupoOptions = useMemo(
+    () => [...new Set(items.map((i) => i.grupoTag).filter((v): v is string => Boolean(v)))].sort(),
+    [items]
+  );
 
   /*
    * Filtrado en el cliente: GET /instruments no acepta ningún query param
@@ -71,7 +76,7 @@ export function InstrumentsListPage() {
   const filteredItems = useMemo(() => {
     const needle = searchText.trim().toLowerCase();
 
-    return items.filter((instrument) => {
+    const filtered = items.filter((instrument) => {
       if (estadoFilter) {
         const codigo = instrument.estadoPnidId
           ? (pnidEstadosById.get(instrument.estadoPnidId)?.codigo ?? null)
@@ -82,6 +87,7 @@ export function InstrumentsListPage() {
       if (sistemaFilter && instrument.sistema !== sistemaFilter) return false;
       if (nodoFilter && instrument.nodo !== nodoFilter) return false;
       if (planoPnidFilter && instrument.planoPnid !== planoPnidFilter) return false;
+      if (grupoFilter && instrument.grupoTag !== grupoFilter) return false;
 
       if (needle.length === 0) return true;
 
@@ -101,7 +107,35 @@ export function InstrumentsListPage() {
 
       return haystack.includes(needle);
     });
-  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, pnidEstadosById]);
+
+    /*
+     * Agrupamiento visual — usa `ordenGrupoTag` (no `grupoTag`), que SÍ
+     * incluye el fallback por tipo+correlativo (mismo motor que el LDI,
+     * ver backend/src/lib/instrumentGrouping.ts): un instrumento con
+     * relación explícita cae en el mismo grupo que su padre (ej.
+     * 620-HV-5084 y 620-HS-5084 quedan adyacentes, cabeza primero), y uno
+     * SUELTO sin relación (la mayoría) igual cluster iza con otros de su
+     * mismo tipo (ej. todos los "PIT" quedan juntos, cada uno con su
+     * correlativo) en vez de cada uno ordenar por TAG completo sin
+     * relación con los demás. `grupoTag` (la relación curada real, sin
+     * fallback) sigue siendo lo que se MUESTRA en la columna "Grupo" — acá
+     * solo se usa para decidir el orden.
+     */
+    return [...filtered].sort((a, b) => {
+      const ordenA = a.ordenGrupoTag ?? a.tagInstrumento;
+      const ordenB = b.ordenGrupoTag ?? b.tagInstrumento;
+
+      if (ordenA !== ordenB) {
+        return ordenA.localeCompare(ordenB, 'es', { sensitivity: 'base' });
+      }
+
+      if (a.esCabezaDeGrupo !== b.esCabezaDeGrupo) {
+        return a.esCabezaDeGrupo ? -1 : 1;
+      }
+
+      return a.tagInstrumento.localeCompare(b.tagInstrumento, 'es', { sensitivity: 'base' });
+    });
+  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, grupoFilter, pnidEstadosById]);
 
   if (!projectId) {
     return <p>Falta el proyecto en la URL.</p>;
@@ -267,6 +301,17 @@ export function InstrumentsListPage() {
                 ))}
               </select>
             </label>
+            <label className="form__field">
+              <span>Grupo (Instrumento Asociado)</span>
+              <select value={grupoFilter} onChange={(event) => setGrupoFilter(event.target.value)}>
+                <option value="">Todos</option>
+                {grupoOptions.map((grupo) => (
+                  <option key={grupo} value={grupo}>
+                    {grupo}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <p className="page-subtitle">
@@ -288,6 +333,9 @@ export function InstrumentsListPage() {
                 <th>TAG anterior</th>
                 <th>Tipo</th>
                 <th>Servicio</th>
+                <th>Línea</th>
+                <th>Equipo asociado</th>
+                <th>Grupo</th>
                 <th>Sistema</th>
                 <th>Nodo</th>
                 <th>PnPID</th>
@@ -313,6 +361,13 @@ export function InstrumentsListPage() {
                     <td>{instrument.tagAnterior ?? '—'}</td>
                     <td>{instrument.tipoInstrumento ?? '—'}</td>
                     <td>{instrument.servicio ?? '—'}</td>
+                    <td>{instrument.lineaPnid ?? '—'}</td>
+                    <td>{instrument.equipoAsociadoTag ?? '—'}</td>
+                    <td>
+                      {instrument.grupoTag
+                        ? `${instrument.grupoTag}${instrument.esCabezaDeGrupo ? ' 👑' : ''}`
+                        : '—'}
+                    </td>
                     <td>{instrument.sistema ?? '—'}</td>
                     <td>{instrument.nodo ?? '—'}</td>
                     <td>{instrument.pnpid ?? '—'}</td>

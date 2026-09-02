@@ -119,6 +119,21 @@ function serializeResultado(row: Record<string, any>) {
     requiereRevision: Boolean(row.requiere_revision),
     aplicado: Boolean(row.aplicado),
     aplicadoAt: row.aplicado_at,
+    // Advertencia informativa, recalculada en vivo — nunca persistida —
+    // contra el estado ACTUAL de la base. Solo tiene sentido para
+    // NO_EXISTE_EN_PNID; en cualquier otro resultado siempre es null.
+    // señalesActivas por sí solas NO bloquean la eliminación definitiva
+    // (migración 016 — quedan "sin dueño"); puntosConexion/lazos/
+    // enlacesCom SÍ la siguen bloqueando por completo (instruments.ts).
+    recursosEnRiesgo: (() => {
+      if (row.resultado_codigo !== 'NO_EXISTE_EN_PNID') return null;
+      const senalesActivas = Number(row.senales_activas);
+      const puntosConexion = Number(row.puntos_conexion);
+      const lazos = Number(row.lazos);
+      const enlacesCom = Number(row.enlaces_com);
+      if (senalesActivas === 0 && puntosConexion === 0 && lazos === 0 && enlacesCom === 0) return null;
+      return { senalesActivas, puntosConexion, lazos, enlacesCom };
+    })(),
     /*
      * Todos los campos mapeados de la fila fuente, no solo los que
      * cambiaron — sin esto, una fila NUEVO_EN_PNID (que nunca tiene
@@ -135,7 +150,24 @@ function serializeResultado(row: Record<string, any>) {
 const RESULTADO_SELECT = `
   r.id, r.importacion_id, r.fila_id, f.numero_fila, r.pnpid, r.tag_instrumento,
   r.instrumento_id, e.codigo AS resultado_codigo, r.diferencias, r.requiere_revision,
-  r.aplicado, r.aplicado_at, f.datos_fuente
+  r.aplicado, r.aplicado_at, f.datos_fuente,
+  (
+    SELECT COUNT(*) FROM nucleo.senal s
+    WHERE s.proyecto_id = r.proyecto_id AND s.activo = 1
+      AND (s.instrumento_id = r.instrumento_id OR s.instrumento_agrupador_id = r.instrumento_id)
+  ) AS senales_activas,
+  (
+    SELECT COUNT(*) FROM nucleo.punto_conexion pc
+    WHERE pc.proyecto_id = r.proyecto_id AND pc.instrumento_id = r.instrumento_id
+  ) AS puntos_conexion,
+  (
+    SELECT COUNT(*) FROM nucleo.lazo lz
+    WHERE lz.proyecto_id = r.proyecto_id AND lz.instrumento_id = r.instrumento_id
+  ) AS lazos,
+  (
+    SELECT COUNT(*) FROM nucleo.enlace_com ec
+    WHERE ec.proyecto_id = r.proyecto_id AND ec.instrumento_id = r.instrumento_id
+  ) AS enlaces_com
 `;
 
 /*
@@ -300,14 +332,31 @@ pnidImportsRouter.post(
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .query(`
-          SELECT id, tag_instrumento, pnpid, fuente_pnpid, updated_at,
-                 descripcion, tipo_instrumento, servicio, sistema, ubicacion, nodo,
-                 tag_anterior, tecnologia, funcionamiento, cuerpo_instrumento,
-                 conexion_proceso, plano_pnid, linea_pnid, tipo_senal_pnid, equipo_asociado_tag,
-                 instrumento_asociado_tag
-          FROM nucleo.instrumento
-          WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1;
+          SELECT i.id, i.tag_instrumento, i.pnpid, i.fuente_pnpid, i.updated_at,
+                 i.descripcion, i.tipo_instrumento, i.servicio, i.sistema, i.ubicacion, i.nodo,
+                 i.tag_anterior, i.tecnologia, i.funcionamiento, i.cuerpo_instrumento,
+                 i.conexion_proceso, i.plano_pnid, i.linea_pnid, i.tipo_senal_pnid, i.equipo_asociado_tag,
+                 i.instrumento_asociado_tag,
+                 (
+                   SELECT COUNT(*) FROM nucleo.senal s
+                   WHERE s.proyecto_id = i.proyecto_id AND s.activo = 1
+                     AND (s.instrumento_id = i.id OR s.instrumento_agrupador_id = i.id)
+                 ) AS senales_activas,
+                 (
+                   SELECT COUNT(*) FROM nucleo.punto_conexion pc
+                   WHERE pc.proyecto_id = i.proyecto_id AND pc.instrumento_id = i.id
+                 ) AS puntos_conexion,
+                 (
+                   SELECT COUNT(*) FROM nucleo.lazo lz
+                   WHERE lz.proyecto_id = i.proyecto_id AND lz.instrumento_id = i.id
+                 ) AS lazos,
+                 (
+                   SELECT COUNT(*) FROM nucleo.enlace_com ec
+                   WHERE ec.proyecto_id = i.proyecto_id AND ec.instrumento_id = i.id
+                 ) AS enlaces_com
+          FROM nucleo.instrumento i
+          WHERE i.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND i.activo = 1;
         `);
 
       const existingByPnpid = new Map<string, InstrumentSnapshot>();
@@ -336,7 +385,11 @@ pnidImportsRouter.post(
           lineaPnid: row.linea_pnid,
           tipoSenalPnid: row.tipo_senal_pnid,
           equipoAsociadoTag: row.equipo_asociado_tag,
-          instrumentoAsociadoTag: row.instrumento_asociado_tag
+          instrumentoAsociadoTag: row.instrumento_asociado_tag,
+          senalesActivas: Number(row.senales_activas),
+          puntosConexion: Number(row.puntos_conexion),
+          lazos: Number(row.lazos),
+          enlacesCom: Number(row.enlaces_com)
         };
 
         if (snapshot.pnpid) {
@@ -529,6 +582,12 @@ pnidImportsRouter.post(
             resultado: entry.resultadoCodigo,
             diferencias: entry.diferencias,
             requiereRevision: entry.requiereRevision,
+            // Advertencia informativa (migración 016) — solo poblado para
+            // NO_EXISTE_EN_PNID con señales activas: si el usuario elimina
+            // definitivamente este instrumento más adelante, esas señales
+            // quedarían activas pero "sin dueño". El PREVIEW nunca elimina
+            // nada por sí mismo.
+            recursosEnRiesgo: entry.recursosEnRiesgo,
             // Mismo motivo que en serializeResultado (GET detalle): todos los
             // campos mapeados de la fila, no solo los que difieren.
             datosPropuestos: entry.filaIndex !== null ? parsed.rows[entry.filaIndex].fields : null

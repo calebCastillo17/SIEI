@@ -425,6 +425,7 @@ equipmentRouter.patch(
   '/:equipmentId',
   requireProjectPermission('write'),
   async (req: Request, res: Response, next: NextFunction) => {
+    let transaction: sql.Transaction | undefined;
     try {
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
@@ -510,7 +511,9 @@ equipmentRouter.patch(
       }
 
       const pool = await getDbPool();
-      const request = pool.request();
+      transaction = new sql.Transaction(pool);
+      await transaction.begin();
+      const request = new sql.Request(transaction);
 
       request
         .input('proyecto_id', sql.NVarChar(30), projectId)
@@ -572,16 +575,52 @@ equipmentRouter.patch(
           updated_at = SYSUTCDATETIME(),
           updated_by = TRY_CONVERT(BIGINT, @updated_by)
         OUTPUT
-          INSERTED.id
+          INSERTED.id,
+          DELETED.tag_equipo AS tag_equipo_anterior,
+          INSERTED.tag_equipo AS tag_equipo_nuevo
         WHERE id = TRY_CONVERT(BIGINT, @equipo_id)
           AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
           AND activo = 1;
       `);
 
       const updatedId = result.recordset[0]?.id;
+      const tagEquipoAnterior = result.recordset[0]?.tag_equipo_anterior as string | null;
+      const tagEquipoNuevo = result.recordset[0]?.tag_equipo_nuevo as string;
 
-      const finalResult = await pool
-        .request()
+      /*
+       * Re-derivación del TAG de señal cuando cambia el TAG del equipo —
+       * mismo principio y misma salvaguarda que en instruments.ts: solo se
+       * toca si tag_senal todavía coincide exactamente con
+       * `tagAnterior + '_' + nombreCorto`, y solo cuando el equipo es el
+       * dueño directo (una señal de equipo no tiene agrupador propio; si
+       * por alguna razón tuviera instrumento_agrupador_id igual manda el
+       * agrupador, no se toca acá).
+       */
+      if ('tagEquipo' in body && tagEquipoAnterior && tagEquipoAnterior !== tagEquipoNuevo) {
+        const syncRequest = new sql.Request(transaction);
+        await syncRequest
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .input('equipo_id', sql.NVarChar(30), equipmentId)
+          .input('tag_anterior', sql.NVarChar(50), tagEquipoAnterior)
+          .input('tag_nuevo', sql.NVarChar(50), tagEquipoNuevo)
+          .input('updated_by', sql.NVarChar(30), userId)
+          .query(`
+            UPDATE nucleo.senal
+            SET tag_senal = @tag_nuevo + '_' + nombre_corto,
+                updated_at = SYSUTCDATETIME(),
+                updated_by = TRY_CONVERT(BIGINT, @updated_by)
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND activo = 1
+              AND nombre_corto IS NOT NULL
+              AND equipo_id = TRY_CONVERT(BIGINT, @equipo_id)
+              AND instrumento_agrupador_id IS NULL
+              AND tag_senal = @tag_anterior + '_' + nombre_corto
+              AND LEN(@tag_nuevo + '_' + nombre_corto) <= 80;
+          `);
+      }
+
+      const finalRequest = new sql.Request(transaction);
+      const finalResult = await finalRequest
         .input('id', sql.NVarChar(30), String(updatedId))
         .query(`
           SELECT
@@ -594,6 +633,8 @@ equipmentRouter.patch(
         `);
 
       const row = finalResult.recordset[0];
+
+      await transaction.commit();
 
       res.status(200).json({
         equipment: {
@@ -621,6 +662,8 @@ equipmentRouter.patch(
       });
 
     } catch (error) {
+      if (transaction) await transaction.rollback().catch(() => {});
+
       const number = sqlErrorNumber(error);
 
       if (number === 54201 || number === 2601 || number === 2627) {

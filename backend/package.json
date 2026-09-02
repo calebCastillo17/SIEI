@@ -20,6 +20,7 @@
     "test:instrumento-eliminacion": "tsx tests/instrumentoEliminacionDefinitiva.api.test.ts",
     "test:planos": "tsx tests/planos.api.test.ts",
     "test:terminaciones": "tsx tests/terminaciones.api.test.ts",
+    "test:control-overview": "tsx tests/controlOverview.api.test.ts",
     "seed:equipos-620": "tsx scripts/seedEquiposDesdeExcel.ts",
     "dev": "tsx watch src/server.ts",
     "build": "tsc",

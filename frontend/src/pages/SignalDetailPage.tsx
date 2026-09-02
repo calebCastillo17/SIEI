@@ -159,7 +159,17 @@ export function SignalDetailPage() {
           </div>
           <div>
             <dt>Dueño</dt>
-            <dd>{signal.instrumentoId ? `Instrumento ${signal.instrumentoId}` : `Equipo ${signal.equipoId}`}</dd>
+            <dd>
+              {signal.duenoAusente ? (
+                <span className="badge badge--danger" title="El instrumento que era su dueño fue eliminado definitivamente.">
+                  ⚠ sin dueño
+                </span>
+              ) : signal.instrumentoId ? (
+                `Instrumento ${signal.instrumentoId}`
+              ) : (
+                `Equipo ${signal.equipoId}`
+              )}
+            </dd>
           </div>
           <div>
             <dt>Tipo de E/S</dt>

@@ -91,7 +91,7 @@ export function AppLayout() {
                 Switches
               </NavLink>
               <NavLink to={`/projects/${currentProject.id}/boxes`} className="app-nav__link">
-                Cajas
+                Panel
               </NavLink>
               <NavLink to={`/projects/${currentProject.id}/cables`} className="app-nav__link">
                 Cables

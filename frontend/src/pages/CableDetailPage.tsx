@@ -6,8 +6,9 @@ import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import { deactivateCable, getCable, updateCable } from '../api/cables';
 import { createConductorPair, listConductorPairs } from '../api/conductorPairs';
+import { listTiposConstruccionCable } from '../api/catalogs';
 import { useAsyncData } from '../lib/useAsyncData';
-import type { Cable, CableInput, ConductorPair } from '../api/types';
+import type { Cable, CableInput, CatalogItem, ConductorPair } from '../api/types';
 import { CableForm } from '../components/CableForm';
 import { ErrorMessage } from '../components/ErrorMessage';
 
@@ -15,7 +16,11 @@ function toInput(cable: Cable): CableInput {
   return {
     tagCable: cable.tagCable,
     tipoCable: cable.tipoCable,
-    capacidadConductores: cable.capacidadConductores
+    capacidadConductores: cable.capacidadConductores,
+    tipoConstruccionId: cable.tipoConstruccionId,
+    cantidadUnidades: cable.cantidadUnidades,
+    calibre: cable.calibre,
+    apantallado: cable.apantallado
   };
 }
 
@@ -37,6 +42,12 @@ export function CableDetailPage() {
   const { data: cable, loading, error: loadError, refresh: load } = useAsyncData<Cable | null>(
     fetchCable
   );
+
+  const fetchTiposConstruccion = useCallback(
+    () => listTiposConstruccionCable(devUser.email).then((response) => response.items),
+    [devUser.email]
+  );
+  const { data: tiposConstruccion } = useAsyncData<CatalogItem[]>(fetchTiposConstruccion);
 
   const fetchPairs = useCallback(() => {
     if (!projectId || !cableId) return Promise.resolve<ConductorPair[]>([]);
@@ -163,6 +174,24 @@ export function CableDetailPage() {
             <dd>{cable.capacidadConductores}</dd>
           </div>
           <div>
+            <dt>Tipo de construcción</dt>
+            <dd>
+              {tiposConstruccion?.find((t) => t.id === cable.tipoConstruccionId)?.descripcion ?? '—'}
+            </dd>
+          </div>
+          <div>
+            <dt>Cantidad de unidades</dt>
+            <dd>{cable.cantidadUnidades ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>Calibre</dt>
+            <dd>{cable.calibre ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>Apantallado</dt>
+            <dd>{cable.apantallado === null ? '—' : cable.apantallado ? 'Sí' : 'No'}</dd>
+          </div>
+          <div>
             <dt>Creado</dt>
             <dd>{new Date(cable.createdAt).toLocaleString()}</dd>
           </div>
@@ -179,6 +208,7 @@ export function CableDetailPage() {
           submitLabel="Guardar cambios"
           submitting={submitting}
           disabled={!canWrite}
+          tiposConstruccion={tiposConstruccion ?? []}
           onSubmit={handleUpdate}
           onCancel={() => setEditing(false)}
         />

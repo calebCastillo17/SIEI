@@ -48,6 +48,9 @@ const TEXT_FIELDS: Array<{ key: keyof SignalInput; label: string; max: number }>
 
 const LONG_TEXT_FIELDS: Array<{ key: keyof SignalInput; label: string; max: number }> = [
   { key: 'descripcion', label: 'Descripción', max: 300 },
+  // Más granular que el "servicio" del instrumento dueño (si lo hay) —
+  // el único disponible cuando el dueño es un equipo (migración 028).
+  { key: 'servicio', label: 'Servicio', max: 200 },
   { key: 'enclavamiento', label: 'Enclavamiento', max: 300 },
   { key: 'observacion', label: 'Observación', max: 500 }
 ];

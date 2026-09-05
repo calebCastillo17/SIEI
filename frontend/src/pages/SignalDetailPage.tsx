@@ -24,6 +24,7 @@ function toInput(signal: Signal): SignalInput {
     estadoRevisionId: signal.estadoRevisionId,
     prioridadAlarmaId: signal.prioridadAlarmaId,
     codigoSenal: signal.codigoSenal,
+    servicio: signal.servicio,
     causaAlarma: signal.causaAlarma,
     tipoDatoComId: signal.tipoDatoComId,
     esLoopPowered: signal.esLoopPowered,
@@ -215,6 +216,10 @@ export function SignalDetailPage() {
           <div>
             <dt>Descripción</dt>
             <dd>{signal.descripcion ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>Servicio</dt>
+            <dd>{signal.servicio ?? '—'}</dd>
           </div>
           <div>
             <dt>Enclavamiento</dt>

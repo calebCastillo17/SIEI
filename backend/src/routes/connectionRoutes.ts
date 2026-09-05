@@ -10,6 +10,7 @@ import sql from 'mssql';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireProjectPermission } from '../middleware/requireProjectPermission.js';
 import { getDbPool } from '../db/sql.js';
+import { desactivarYRecompactarSiVacio } from '../lib/cableTagging.js';
 
 /*
  * nucleo.ruta_conexion + nucleo.tramo_conexion — la ruta física completa
@@ -111,9 +112,11 @@ function mapRouteSqlError(error: unknown): { status: number; body: Record<string
     return { status: 409, body: { error: 'route_resource_inactive', message: 'Un tramo activo no puede usar puntos de conexión o cable inactivos.' } };
   }
   if (number === 51017) {
-    // migración 015: el penúltimo nodo ahora admite CAJA o GABINETE (no
-    // solo CAJA) — un nodo anterior al penúltimo sigue exigiendo CAJA.
-    return { status: 400, body: { error: 'route_intermediate_invalid', message: 'Un nodo intermedio de la ruta debe corresponder a una CAJA; el penúltimo nodo admite CAJA o GABINETE.' } };
+    // migración 015: el penúltimo nodo admite CAJA o GABINETE (no solo
+    // CAJA). Migración 027: tanto un nodo intermedio como el penúltimo
+    // admiten además EQUIPO (panel eléctrico distinto del dueño real de
+    // la señal, sin bornas modeladas).
+    return { status: 400, body: { error: 'route_intermediate_invalid', message: 'Un nodo intermedio de la ruta debe corresponder a una CAJA o un EQUIPO (panel eléctrico); el penúltimo nodo admite además GABINETE.' } };
   }
   if (number === 51023) {
     return { status: 409, body: { error: 'route_inactive', message: 'Un tramo activo requiere una ruta de conexión activa.' } };
@@ -499,12 +502,14 @@ connectionRoutesRouter.get(
           .input('tramo_id', sql.NVarChar(30), String(seg.id))
           .query(`
             SELECT tc.id AS tramo_conductor_id, c.id AS conductor_id, c.codigo AS conductor_codigo,
+                   cab.tag_cable,
                    te.id AS terminacion_id, te.extremo, pt.id AS posicion_id, pt.codigo AS posicion_codigo,
                    t.id AS terminal_id, t.numero AS terminal_numero,
                    bt.id AS bloque_id, bt.codigo AS bloque_codigo,
                    bt.caja_id, bt.gabinete_id, bt.modulo_id
             FROM nucleo.tramo_conductor tc
             JOIN nucleo.conductor c ON c.id = tc.conductor_id
+            JOIN nucleo.cable cab ON cab.id = c.cable_id
             LEFT JOIN nucleo.terminacion te ON te.tramo_conductor_id = tc.id AND te.activo = 1
             LEFT JOIN nucleo.posicion_terminal pt ON pt.id = te.posicion_terminal_id
             LEFT JOIN nucleo.terminal t ON t.id = pt.terminal_id
@@ -521,6 +526,7 @@ connectionRoutesRouter.get(
               tramoConductorId: key,
               conductorId: String(row.conductor_id),
               conductorCodigo: row.conductor_codigo,
+              cableTag: row.tag_cable,
               terminaciones: []
             });
           }
@@ -608,6 +614,25 @@ connectionRoutesRouter.delete(
       if (!row) {
         res.status(404).json({ error: 'route_not_found', message: 'Route does not exist in this project or is already inactive.' });
         return;
+      }
+
+      // Tageado automático de cables (ver cableTagging.ts): la
+      // desactivación de la ruta cascadeó a sus tramo_conductor
+      // (trigger) — cualquier cable que solo servía a esta ruta puede
+      // haber quedado sin conductores en uso. Best-effort.
+      const cablesTocados = await pool
+        .request()
+        .input('ruta_id', sql.NVarChar(30), routeId)
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .query(`
+          SELECT DISTINCT cond.cable_id
+          FROM nucleo.tramo_conexion tc
+          JOIN nucleo.tramo_conductor td ON td.tramo_conexion_id = tc.id
+          JOIN nucleo.conductor cond ON cond.id = td.conductor_id
+          WHERE tc.ruta_conexion_id = TRY_CONVERT(BIGINT, @ruta_id) AND tc.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id);
+        `);
+      for (const r of cablesTocados.recordset) {
+        await desactivarYRecompactarSiVacio(pool, projectId, String(r.cable_id), userId);
       }
 
       res.status(200).json({

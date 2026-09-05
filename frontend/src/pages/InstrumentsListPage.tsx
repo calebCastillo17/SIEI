@@ -19,10 +19,19 @@ export function InstrumentsListPage() {
 
   const project = findProject(projectId);
 
+  /* mostrarHijos=true (default) -> soloPadres=false en el backend: se
+   * ven todos, padres e hijos, de entrada — pedido explícito del
+   * usuario. Un instrumento "hijo" (instrumentoAsociadoId no nulo) no es
+   * un instrumento independiente, es un tag del padre, así que quien
+   * quiera ocultarlos lo hace con el botón de abajo. */
+  const [mostrarHijos, setMostrarHijos] = useState(true);
+
   const fetchInstruments = useCallback(() => {
     if (!projectId) return Promise.resolve<Instrument[]>([]);
-    return listInstruments(projectId, devUser.email).then((response) => response.instruments);
-  }, [projectId, devUser.email]);
+    return listInstruments(projectId, devUser.email, { soloPadres: !mostrarHijos }).then(
+      (response) => response.instruments
+    );
+  }, [projectId, devUser.email, mostrarHijos]);
 
   const {
     data: instruments,
@@ -108,33 +117,13 @@ export function InstrumentsListPage() {
       return haystack.includes(needle);
     });
 
-    /*
-     * Agrupamiento visual — usa `ordenGrupoTag` (no `grupoTag`), que SÍ
-     * incluye el fallback por tipo+correlativo (mismo motor que el LDI,
-     * ver backend/src/lib/instrumentGrouping.ts): un instrumento con
-     * relación explícita cae en el mismo grupo que su padre (ej.
-     * 620-HV-5084 y 620-HS-5084 quedan adyacentes, cabeza primero), y uno
-     * SUELTO sin relación (la mayoría) igual cluster iza con otros de su
-     * mismo tipo (ej. todos los "PIT" quedan juntos, cada uno con su
-     * correlativo) en vez de cada uno ordenar por TAG completo sin
-     * relación con los demás. `grupoTag` (la relación curada real, sin
-     * fallback) sigue siendo lo que se MUESTRA en la columna "Grupo" — acá
-     * solo se usa para decidir el orden.
-     */
-    return [...filtered].sort((a, b) => {
-      const ordenA = a.ordenGrupoTag ?? a.tagInstrumento;
-      const ordenB = b.ordenGrupoTag ?? b.tagInstrumento;
-
-      if (ordenA !== ordenB) {
-        return ordenA.localeCompare(ordenB, 'es', { sensitivity: 'base' });
-      }
-
-      if (a.esCabezaDeGrupo !== b.esCabezaDeGrupo) {
-        return a.esCabezaDeGrupo ? -1 : 1;
-      }
-
-      return a.tagInstrumento.localeCompare(b.tagInstrumento, 'es', { sensitivity: 'base' });
-    });
+    // El Master lista plano, sin agrupar — pedido explícito del usuario
+    // (reversa de un agrupamiento visual que se había agregado antes):
+    // el agrupamiento por Instrumento Asociado es cosa del entregable
+    // LDI (criterio "Orden de Instrumentos Asociados" en el editor de
+    // orden al crear una revisión), no de esta vista. Se confía en el
+    // ORDER BY tag_instrumento que ya trae el backend.
+    return filtered;
   }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, grupoFilter, pnidEstadosById]);
 
   if (!projectId) {
@@ -312,6 +301,14 @@ export function InstrumentsListPage() {
                 ))}
               </select>
             </label>
+            <button
+              type="button"
+              className="button button--secondary"
+              onClick={() => setMostrarHijos((valor) => !valor)}
+              title="Un hijo (Instrumento Asociado) no es un instrumento independiente, es un tag del padre"
+            >
+              {mostrarHijos ? 'Ocultar hijos' : 'Mostrar hijos'}
+            </button>
           </div>
 
           <p className="page-subtitle">
@@ -363,11 +360,17 @@ export function InstrumentsListPage() {
                     <td>{instrument.servicio ?? '—'}</td>
                     <td>{instrument.lineaPnid ?? '—'}</td>
                     <td>{instrument.equipoAsociadoTag ?? '—'}</td>
-                    <td>
-                      {instrument.grupoTag
-                        ? `${instrument.grupoTag}${instrument.esCabezaDeGrupo ? ' 👑' : ''}`
-                        : '—'}
-                    </td>
+                    {/*
+                      Muestra los HIJOS de este instrumento (los tags que
+                      apuntan a él vía su propio instrumentoAsociadoId),
+                      no el instrumento asociado del propio row — pedido
+                      explícito del usuario: acá solo se listan padres, así
+                      que este campo ya no necesita resolver "mi padre"
+                      (nunca aplica, un padre no tiene instrumentoAsociadoId).
+                      Puramente de visualización, `hijosTags` nunca se
+                      guarda en ningún lado.
+                    */}
+                    <td>{instrument.hijosTags ?? '—'}</td>
                     <td>{instrument.sistema ?? '—'}</td>
                     <td>{instrument.nodo ?? '—'}</td>
                     <td>{instrument.pnpid ?? '—'}</td>

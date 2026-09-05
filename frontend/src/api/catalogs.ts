@@ -61,9 +61,15 @@ export const listPnidStates = (devUserEmail: string) =>
   listCatalog('/api/catalogs/pnid-states', devUserEmail);
 
 /** cat.cat_tipo_plano (migración 014) — lista cerrada
- * (CONEXIONADO/INTERIOR_GABINETE/LAYOUT/UNIFILAR). */
+ * (CONEXIONADO/CONEXIONADO_INTERNO/LAYOUT/UNIFILAR). */
 export const listTiposPlano = (devUserEmail: string) =>
   listCatalog('/api/catalogs/tipos-plano', devUserEmail);
+
+/** cat.cat_tipo_construccion_cable (migración 029) — lista cerrada
+ * (CONDUCTORES/PARES/TRIADAS), clasifica la construcción física de un
+ * cable (antes solo texto libre en cable.tipoCable). */
+export const listTiposConstruccionCable = (devUserEmail: string) =>
+  listCatalog('/api/catalogs/tipos-construccion-cable', devUserEmail);
 
 export const createInterfaceType = (input: CatalogInput, devUserEmail: string) =>
   createCatalogItem('/api/catalogs/interface-types', input, devUserEmail);

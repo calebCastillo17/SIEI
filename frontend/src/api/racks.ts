@@ -19,11 +19,26 @@ export function listRacks(
 
 export function createRack(
   projectId: string,
-  input: { gabineteId: string; numeroRack: number },
+  input: { gabineteId: string; numeroRack: number; limiteSlots?: number | null },
   devUserEmail: string
 ): Promise<RackMutationResponse> {
   return apiFetch<RackMutationResponse>(base(projectId), {
     method: 'POST',
+    body: input,
+    devUserEmail
+  });
+}
+
+/** PATCH /api/projects/:projectId/racks/:rackId — numeroRack y/o
+ * limiteSlots (migración 017), al menos uno requerido. */
+export function updateRack(
+  projectId: string,
+  rackId: string,
+  input: { numeroRack?: number; limiteSlots?: number | null },
+  devUserEmail: string
+): Promise<RackMutationResponse> {
+  return apiFetch<RackMutationResponse>(`${base(projectId)}/${rackId}`, {
+    method: 'PATCH',
     body: input,
     devUserEmail
   });

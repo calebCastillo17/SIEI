@@ -203,10 +203,26 @@ async function fetchInstrumentosOrdenables(
     .query(`
       SELECT id, tag_instrumento, tag_anterior, descripcion, tipo_instrumento, tecnologia,
              conexion_proceso, linea_pnid, equipo_asociado_tag, servicio, ubicacion, sistema,
-             plano_pnid, nodo, instrumento_asociado_id, instrumento_asociado_tag
-      FROM nucleo.instrumento
-      WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-        AND activo = 1;
+             plano_pnid, nodo, instrumento_asociado_id, instrumento_asociado_tag,
+             -- Tags de los HIJOS de este instrumento — lo que realmente va
+             -- en la columna INSTRUMENTO ASOCIADO del LDI (ver snapshot.ts),
+             -- nunca el propio instrumento_asociado_tag (siempre null en un
+             -- padre). Mismo cálculo que GET /instruments (soloPadres).
+             (
+               SELECT STRING_AGG(h.tag_instrumento, ', ')
+               FROM nucleo.instrumento h
+               WHERE h.proyecto_id = i.proyecto_id
+                 AND h.instrumento_asociado_id = i.id
+                 AND h.activo = 1
+             ) AS hijos_tags
+      FROM nucleo.instrumento i
+      WHERE i.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+        AND i.activo = 1
+        -- Un instrumento "hijo" (instrumento_asociado_id poblado) no es un
+        -- instrumento independiente, es un tag del padre (pedido explícito
+        -- del usuario, mismo criterio ya aplicado al listado del Master
+        -- con soloPadres) — el LDI nunca le imprime su propia fila/ITEM.
+        AND i.instrumento_asociado_id IS NULL;
     `);
 
   return result.recordset.map((row: any) => ({
@@ -225,7 +241,8 @@ async function fetchInstrumentosOrdenables(
     planoPnid: row.plano_pnid,
     nodo: row.nodo,
     instrumentoAsociadoId: row.instrumento_asociado_id === null ? null : String(row.instrumento_asociado_id),
-    instrumentoAsociadoTag: row.instrumento_asociado_tag
+    instrumentoAsociadoTag: row.instrumento_asociado_tag,
+    hijosTags: row.hijos_tags
   }));
 }
 

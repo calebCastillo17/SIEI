@@ -10,6 +10,7 @@ import sql from 'mssql';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireProjectPermission } from '../middleware/requireProjectPermission.js';
 import { getDbPool } from '../db/sql.js';
+import { hacerEspacioParaTagManual } from '../lib/cableTagging.js';
 
 /*
  * nucleo.cable — sin triggers propios en INSERT, pero SÍ un trigger de
@@ -38,6 +39,11 @@ function sqlErrorNumber(error: unknown): number | undefined {
   return undefined;
 }
 
+function sqlErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 function serialize(row: Record<string, any>) {
   return {
     id: String(row.id),
@@ -45,6 +51,18 @@ function serialize(row: Record<string, any>) {
     tagCable: row.tag_cable,
     tipoCable: row.tipo_cable,
     capacidadConductores: row.capacidad_conductores,
+    // Migración 029 — clasificación estructurada de tipo_cable (texto
+    // libre históricamente, ej. "1-12p#18 AWG+SH"). tipoConstruccionId
+    // es NULL en un cable todavía sin clasificar — nunca se fuerza.
+    tipoConstruccionId: row.tipo_construccion_id === null ? null : String(row.tipo_construccion_id),
+    cantidadUnidades: row.cantidad_unidades,
+    calibre: row.calibre,
+    apantallado: row.apantallado === null ? null : Boolean(row.apantallado),
+    // Solo en GET (list / :id) — el subquery de conductores_en_uso no
+    // corre en POST/PATCH (INSERTED.* no tiene de dónde sacarlo, y un
+    // cable recién creado/editado no cambia su ocupación real). undefined
+    // en vez de forzar 0, para no mentir "0 en uso" en esas respuestas.
+    conductoresEnUso: row.conductores_en_uso === undefined ? undefined : Number(row.conductores_en_uso),
     active: Boolean(row.activo),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -54,7 +72,8 @@ function serialize(row: Record<string, any>) {
 }
 
 const COLUMNS = [
-  'id', 'proyecto_id', 'tag_cable', 'tipo_cable', 'capacidad_conductores', 'activo',
+  'id', 'proyecto_id', 'tag_cable', 'tipo_cable', 'capacidad_conductores',
+  'tipo_construccion_id', 'cantidad_unidades', 'calibre', 'apantallado', 'activo',
   'created_at', 'updated_at', 'created_by', 'updated_by'
 ].join(', ');
 
@@ -74,11 +93,17 @@ cablesRouter.get(
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .query(`
-          SELECT ${COLUMNS}
-          FROM nucleo.cable
-          WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1
-          ORDER BY tag_cable;
+          SELECT ${COLUMNS},
+            (
+              SELECT COUNT(*)
+              FROM nucleo.conductor cr
+              JOIN nucleo.tramo_conductor tcr ON tcr.conductor_id = cr.id AND tcr.activo = 1
+              WHERE cr.cable_id = c.id AND cr.activo = 1
+            ) AS conductores_en_uso
+          FROM nucleo.cable c
+          WHERE c.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND c.activo = 1
+          ORDER BY c.tag_cable;
         `);
 
       res.status(200).json({ projectId, cables: result.recordset.map(serialize) });
@@ -112,11 +137,17 @@ cablesRouter.get(
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('cable_id', sql.NVarChar(30), cableId)
         .query(`
-          SELECT ${COLUMNS}
-          FROM nucleo.cable
-          WHERE id = TRY_CONVERT(BIGINT, @cable_id)
-            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1;
+          SELECT ${COLUMNS},
+            (
+              SELECT COUNT(*)
+              FROM nucleo.conductor cr
+              JOIN nucleo.tramo_conductor tcr ON tcr.conductor_id = cr.id AND tcr.activo = 1
+              WHERE cr.cable_id = c.id AND cr.activo = 1
+            ) AS conductores_en_uso
+          FROM nucleo.cable c
+          WHERE c.id = TRY_CONVERT(BIGINT, @cable_id)
+            AND c.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND c.activo = 1;
         `);
 
       const row = result.recordset[0];
@@ -146,7 +177,10 @@ cablesRouter.post(
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
 
-      const { tagCable, tipoCable = null, capacidadConductores } = req.body ?? {};
+      const {
+        tagCable, tipoCable = null, capacidadConductores,
+        tipoConstruccionId = null, cantidadUnidades = null, calibre = null, apantallado = null
+      } = req.body ?? {};
 
       if (typeof tagCable !== 'string' || tagCable.trim().length === 0) {
         res.status(400).json({ error: 'validation_error', message: 'tagCable is required.' });
@@ -177,6 +211,23 @@ cablesRouter.post(
         return;
       }
 
+      if (tipoConstruccionId !== null && !/^\d+$/.test(String(tipoConstruccionId))) {
+        res.status(400).json({ error: 'validation_error', message: 'tipoConstruccionId must be a numeric id or null.' });
+        return;
+      }
+      if (cantidadUnidades !== null && (typeof cantidadUnidades !== 'number' || !Number.isInteger(cantidadUnidades) || cantidadUnidades <= 0)) {
+        res.status(400).json({ error: 'validation_error', message: 'cantidadUnidades must be a positive integer or null.' });
+        return;
+      }
+      if (calibre !== null && (typeof calibre !== 'string' || calibre.length > 20)) {
+        res.status(400).json({ error: 'validation_error', message: 'calibre must be a string (max 20 chars) or null.' });
+        return;
+      }
+      if (apantallado !== null && typeof apantallado !== 'boolean') {
+        res.status(400).json({ error: 'validation_error', message: 'apantallado must be a boolean or null.' });
+        return;
+      }
+
       const pool = await getDbPool();
       const result = await pool
         .request()
@@ -185,6 +236,10 @@ cablesRouter.post(
         .input('tag_cable', sql.NVarChar(50), tag)
         .input('tipo_cable', sql.NVarChar(100), tipoCable)
         .input('capacidad_conductores', sql.SmallInt, capacidadConductores)
+        .input('tipo_construccion_id', sql.NVarChar(30), tipoConstruccionId)
+        .input('cantidad_unidades', sql.SmallInt, cantidadUnidades)
+        .input('calibre', sql.NVarChar(20), calibre)
+        .input('apantallado', sql.Bit, apantallado)
         .query(`
           IF EXISTS (
             SELECT 1 FROM nucleo.cable
@@ -195,11 +250,21 @@ cablesRouter.post(
             THROW 55101, 'Ya existe un cable activo con ese TAG en el proyecto.', 1;
           END;
 
-          INSERT INTO nucleo.cable (proyecto_id, tag_cable, tipo_cable, capacidad_conductores, activo, created_at, created_by)
+          INSERT INTO nucleo.cable (
+            proyecto_id, tag_cable, tipo_cable, capacidad_conductores,
+            tipo_construccion_id, cantidad_unidades, calibre, apantallado,
+            activo, created_at, created_by
+          )
           OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_cable, INSERTED.tipo_cable,
-                 INSERTED.capacidad_conductores, INSERTED.activo, INSERTED.created_at, INSERTED.created_by,
+                 INSERTED.capacidad_conductores, INSERTED.tipo_construccion_id, INSERTED.cantidad_unidades,
+                 INSERTED.calibre, INSERTED.apantallado,
+                 INSERTED.activo, INSERTED.created_at, INSERTED.created_by,
                  INSERTED.updated_at, INSERTED.updated_by
-          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), @tag_cable, @tipo_cable, @capacidad_conductores, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
+          VALUES (
+            TRY_CONVERT(BIGINT, @proyecto_id), @tag_cable, @tipo_cable, @capacidad_conductores,
+            TRY_CONVERT(BIGINT, @tipo_construccion_id), @cantidad_unidades, @calibre, @apantallado,
+            1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by)
+          );
         `);
 
       const row = result.recordset[0];
@@ -214,6 +279,10 @@ cablesRouter.post(
 
       if (number === 55101 || number === 2601 || number === 2627) {
         res.status(409).json({ error: 'cable_tag_conflict', message: 'An active cable with this TAG already exists in the project.' });
+        return;
+      }
+      if (number === 547 && sqlErrorMessage(error).includes('FK_cable_tipo_construccion')) {
+        res.status(400).json({ error: 'invalid_reference', message: 'tipoConstruccionId does not exist in cat.cat_tipo_construccion_cable.' });
         return;
       }
 
@@ -249,7 +318,12 @@ cablesRouter.patch(
       const allowedFields = {
         tagCable: { column: 'tag_cable', sqlType: sql.NVarChar(50) },
         tipoCable: { column: 'tipo_cable', sqlType: sql.NVarChar(100) },
-        capacidadConductores: { column: 'capacidad_conductores', sqlType: sql.SmallInt }
+        capacidadConductores: { column: 'capacidad_conductores', sqlType: sql.SmallInt },
+        // Migración 029 — clasificación estructurada del cable.
+        tipoConstruccionId: { column: 'tipo_construccion_id', sqlType: sql.NVarChar(30) },
+        cantidadUnidades: { column: 'cantidad_unidades', sqlType: sql.SmallInt },
+        calibre: { column: 'calibre', sqlType: sql.NVarChar(20) },
+        apantallado: { column: 'apantallado', sqlType: sql.Bit }
       } as const;
 
       const body = req.body ?? {};
@@ -292,6 +366,17 @@ cablesRouter.patch(
       }
 
       const pool = await getDbPool();
+
+      // Tageado automático de cables (ver cableTagging.ts), tercera
+      // forma pedida explícitamente por el usuario: si edita el tag a
+      // mano y elige un número que ya usa un hermano (mismo destino+
+      // letra), ese hermano (y los que sigan) se corren para hacerle
+      // lugar — ANTES de que el chequeo de duplicado de acá abajo pueda
+      // rechazarlo. Best-effort, nunca interrumpe el PATCH principal.
+      if ('tagCable' in body) {
+        await hacerEspacioParaTagManual(pool, projectId, cableId, body.tagCable, userId);
+      }
+
       const request = pool.request();
 
       request
@@ -340,7 +425,9 @@ cablesRouter.patch(
 
         DECLARE @actualizados TABLE (
           id BIGINT, proyecto_id BIGINT, tag_cable NVARCHAR(50), tipo_cable NVARCHAR(100),
-          capacidad_conductores SMALLINT, activo BIT, created_at DATETIME2, updated_at DATETIME2,
+          capacidad_conductores SMALLINT,
+          tipo_construccion_id BIGINT, cantidad_unidades SMALLINT, calibre NVARCHAR(20), apantallado BIT,
+          activo BIT, created_at DATETIME2, updated_at DATETIME2,
           created_by BIGINT, updated_by BIGINT
         );
 
@@ -350,7 +437,9 @@ cablesRouter.patch(
           updated_by = TRY_CONVERT(BIGINT, @updated_by)
         OUTPUT
           INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_cable, INSERTED.tipo_cable,
-          INSERTED.capacidad_conductores, INSERTED.activo, INSERTED.created_at,
+          INSERTED.capacidad_conductores,
+          INSERTED.tipo_construccion_id, INSERTED.cantidad_unidades, INSERTED.calibre, INSERTED.apantallado,
+          INSERTED.activo, INSERTED.created_at,
           INSERTED.updated_at, INSERTED.created_by, INSERTED.updated_by
         INTO @actualizados
         WHERE id = TRY_CONVERT(BIGINT, @cable_id)
@@ -371,6 +460,10 @@ cablesRouter.patch(
       }
       if (number === 55102) {
         res.status(404).json({ error: 'cable_not_found', message: 'Cable does not exist in this project or is inactive.' });
+        return;
+      }
+      if (number === 547 && sqlErrorMessage(error).includes('FK_cable_tipo_construccion')) {
+        res.status(400).json({ error: 'invalid_reference', message: 'tipoConstruccionId does not exist in cat.cat_tipo_construccion_cable.' });
         return;
       }
 

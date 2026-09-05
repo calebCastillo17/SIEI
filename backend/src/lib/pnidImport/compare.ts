@@ -164,9 +164,20 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
   const resolvedInstrumentoIds = new Set<string>();
   const eligibleIndexes: number[] = [];
 
+  /** TAG que este mismo archivo le asigna a cada PnPID — permite
+   * reconocer una "cadena de renombres" (instrumento A reclama el TAG
+   * que instrumento B tiene HOY, pero B también se está renombrando a
+   * otra cosa en este mismo archivo, así que en realidad no hay
+   * colisión real, solo dos renombres que hay que aplicar en el orden
+   * correcto — ver el chequeo de `tagOwner` más abajo). */
+  const newTagByPnpidInFile = new Map<string, string>();
+
   rows.forEach((row, idx) => {
     if (row.pnpid) seenPnpidsInFile.add(row.pnpid);
-    if (row.listado && row.tagInstrumento && row.pnpid) eligibleIndexes.push(idx);
+    if (row.listado && row.tagInstrumento && row.pnpid) {
+      eligibleIndexes.push(idx);
+      newTagByPnpidInFile.set(row.pnpid, row.tagInstrumento);
+    }
   });
 
   const pnpidToEligibleIdxs = new Map<string, number[]>();
@@ -283,6 +294,14 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
          * reclamándolo de golpe sigue siendo una decisión que un humano
          * debe confirmar, así que cae al REQUIERE_REVISION de siempre.
          *
+         * EXCEPCIÓN — cadena de renombres (mismo criterio que
+         * TAG_MODIFICADO más abajo): si el dueño actual del TAG TAMBIÉN
+         * se está renombrando a otra cosa en este mismo archivo, esto NO
+         * es el mismo objeto con el PnPID regenerado — es un objeto
+         * NUEVO reutilizando un TAG que el dueño acaba de liberar. Cae
+         * a NUEVO_EN_PNID en vez de PNPID_ACTUALIZADO o
+         * REQUIERE_REVISION.
+         *
          * Guard adicional: si OTRA fila de este mismo archivo ya reclamó a
          * este mismo instrumento (por PnPID directo o por este mismo
          * fallback — ej. el archivo trae tanto el PnPID viejo como el
@@ -291,7 +310,19 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
          * UX_importacion_pnid_resultado_instrumento. Se marca
          * REQUIERE_REVISION en vez de reventar la importación entera.
          */
-        if (tagOwner.fuentePnpid === 'PLANT3D' && !resolvedInstrumentoIds.has(tagOwner.id)) {
+        const tagQueOwnerRecibeEnEsteArchivo = tagOwner.pnpid
+          ? newTagByPnpidInFile.get(tagOwner.pnpid)
+          : undefined;
+        const ownerSeEstaRenombrando =
+          tagOwner.fuentePnpid === 'PLANT3D' &&
+          tagQueOwnerRecibeEnEsteArchivo !== undefined &&
+          tagQueOwnerRecibeEnEsteArchivo !== tagOwner.tagInstrumento.trim();
+
+        if (
+          !ownerSeEstaRenombrando &&
+          tagOwner.fuentePnpid === 'PLANT3D' &&
+          !resolvedInstrumentoIds.has(tagOwner.id)
+        ) {
           const contentDiffs = compareFields(tagOwner, row, presentFields);
           const diffs: FieldDiff[] = [
             { campo: 'pnpid', anterior: tagOwner.pnpid, nuevo: row.pnpid },
@@ -299,6 +330,11 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
           ];
           results.push(makeEntry(idx, row, tagOwner, 'PNPID_ACTUALIZADO', diffs, false));
           resolvedInstrumentoIds.add(tagOwner.id);
+          return;
+        }
+
+        if (ownerSeEstaRenombrando) {
+          results.push(makeEntry(idx, row, undefined, 'NUEVO_EN_PNID', null, false));
           return;
         }
 
@@ -346,6 +382,64 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
     }
 
     if (matchByPnpid.tagInstrumento.trim() !== row.tagInstrumento) {
+      /*
+       * El PnPID sigue calzando con `matchByPnpid`, pero el reporte le
+       * puso un TAG nuevo — antes de aceptar el renombre hay que
+       * verificar que ese TAG nuevo no sea YA de otro instrumento activo
+       * distinto (encontrado con datos reales: un PnPID renombrado a un
+       * TAG que otro instrumento, con su propio PnPID, ya tenía —
+       * aplicar el UPDATE sin este chequeo revienta con un 500 crudo de
+       * SQL Server, UX_instrumento_proyecto_tag, en vez de un resultado
+       * manejado).
+       *
+       * PERO esto es una colisión REAL solo si el dueño actual del TAG
+       * se queda quieto. El usuario retagea instrumentos en su
+       * herramienta P&ID como flujo normal de trabajo ("cadena de
+       * renombres": A reclama el TAG que B tiene hoy, pero B TAMBIÉN se
+       * está renombrando a otra cosa en este mismo archivo — verificado
+       * con datos reales, PnPID 2100 reclamando el TAG que PnPID 15520
+       * dejaba libre en el mismo import). En ese caso no hay colisión
+       * real, son dos TAG_MODIFICADO válidos — aplicarlos en el orden
+       * correcto es responsabilidad de la fase de APPLY (ver
+       * applyActualizarInstrumento, renombre a TAG temporal primero),
+       * no de este comparador. Mismo criterio que PNPID_ACTUALIZADO más
+       * arriba: solo se resuelve solo si el dueño actual es
+       * PLANT3D — un instrumento manual sigue exigiendo revisión humana
+       * aunque también aparezca en el archivo.
+       */
+      const tagOwner = existingByTag.get(row.tagInstrumento);
+      if (tagOwner && tagOwner.id !== matchByPnpid.id) {
+        const tagQueOwnerRecibeEnEsteArchivo = tagOwner.pnpid
+          ? newTagByPnpidInFile.get(tagOwner.pnpid)
+          : undefined;
+        const ownerSeEstaRenombrando =
+          tagOwner.fuentePnpid === 'PLANT3D' &&
+          tagQueOwnerRecibeEnEsteArchivo !== undefined &&
+          tagQueOwnerRecibeEnEsteArchivo !== tagOwner.tagInstrumento.trim();
+
+        if (!ownerSeEstaRenombrando) {
+          results.push(
+            makeEntry(
+              idx,
+              row,
+              matchByPnpid,
+              'REQUIERE_REVISION',
+              {
+                detalle:
+                  `El PnPID ${row.pnpid} sigue siendo del instrumento #${matchByPnpid.id} ` +
+                  `(${matchByPnpid.tagInstrumento}), pero el reporte le asigna el TAG ` +
+                  `"${row.tagInstrumento}", que ya pertenece a otro instrumento activo ` +
+                  `distinto (#${tagOwner.id}). No se aplica automáticamente.`
+              },
+              true
+            )
+          );
+          return;
+        }
+        // ownerSeEstaRenombrando: cadena de renombres válida, sigue como
+        // TAG_MODIFICADO normal más abajo.
+      }
+
       const diffs = compareFields(matchByPnpid, row, presentFields);
       results.push(
         makeEntry(idx, row, matchByPnpid, 'TAG_MODIFICADO', diffs.length > 0 ? diffs : null, false)

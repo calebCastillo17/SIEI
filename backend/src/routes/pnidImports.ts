@@ -724,6 +724,34 @@ pnidImportsRouter.post(
       transaction = new sql.Transaction(pool);
       await transaction.begin();
 
+      /*
+       * Pre-paso: toda fila TAG_MODIFICADO renombra su instrumento a un
+       * TAG temporal único (basado en su propio id, nunca puede
+       * colisionar) ANTES de que el loop de abajo le ponga el TAG real.
+       * Encontrado con datos reales: el usuario retagea instrumentos en
+       * su herramienta P&ID como flujo normal ("cadena de renombres" —
+       * A reclama el TAG que B tiene HOY, pero B también se está
+       * renombrando a otra cosa en este mismo archivo). compare.ts ya
+       * reconoce esto y clasifica ambos como TAG_MODIFICADO en vez de
+       * REQUIERE_REVISION, pero el orden en que este loop los aplica
+       * (el de la fila del Excel, no un orden topológico) puede
+       * intentar la reclamación ANTES de la liberación y chocar contra
+       * UX_instrumento_proyecto_tag igual. Liberando todos los TAGs
+       * afectados primero, el orden deja de importar — funciona incluso
+       * con cadenas largas o cíclicas (A toma el de B, B el de C, C el
+       * de A), sin necesidad de calcular ningún orden de dependencias.
+       */
+      for (const r of resultados) {
+        if (r.resultado_codigo !== 'TAG_MODIFICADO' || r.instrumento_id === null) continue;
+        await new sql.Request(transaction)
+          .input('instrumento_id', sql.NVarChar(30), String(r.instrumento_id))
+          .query(`
+            UPDATE nucleo.instrumento
+            SET tag_instrumento = CONCAT(N'__PNID_TMP_', id)
+            WHERE id = TRY_CONVERT(BIGINT, @instrumento_id);
+          `);
+      }
+
       for (const r of resultados) {
         const codigo = r.resultado_codigo as string;
 
@@ -973,7 +1001,26 @@ async function applyActualizarInstrumento(
     }
   }
 
+  // Mismo guard que applyNuevoInstrumento (error 55920, mapeado a 409
+  // instrument_tag_conflict más abajo) — encontrado con datos reales:
+  // compare.ts ya evita clasificar este caso como TAG_MODIFICADO
+  // (colisión de TAG contra OTRO instrumento activo), pero un preview ya
+  // persistido ANTES de esa corrección podía llegar hasta acá con el
+  // conflicto todavía adentro. Sin este chequeo, la UPDATE de abajo
+  // revienta con un 500 crudo de SQL Server (UX_instrumento_proyecto_tag)
+  // en vez de un resultado manejado.
   await request.query(`
+    IF EXISTS (
+      SELECT 1 FROM nucleo.instrumento
+      WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+        AND tag_instrumento = @nuevo_tag
+        AND activo = 1
+        AND id <> TRY_CONVERT(BIGINT, @instrumento_id)
+    )
+    BEGIN
+      THROW 55920, 'Ya existe un instrumento activo con ese TAG en el proyecto (conflicto detectado recien en APPLY).', 1;
+    END;
+
     UPDATE nucleo.instrumento
     SET ${assignments.join(',\n        ')}
     WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)

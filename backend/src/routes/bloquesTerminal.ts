@@ -10,24 +10,31 @@ import sql from 'mssql';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireProjectPermission } from '../middleware/requireProjectPermission.js';
 import { getDbPool } from '../db/sql.js';
+import { compararCodigoNatural } from '../lib/naturalSort.js';
 
 /*
  * nucleo.bloque_terminal + nucleo.terminal + nucleo.posicion_terminal
- * (migración 015) — jerarquía física de terminales de CAJA/GABINETE/
- * MODULO. Ver docs/DIAGNOSTICO_SENALES_GABINETES.md secciones 36-39.
+ * (migración 015, equipo agregado en 026) — jerarquía física de
+ * terminales de CAJA/GABINETE/MODULO/EQUIPO. Ver docs/
+ * DIAGNOSTICO_SENALES_GABINETES.md secciones 36-39.
  *
- * bloque_terminal es dueño XOR de 3 vías, pero este router SOLO acepta
- * cajaId/gabineteId en creación manual — un bloque de MODULO se
+ * bloque_terminal es dueño XOR de 4 vías, pero este router SOLO acepta
+ * cajaId/gabineteId/equipoId en creación manual — un bloque de MODULO se
  * materializa exclusivamente por TR_modulo_generar_terminales / el
  * endpoint de sincronización de modules.ts (GET/POST .../modules/:id/
  * terminales), nunca a mano. GET sí lista/lee bloques de cualquier
  * dueño (incluidos los de módulo), para que "Módulo -> Terminales" y
  * este router compartan la misma forma de datos.
  *
+ * equipoId (migración 026) es para el caso "el cable de campo llega
+ * directo al panel propio de un equipo" (ej. un armario de variador),
+ * no a una caja real — pedido explícito del usuario, que rechazó
+ * modelar esos paneles como filas de nucleo.caja.
+ *
  * terminal.numero NUNCA persiste listas ("1,2,3", "F1-2") — cada borne
  * físico es su propia fila (ver seedeo de BORNERA en el diagnóstico).
- * Un terminal manual solo puede crearse en un bloque de caja/gabinete
- * (los de módulo son catalogo_modulo_io_terminal_id-derivados).
+ * Un terminal manual solo puede crearse en un bloque de caja/gabinete/
+ * equipo (los de módulo son catalogo_modulo_io_terminal_id-derivados).
  */
 export const bloquesTerminalRouter = Router({ mergeParams: true });
 
@@ -65,9 +72,14 @@ function mapSqlError(error: unknown): { status: number; body: Record<string, unk
   if (number === undefined) return null;
 
   if (message.includes('CK_bloque_terminal_pertenencia_xor')) {
-    return { status: 400, body: { error: 'validation_error', message: 'bloque_terminal debe tener exactamente un dueño (caja o gabinete).' } };
+    return { status: 400, body: { error: 'validation_error', message: 'bloque_terminal debe tener exactamente un dueño (caja, gabinete o equipo).' } };
   }
-  if (message.includes('UX_bloque_terminal_caja_codigo') || message.includes('UX_bloque_terminal_gabinete_codigo') || message.includes('UX_bloque_terminal_modulo_codigo')) {
+  if (
+    message.includes('UX_bloque_terminal_caja_codigo') ||
+    message.includes('UX_bloque_terminal_gabinete_codigo') ||
+    message.includes('UX_bloque_terminal_modulo_codigo') ||
+    message.includes('UX_bloque_terminal_equipo_codigo')
+  ) {
     return { status: 409, body: { error: 'bloque_terminal_conflict', message: 'Ya existe un bloque de terminales activo con ese código para este dueño.' } };
   }
   if (message.includes('UX_terminal_bloque_numero')) {
@@ -88,6 +100,15 @@ function mapSqlError(error: unknown): { status: number; body: Record<string, unk
   if (number === 51029) {
     return { status: 409, body: { error: 'posicion_in_use', message: 'No se puede desactivar una posición de terminal con una terminación activa.' } };
   }
+  if (number === 51038) {
+    return {
+      status: 409,
+      body: {
+        error: 'bloque_terminal_plano_dueno_conflict',
+        message: 'Todos los bloques de terminales asignados a un mismo plano deben pertenecer al mismo dueño (caja, gabinete, módulo o equipo).'
+      }
+    };
+  }
 
   return null;
 }
@@ -99,8 +120,11 @@ function serializeBloque(row: Record<string, any>) {
     cajaId: row.caja_id === null ? null : String(row.caja_id),
     gabineteId: row.gabinete_id === null ? null : String(row.gabinete_id),
     moduloId: row.modulo_id === null ? null : String(row.modulo_id),
+    equipoId: row.equipo_id === null ? null : String(row.equipo_id),
     codigo: row.codigo,
     descripcion: row.descripcion,
+    planoId: row.plano_id === null ? null : String(row.plano_id),
+    planoCodigoPlano: row.plano_codigo_plano,
     active: Boolean(row.activo),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -132,8 +156,14 @@ function serializePosicion(row: Record<string, any>) {
 }
 
 const SELECT_BLOQUE = `
-  bt.id, bt.proyecto_id, bt.caja_id, bt.gabinete_id, bt.modulo_id, bt.codigo, bt.descripcion, bt.activo,
+  bt.id, bt.proyecto_id, bt.caja_id, bt.gabinete_id, bt.modulo_id, bt.equipo_id, bt.codigo, bt.descripcion, bt.activo,
+  bt.plano_id, pl.codigo_plano AS plano_codigo_plano,
   bt.created_at, bt.updated_at, bt.created_by, bt.updated_by
+`;
+
+const FROM_BLOQUE = `
+  FROM nucleo.bloque_terminal bt
+  LEFT JOIN nucleo.plano pl ON pl.id = bt.plano_id
 `;
 
 async function fetchBloqueDetail(pool: Awaited<ReturnType<typeof getDbPool>>, projectId: string, bloqueId: string) {
@@ -143,7 +173,7 @@ async function fetchBloqueDetail(pool: Awaited<ReturnType<typeof getDbPool>>, pr
     .input('bloque_id', sql.NVarChar(30), bloqueId)
     .query(`
       SELECT ${SELECT_BLOQUE}
-      FROM nucleo.bloque_terminal bt
+      ${FROM_BLOQUE}
       WHERE bt.id = TRY_CONVERT(BIGINT, @bloque_id)
         AND bt.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
         AND bt.activo = 1;
@@ -161,9 +191,13 @@ async function fetchBloqueDetail(pool: Awaited<ReturnType<typeof getDbPool>>, pr
       FROM nucleo.terminal t
       WHERE t.bloque_terminal_id = TRY_CONVERT(BIGINT, @bloque_id)
         AND t.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-        AND t.activo = 1
-      ORDER BY t.numero;
+        AND t.activo = 1;
     `);
+
+  // t.numero es texto libre ("1".."18" en la práctica) — ORDER BY SQL
+  // ordena como texto ("1","10","11",...,"2"), por eso se reordena acá
+  // con criterio natural (encontrado en vivo, ver naturalSort.ts).
+  terminalesResult.recordset.sort((a, b) => compararCodigoNatural(a.numero, b.numero));
 
   const terminales = [];
   for (const t of terminalesResult.recordset) {
@@ -186,7 +220,7 @@ async function fetchBloqueDetail(pool: Awaited<ReturnType<typeof getDbPool>>, pr
 
 
 /*
- * GET /api/projects/:projectId/bloques-terminal?cajaId=&gabineteId=&moduloId=
+ * GET /api/projects/:projectId/bloques-terminal?cajaId=&gabineteId=&moduloId=&equipoId=
  */
 bloquesTerminalRouter.get(
   '/',
@@ -194,7 +228,7 @@ bloquesTerminalRouter.get(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const projectId = req.projectAccess!.projectId;
-      const { cajaId, gabineteId, moduloId } = req.query;
+      const { cajaId, gabineteId, moduloId, equipoId } = req.query;
 
       const pool = await getDbPool();
       const request = pool.request().input('proyecto_id', sql.NVarChar(30), projectId);
@@ -203,7 +237,8 @@ bloquesTerminalRouter.get(
       for (const [param, col, value] of [
         ['caja_id', 'caja_id', cajaId],
         ['gabinete_id', 'gabinete_id', gabineteId],
-        ['modulo_id', 'modulo_id', moduloId]
+        ['modulo_id', 'modulo_id', moduloId],
+        ['equipo_id', 'equipo_id', equipoId]
       ] as const) {
         if (value !== undefined) {
           if (!isPositiveIntString(value)) {
@@ -217,10 +252,14 @@ bloquesTerminalRouter.get(
 
       const result = await request.query(`
         SELECT ${SELECT_BLOQUE}
-        FROM nucleo.bloque_terminal bt
-        WHERE ${conditions.join(' AND ')}
-        ORDER BY bt.codigo;
+        ${FROM_BLOQUE}
+        WHERE ${conditions.join(' AND ')};
       `);
+
+      // bt.codigo es texto libre ("TB-1".."TB-10") — ORDER BY SQL ordena
+      // como texto, por eso se reordena acá con criterio natural
+      // (encontrado en vivo, ver naturalSort.ts).
+      result.recordset.sort((a, b) => compararCodigoNatural(a.codigo, b.codigo));
 
       res.status(200).json({ projectId, bloquesTerminal: result.recordset.map(serializeBloque) });
 
@@ -265,8 +304,11 @@ bloquesTerminalRouter.get(
 /*
  * POST /api/projects/:projectId/bloques-terminal
  *
- * Solo cajaId XOR gabineteId — moduloId se rechaza explícitamente (los
- * bloques de módulo se materializan solos, ver cabecera).
+ * Solo cajaId XOR gabineteId XOR equipoId — moduloId se rechaza
+ * explícitamente (los bloques de módulo se materializan solos, ver
+ * cabecera). equipoId (migración 026) es para el panel propio de un
+ * equipo (ej. un armario de variador) que recibe el cable de campo
+ * directo, sin ser una caja real.
  */
 bloquesTerminalRouter.post(
   '/',
@@ -275,16 +317,16 @@ bloquesTerminalRouter.post(
     try {
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
-      const { cajaId = null, gabineteId = null, moduloId = null, codigo, descripcion = null } = req.body ?? {};
+      const { cajaId = null, gabineteId = null, moduloId = null, equipoId = null, codigo, descripcion = null } = req.body ?? {};
 
       if (moduloId !== null && moduloId !== undefined) {
         res.status(400).json({ error: 'validation_error', message: 'Un bloque de terminales de módulo se materializa automáticamente; no se crea manualmente.' });
         return;
       }
 
-      const owners = [cajaId, gabineteId].filter((v) => v !== null && v !== undefined);
+      const owners = [cajaId, gabineteId, equipoId].filter((v) => v !== null && v !== undefined);
       if (owners.length !== 1) {
-        res.status(400).json({ error: 'validation_error', message: 'Debe indicarse exactamente uno de cajaId o gabineteId.' });
+        res.status(400).json({ error: 'validation_error', message: 'Debe indicarse exactamente uno de cajaId, gabineteId o equipoId.' });
         return;
       }
       if (typeof codigo !== 'string' || codigo.trim().length === 0) {
@@ -303,14 +345,15 @@ bloquesTerminalRouter.post(
         .input('created_by', sql.NVarChar(30), userId)
         .input('caja_id', sql.NVarChar(30), cajaId)
         .input('gabinete_id', sql.NVarChar(30), gabineteId)
+        .input('equipo_id', sql.NVarChar(30), equipoId)
         .input('codigo', sql.NVarChar(20), codigo.trim())
         .input('descripcion', sql.NVarChar(200), descripcion)
         .query(`
-          INSERT INTO nucleo.bloque_terminal (proyecto_id, caja_id, gabinete_id, codigo, descripcion, activo, created_at, created_by)
+          INSERT INTO nucleo.bloque_terminal (proyecto_id, caja_id, gabinete_id, equipo_id, codigo, descripcion, activo, created_at, created_by)
           OUTPUT INSERTED.id
           VALUES (
             TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @caja_id), TRY_CONVERT(BIGINT, @gabinete_id),
-            @codigo, @descripcion, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by)
+            TRY_CONVERT(BIGINT, @equipo_id), @codigo, @descripcion, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by)
           );
         `);
 
@@ -350,7 +393,7 @@ bloquesTerminalRouter.patch(
         return;
       }
 
-      const { codigo, descripcion } = req.body ?? {};
+      const { codigo, descripcion, planoId } = req.body ?? {};
       const assignments: string[] = [];
       const pool = await getDbPool();
       const request = pool.request()
@@ -373,6 +416,17 @@ bloquesTerminalRouter.patch(
         }
         request.input('descripcion', sql.NVarChar(200), descripcion);
         assignments.push('descripcion = @descripcion');
+      }
+      // planoId (migración 025, "en qué plano de conexionado está este
+      // bloque") — acepta null explícito para quitarlo. Asignarlo dispara
+      // TR_bloque_terminal_validar_plano_dueno (51038 si mezcla dueños).
+      if (planoId !== undefined) {
+        if (planoId !== null && !isPositiveIntString(planoId)) {
+          res.status(400).json({ error: 'validation_error', message: 'planoId must be a numeric id or null.' });
+          return;
+        }
+        request.input('plano_id', sql.NVarChar(30), planoId);
+        assignments.push('plano_id = TRY_CONVERT(BIGINT, @plano_id)');
       }
       if (assignments.length === 0) {
         res.status(400).json({ error: 'validation_error', message: 'No editable fields were provided.' });

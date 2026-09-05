@@ -10,7 +10,7 @@ import { ErrorMessage } from '../components/ErrorMessage';
 
 const TIPO_BADGE: Record<string, string> = {
   CONEXIONADO: 'badge--control',
-  INTERIOR_GABINETE: 'badge--warning',
+  CONEXIONADO_INTERNO: 'badge--warning',
   LAYOUT: 'badge--com',
   UNIFILAR: 'badge--success'
 };
@@ -21,7 +21,7 @@ const TIPO_BADGE: Record<string, string> = {
  * cargados desde la hoja PLANOS) — no es un dato nuevo, es la vista
  * consolidada "qué planos cubren mi conexionado" que responde a la
  * pregunta de cómo se relacionan los CONEXIONADO/LAYOUT/UNIFILAR/
- * INTERIOR_GABINETE con cada tablero. Cada fila es una asociación real.
+ * CONEXIONADO_INTERNO con cada tablero. Cada fila es una asociación real.
  */
 export function ControlPlanosPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -81,15 +81,6 @@ export function ControlPlanosPage() {
           <button type="button" className="button button--secondary" onClick={refresh}>
             Actualizar
           </button>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control`}>
-            Ver señales
-          </Link>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control/hardware`}>
-            Ver hardware
-          </Link>
-          <Link className="button button--secondary" to={`/projects/${projectId}/planos`}>
-            Administrar planos
-          </Link>
         </div>
       </div>
 
@@ -113,7 +104,7 @@ export function ControlPlanosPage() {
         <select value={tipo} onChange={(e) => setTipo(e.target.value)}>
           <option value="">Todos los tipos de plano</option>
           <option value="CONEXIONADO">Conexionado</option>
-          <option value="INTERIOR_GABINETE">Interior de gabinete</option>
+          <option value="CONEXIONADO_INTERNO">Conexionado interno</option>
           <option value="LAYOUT">Layout</option>
           <option value="UNIFILAR">Unifilar</option>
         </select>

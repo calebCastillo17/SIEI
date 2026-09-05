@@ -290,12 +290,16 @@ app.use('/api/catalogs/tipos-gabinete', tiposGabineteRouter);
  * cat.cat_tipo_plano (migración 014) — misma forma {id, codigo,
  * descripcion, created_at, updated_at} que cat_tipo_dato_com, reutiliza
  * el mismo factory genérico en vez de un router propio. Lista cerrada
- * (CONEXIONADO/INTERIOR_GABINETE/LAYOUT/UNIFILAR) — ampliarla es una
+ * (CONEXIONADO/CONEXIONADO_INTERNO/LAYOUT/UNIFILAR) — ampliarla es una
  * migración, no una llamada a la API.
  */
 app.use(
   '/api/catalogs/tipos-plano',
   createSimpleCatalogRouter('cat.cat_tipo_plano', false)
+);
+app.use(
+  '/api/catalogs/tipos-construccion-cable',
+  createSimpleCatalogRouter('cat.cat_tipo_construccion_cable', false)
 );
 
 app.use('/api/clients', clientsRouter);

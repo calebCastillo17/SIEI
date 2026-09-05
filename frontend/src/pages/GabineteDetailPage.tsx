@@ -5,14 +5,13 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import { deactivateGabinete, getGabinete } from '../api/gabinetes';
-import { createRack, deactivateRack } from '../api/racks';
-import { createSlot, deactivateSlot } from '../api/slots';
-import { createModule, deactivateModule, updateModule } from '../api/modules';
+import { createRack, deactivateRack, updateRack } from '../api/racks';
+import { createSlot, deleteSlot } from '../api/slots';
+import { createModule, deleteModule, updateModule } from '../api/modules';
 import { listChannels } from '../api/channels';
-import { getModuloTerminales, syncModuloTerminales } from '../api/terminaciones';
+import { getModuloTerminales, syncModuloTerminales, listBloquesTerminal, updateBloqueTerminal } from '../api/terminaciones';
 import { useAsyncData } from '../lib/useAsyncData';
 import { usePhysicalTree } from '../components/usePhysicalTree';
-import { BornerasSection } from '../components/BornerasSection';
 import type { Channel, Gabinete, ModuleType, PhysicalModule, Rack, Slot } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
 
@@ -112,6 +111,96 @@ function ModuloTerminalesView({
   );
 }
 
+/* ---- Tag (codigo) del Terminal Block (bloque_terminal) de un módulo —
+ * se materializa solo (TR_modulo_generar_terminales) con codigo="MODULO"
+ * como centinela de "todavía sin tag real" (migración 015); acá se le
+ * pone el nombre real, ej. "TB-01" (pedido del usuario, migración 017 —
+ * la columna en sí ya existía, solo faltaba esta edición). */
+const TB_SIN_ASIGNAR = 'MODULO';
+
+function TerminalBlockTagEditor({
+  projectId,
+  devUserEmail,
+  moduloId,
+  canWrite
+}: {
+  projectId: string;
+  devUserEmail: string;
+  moduloId: string;
+  canWrite: boolean;
+}) {
+  const fetchBloque = useCallback(
+    () => listBloquesTerminal(projectId, devUserEmail, { moduloId }).then((r) => r.bloquesTerminal[0] ?? null),
+    [projectId, devUserEmail, moduloId]
+  );
+  const { data: bloque, loading, error, refresh } = useAsyncData(fetchBloque);
+  const [value, setValue] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<Error | null>(null);
+
+  if (loading) return <span className="physical-hint">TB…</span>;
+  if (error) return <ErrorMessage error={error} />;
+  if (!bloque) return null;
+
+  const sinAsignar = bloque.codigo === TB_SIN_ASIGNAR;
+
+  async function handleSave() {
+    if (!bloque || !value.trim()) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await updateBloqueTerminal(projectId, bloque.id, { codigo: value.trim() }, devUserEmail);
+      setEditing(false);
+      refresh();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err : new Error('Error desconocido.'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <span className="physical-inline-edit">
+        <ErrorMessage error={saveError} />
+        <input
+          type="text"
+          placeholder="TB-01"
+          maxLength={20}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          disabled={saving}
+        />
+        <button type="button" className="button button--small" disabled={saving || !value.trim()} onClick={handleSave}>
+          Guardar
+        </button>
+        <button type="button" className="button button--secondary button--small" disabled={saving} onClick={() => setEditing(false)}>
+          Cancelar
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="physical-hint">
+      TB: {sinAsignar ? 'sin asignar' : bloque.codigo}
+      {canWrite && (
+        <button
+          type="button"
+          className="button button--secondary button--small"
+          onClick={() => {
+            setValue(sinAsignar ? '' : bloque.codigo);
+            setEditing(true);
+          }}
+        >
+          {sinAsignar ? 'Asignar' : 'Editar'}
+        </button>
+      )}
+    </span>
+  );
+}
+
 /* ---- Un slot: su módulo (si tiene) o el formulario para instalar uno ---- */
 
 function SlotBlock({
@@ -134,8 +223,11 @@ function SlotBlock({
   const [showChannels, setShowChannels] = useState(false);
   const [showTerminales, setShowTerminales] = useState(false);
   const [selectedType, setSelectedType] = useState('');
+  const [installTag, setInstallTag] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [editingSurge, setEditingSurge] = useState(false);
+  const [surgeValue, setSurgeValue] = useState('');
 
   async function handleInstall(event: FormEvent) {
     event.preventDefault();
@@ -143,7 +235,29 @@ function SlotBlock({
     setSubmitting(true);
     setError(null);
     try {
-      await createModule(projectId, { slotId: slot.id, catalogoModuloId: selectedType }, devUserEmail);
+      // tag en blanco = dejar que el backend sugiera el default
+      // (TIPO-orden, migración 017) — no se manda "" literal.
+      await createModule(
+        projectId,
+        { slotId: slot.id, catalogoModuloId: selectedType, tag: installTag.trim() || null },
+        devUserEmail
+      );
+      setInstallTag('');
+      onChange();
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error('Error desconocido.'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleSaveSurgeTag() {
+    if (!module) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await updateModule(projectId, module.id, { surgeProtectorTag: surgeValue.trim() || null }, devUserEmail);
+      setEditingSurge(false);
       onChange();
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Error desconocido.'));
@@ -157,7 +271,7 @@ function SlotBlock({
     setSubmitting(true);
     setError(null);
     try {
-      await updateModule(projectId, module.id, newTypeId, devUserEmail);
+      await updateModule(projectId, module.id, { catalogoModuloId: newTypeId }, devUserEmail);
       onChange();
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Error desconocido.'));
@@ -168,11 +282,17 @@ function SlotBlock({
 
   async function handleDeactivateModule() {
     if (!module) return;
-    if (!window.confirm(`¿Desactivar el módulo del slot ${slot.numeroSlot}?`)) return;
+    if (
+      !window.confirm(
+        `¿Eliminar el módulo del slot ${slot.numeroSlot}? Se borra de verdad (no queda como historial) — el slot queda vacío.`
+      )
+    ) {
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
-      await deactivateModule(projectId, module.id, devUserEmail);
+      await deleteModule(projectId, module.id, devUserEmail);
       onChange();
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Error desconocido.'));
@@ -182,11 +302,25 @@ function SlotBlock({
   }
 
   async function handleDeactivateSlot() {
-    if (!window.confirm(`¿Desactivar el slot ${slot.numeroSlot}?`)) return;
+    if (
+      !window.confirm(
+        `¿Eliminar el slot ${slot.numeroSlot}? Se borra de verdad, junto con su módulo si tiene uno. ` +
+          'Los slots siguientes de este rack bajan un número cada uno, para no dejar huecos.'
+      )
+    ) {
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
-      await deactivateSlot(projectId, slot.id, devUserEmail);
+      const result = await deleteSlot(projectId, slot.id, devUserEmail);
+      if (result.advertenciaRetagear) {
+        window.alert(
+          'El módulo de este slot tenía tag, Terminal Block y/o Surge Protector asignados. ' +
+            'Al bajar de número los slots siguientes, esa numeración (TB-XX/DISPR-XX) puede haber quedado ' +
+            'desalineada — revísala a mano si hace falta.'
+        );
+      }
       onChange();
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Error desconocido.'));
@@ -195,6 +329,14 @@ function SlotBlock({
     }
   }
 
+  // "Cambiar tipo" solo ofrece tipos del MISMO tipo de E/S que el actual —
+  // el backend ya rechaza (409) un cambio de tipo con canales en uso
+  // (migración 018), esto solo evita ofrecer en el desplegable una opción
+  // que de todos modos nunca tendría sentido con señales ya wireadas.
+  const sameIoTypeOptions = module
+    ? moduleTypes.filter((t) => t.tipoIoCodigo === module.tipoIoCodigo && t.id !== module.catalogoModuloId)
+    : [];
+
   return (
     <div className="physical-slot">
       <div className="physical-slot__header">
@@ -202,7 +344,10 @@ function SlotBlock({
 
         {module ? (
           <span className="physical-slot__module">
-            {module.fabricante} {module.modelo} ({module.canalesMax} canales)
+            {module.tag && <span className="badge badge--control">{module.tag}</span>}
+            <span className="physical-slot__module-desc">
+              {module.fabricante} {module.modelo} ({module.canalesMax} canales)
+            </span>
           </span>
         ) : (
           <span className="physical-hint">sin módulo</span>
@@ -214,61 +359,117 @@ function SlotBlock({
           disabled={!permissions.canDeactivate || submitting}
           onClick={handleDeactivateSlot}
         >
-          Desactivar slot
+          Eliminar slot
         </button>
       </div>
 
       <ErrorMessage error={error} />
 
       {module ? (
-        <div className="physical-slot__module-actions">
-          <button
-            type="button"
-            className="button button--secondary button--small"
-            onClick={() => setShowChannels((v) => !v)}
-          >
-            {showChannels ? 'Ocultar canales' : 'Ver canales'}
-          </button>
+        <>
+          <div className="physical-slot__meta">
+            <TerminalBlockTagEditor
+              projectId={projectId}
+              devUserEmail={devUserEmail}
+              moduloId={module.id}
+              canWrite={permissions.canWrite}
+            />
 
-          <button
-            type="button"
-            className="button button--secondary button--small"
-            onClick={() => setShowTerminales((v) => !v)}
-          >
-            {showTerminales ? 'Ocultar terminales' : 'Ver terminales'}
-          </button>
+            {permissions.canWrite && (
+              editingSurge ? (
+                <span className="physical-inline-edit">
+                  <input
+                    type="text"
+                    placeholder="DISPR01"
+                    maxLength={20}
+                    value={surgeValue}
+                    onChange={(event) => setSurgeValue(event.target.value)}
+                    disabled={submitting}
+                  />
+                  <button type="button" className="button button--small" disabled={submitting} onClick={handleSaveSurgeTag}>
+                    Guardar
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--secondary button--small"
+                    disabled={submitting}
+                    onClick={() => setEditingSurge(false)}
+                  >
+                    Cancelar
+                  </button>
+                </span>
+              ) : (
+                <span className="physical-hint">
+                  Surge: {module.surgeProtectorTag ?? 'sin asignar'}
+                  <button
+                    type="button"
+                    className="button button--secondary button--small"
+                    onClick={() => {
+                      setSurgeValue(module.surgeProtectorTag ?? '');
+                      setEditingSurge(true);
+                    }}
+                  >
+                    {module.surgeProtectorTag ? 'Editar' : 'Asignar'}
+                  </button>
+                </span>
+              )
+            )}
+          </div>
+
+          <div className="physical-slot__views">
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              onClick={() => setShowChannels((v) => !v)}
+            >
+              {showChannels ? 'Ocultar canales' : 'Ver canales'}
+            </button>
+
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              onClick={() => setShowTerminales((v) => !v)}
+            >
+              {showTerminales ? 'Ocultar terminales' : 'Ver terminales'}
+            </button>
+
+            {showChannels && (
+              <ChannelsView projectId={projectId} devUserEmail={devUserEmail} moduloId={module.id} />
+            )}
+            {showTerminales && (
+              <ModuloTerminalesView projectId={projectId} devUserEmail={devUserEmail} moduloId={module.id} />
+            )}
+          </div>
 
           {permissions.canWrite && (
-            <select
-              disabled={submitting}
-              value=""
-              onChange={(event) => handleChangeType(event.target.value)}
-            >
-              <option value="">— cambiar tipo de módulo —</option>
-              {moduleTypes.map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.fabricante} {type.modelo} ({type.canalesMax}ch)
-                </option>
-              ))}
-            </select>
-          )}
+            <div className="physical-slot__danger">
+              {sameIoTypeOptions.length > 0 && (
+                <select
+                  disabled={submitting}
+                  value=""
+                  onChange={(event) => handleChangeType(event.target.value)}
+                  title="Solo se ofrecen modelos del mismo tipo de E/S — un cambio a otro tipo con señales ya asignadas se rechaza."
+                >
+                  <option value="">— cambiar de modelo (mismo tipo) —</option>
+                  {sameIoTypeOptions.map((type) => (
+                    <option key={type.id} value={type.id}>
+                      {type.fabricante} {type.modelo} ({type.canalesMax}ch)
+                    </option>
+                  ))}
+                </select>
+              )}
 
-          <button
-            type="button"
-            className="button button--danger button--small"
-            disabled={!permissions.canDeactivate || submitting}
-            onClick={handleDeactivateModule}
-          >
-            Desactivar módulo
-          </button>
-
-          {showChannels && (
-            <ChannelsView projectId={projectId} devUserEmail={devUserEmail} moduloId={module.id} />
+              <button
+                type="button"
+                className="button button--danger button--small"
+                disabled={!permissions.canDeactivate || submitting}
+                onClick={handleDeactivateModule}
+              >
+                Eliminar módulo
+              </button>
+            </div>
           )}
-          {showTerminales && (
-            <ModuloTerminalesView projectId={projectId} devUserEmail={devUserEmail} moduloId={module.id} />
-          )}
-        </div>
+        </>
       ) : (
         permissions.canWrite && (
           <form className="physical-slot__install-form" onSubmit={handleInstall}>
@@ -285,6 +486,14 @@ function SlotBlock({
                 </option>
               ))}
             </select>
+            <input
+              type="text"
+              placeholder="Tag (vacío = sugerido automático)"
+              maxLength={20}
+              disabled={submitting}
+              value={installTag}
+              onChange={(event) => setInstallTag(event.target.value)}
+            />
             <button type="submit" className="button button--small" disabled={submitting}>
               Instalar módulo
             </button>
@@ -320,6 +529,27 @@ function RackBlock({
   const [numeroSlot, setNumeroSlot] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [editingLimite, setEditingLimite] = useState(false);
+  const [limiteValue, setLimiteValue] = useState('');
+
+  async function handleSaveLimite() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await updateRack(
+        projectId,
+        rack.id,
+        { limiteSlots: limiteValue.trim() === '' ? null : Number(limiteValue) },
+        devUserEmail
+      );
+      setEditingLimite(false);
+      onChange();
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error('Error desconocido.'));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   async function handleAddSlot(event: FormEvent) {
     event.preventDefault();
@@ -362,7 +592,47 @@ function RackBlock({
         >
           {expanded ? '▾' : '▸'} Rack {rack.numeroRack}
         </button>
-        <span className="physical-hint">{slots.length} slot(s)</span>
+        <span className="physical-hint">
+          {slots.length}{rack.limiteSlots !== null ? `/${rack.limiteSlots}` : ''} slot(s)
+        </span>
+
+        {editingLimite ? (
+          <span className="physical-inline-edit">
+            <input
+              type="number"
+              min={1}
+              placeholder="sin límite"
+              value={limiteValue}
+              onChange={(event) => setLimiteValue(event.target.value)}
+              disabled={submitting}
+            />
+            <button type="button" className="button button--small" disabled={submitting} onClick={handleSaveLimite}>
+              Guardar
+            </button>
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              disabled={submitting}
+              onClick={() => setEditingLimite(false)}
+            >
+              Cancelar
+            </button>
+          </span>
+        ) : (
+          permissions.canWrite && (
+            <button
+              type="button"
+              className="button button--secondary button--small"
+              onClick={() => {
+                setLimiteValue(rack.limiteSlots !== null ? String(rack.limiteSlots) : '');
+                setEditingLimite(true);
+              }}
+            >
+              {rack.limiteSlots !== null ? 'Editar límite' : '+ Límite de slots'}
+            </button>
+          )
+        )}
+
         <button
           type="button"
           className="button button--danger button--small"
@@ -392,6 +662,9 @@ function RackBlock({
 
           {permissions.canWrite && (
             <form className="form form--inline" onSubmit={handleAddSlot}>
+              <p className="physical-hint physical-hint--block">
+                El número de slot que elijas se colocará en ese orden, y los demás órdenes se modificarán.
+              </p>
               <label className="form__field">
                 <span>N.º de slot</span>
                 <input
@@ -443,6 +716,7 @@ export function GabineteDetailPage() {
   } = usePhysicalTree(projectId ?? '', devUser.email);
 
   const [numeroRack, setNumeroRack] = useState('');
+  const [limiteSlotsNuevoRack, setLimiteSlotsNuevoRack] = useState('');
   const [addingRack, setAddingRack] = useState(false);
   const [addRackError, setAddRackError] = useState<Error | null>(null);
   const [deactivating, setDeactivating] = useState(false);
@@ -461,8 +735,17 @@ export function GabineteDetailPage() {
     setAddingRack(true);
     setAddRackError(null);
     try {
-      await createRack(projectId!, { gabineteId: gabineteId!, numeroRack: Number(numeroRack) }, devUser.email);
+      await createRack(
+        projectId!,
+        {
+          gabineteId: gabineteId!,
+          numeroRack: Number(numeroRack),
+          limiteSlots: limiteSlotsNuevoRack.trim() === '' ? null : Number(limiteSlotsNuevoRack)
+        },
+        devUser.email
+      );
       setNumeroRack('');
+      setLimiteSlotsNuevoRack('');
       refreshTree();
     } catch (err) {
       setAddRackError(err instanceof Error ? err : new Error('Error desconocido.'));
@@ -536,9 +819,9 @@ export function GabineteDetailPage() {
 
       <ErrorMessage error={error} />
 
-      {loading && <p>Cargando…</p>}
+      {loading && !tree && <p>Cargando…</p>}
 
-      {!loading && tree && (
+      {tree && (
         <>
           {permissions.canWrite && (
             <form className="form form--inline" onSubmit={handleAddRack}>
@@ -551,6 +834,17 @@ export function GabineteDetailPage() {
                   disabled={addingRack}
                   value={numeroRack}
                   onChange={(event) => setNumeroRack(event.target.value)}
+                />
+              </label>
+              <label className="form__field">
+                <span>Límite de slots (opcional)</span>
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="sin límite"
+                  disabled={addingRack}
+                  value={limiteSlotsNuevoRack}
+                  onChange={(event) => setLimiteSlotsNuevoRack(event.target.value)}
                 />
               </label>
               <button type="submit" className="button button--small" disabled={addingRack}>
@@ -579,16 +873,6 @@ export function GabineteDetailPage() {
         </>
       )}
 
-      {!loading && gabinete && (
-        <BornerasSection
-          projectId={projectId}
-          devUserEmail={devUser.email}
-          ownerType="gabinete"
-          ownerId={gabinete.id}
-          canWrite={permissions.canWrite}
-          canDeactivate={permissions.canDeactivate}
-        />
-      )}
     </section>
   );
 }

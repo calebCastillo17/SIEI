@@ -38,6 +38,13 @@ export interface LdiOrderableInstrumento {
   nodo: string | null;
   instrumentoAsociadoId: string | null;
   instrumentoAsociadoTag: string | null;
+  /** Tags de los HIJOS de este instrumento (los que apuntan a él vía su
+   * propio instrumentoAsociadoId), unidos por coma — solo tiene sentido
+   * para un padre, que es lo único que llega hasta acá (fetchInstrumentosOrdenables
+   * ya excluye hijos). Es lo que se imprime en la columna INSTRUMENTO
+   * ASOCIADO del LDI (ver snapshot.ts) — nunca el propio
+   * instrumentoAsociadoTag, que en un padre siempre es null. */
+  hijosTags: string | null;
 }
 
 export interface CriterioOrden {

@@ -182,14 +182,35 @@ slotsRouter.post(
         .input('rack_id', sql.NVarChar(30), rackId)
         .input('numero_slot', sql.SmallInt, numeroSlot)
         .query(`
+          -- Límite de slots del rack (migración 017) — nullable, sin límite
+          -- si no se fijó ninguno. Se valida acá porque necesita el conteo
+          -- actual de slots activos, no solo la fila que se está creando.
           IF EXISTS (
-            SELECT 1 FROM nucleo.slot
-            WHERE rack_id = TRY_CONVERT(BIGINT, @rack_id)
-              AND numero_slot = @numero_slot AND activo = 1
+            SELECT 1 FROM nucleo.rack r
+            WHERE r.id = TRY_CONVERT(BIGINT, @rack_id)
+              AND r.limite_slots IS NOT NULL
+              AND r.limite_slots <= (SELECT COUNT(*) FROM nucleo.slot WHERE rack_id = TRY_CONVERT(BIGINT, @rack_id) AND activo = 1)
           )
           BEGIN
-            THROW 54501, 'Ya existe un slot activo con ese número en ese rack.', 1;
+            THROW 54502, 'El rack alcanzó su límite de slots.', 1;
           END;
+
+          -- Insertar EN esa posición (pedido explícito del usuario, "como
+          -- insertar una fila en Excel"): si el número ya está ocupado, en
+          -- vez de rechazar, todo slot activo de ese rack con numero_slot
+          -- >= el pedido corre +1 para hacerle espacio — un solo UPDATE de
+          -- conjunto (mismo principio que la renumeración del DELETE: SQL
+          -- Server valida UX_slot_rack_numero contra la imagen FINAL del
+          -- statement, nunca fila por fila, así que ningún valor
+          -- intermedio choca aunque el rango de destino se solape).
+          UPDATE nucleo.slot
+          SET numero_slot = numero_slot + 1,
+              updated_at = SYSUTCDATETIME(),
+              updated_by = TRY_CONVERT(BIGINT, @created_by)
+          WHERE rack_id = TRY_CONVERT(BIGINT, @rack_id)
+            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND activo = 1
+            AND numero_slot >= @numero_slot;
 
           INSERT INTO nucleo.slot (proyecto_id, rack_id, numero_slot, activo, created_at, created_by)
           OUTPUT ${OUTPUT_INSERTED_COLUMNS}
@@ -206,8 +227,15 @@ slotsRouter.post(
     } catch (error) {
       const number = sqlErrorNumber(error);
 
-      if (number === 54501 || number === 2601 || number === 2627) {
+      // 54501 ya no se lanza en el POST (corre los slots existentes en vez de
+      // rechazar, ver arriba) — sigue vigente en el PATCH de abajo.
+      if (number === 2601 || number === 2627) {
         res.status(409).json({ error: 'slot_number_conflict', message: 'An active slot with this number already exists in that rack.' });
+        return;
+      }
+
+      if (number === 54502) {
+        res.status(409).json({ error: 'rack_limite_slots_alcanzado', message: 'El rack alcanzó su límite de slots.' });
         return;
       }
 
@@ -314,14 +342,37 @@ slotsRouter.patch(
 
 /*
  * DELETE /api/projects/:projectId/slots/:slotId
+ *
+ * BORRADO FÍSICO REAL (pedido explícito del usuario — "no quiero
+ * desactivar en este caso"). A diferencia de casi todo el resto de SIEI,
+ * un slot no tiene valor histórico/de auditoría propio (no es un
+ * documento emitido ni un instrumento con procedencia P&ID) y la
+ * renumeración sin huecos ya asume que los slots son reordenables — así
+ * que acá NO se desactiva, se borra la fila de verdad.
+ *
+ * Como es un DELETE físico (no un UPDATE activo=0), ninguno de los
+ * triggers de "validar desactivación" existentes se dispara (todos son
+ * AFTER UPDATE) — este endpoint reimplementa las mismas 3 validaciones de
+ * "está realmente vacío" a mano, antes de borrar nada:
+ *   1. Ningún canal del módulo con señal activa (antes: TR_modulo_
+ *      validar_desactivacion, 51019).
+ *   2. Ningún punto_conexion real referenciando el módulo (mismo criterio
+ *      "recurso real nunca se cascada" que ya usa la eliminación
+ *      definitiva de instrumentos).
+ *   3. Ninguna posición de terminal ocupada por una terminación real
+ *      (antes: TR_terminal_validar_desactivacion / TR_bloque_terminal_
+ *      validar_desactivacion, 51030/51031).
+ * Si las 3 pasan, se cascada el borrado físico completo: posicion_terminal
+ * -> terminal -> bloque_terminal -> canal -> modulo -> slot -> renumerar.
  */
 slotsRouter.delete(
   '/:slotId',
   requireProjectPermission('deactivate'),
   async (req: Request, res: Response, next: NextFunction) => {
+    let transaction: sql.Transaction | undefined;
+
     try {
       const projectId = req.projectAccess!.projectId;
-      const userId = req.authUser!.id;
       const slotId = normalizeParam(req.params.slotId);
 
       if (!isPositiveIntString(slotId)) {
@@ -330,30 +381,144 @@ slotsRouter.delete(
       }
 
       const pool = await getDbPool();
-      const result = await pool
-        .request()
+
+      transaction = new sql.Transaction(pool);
+      await transaction.begin();
+
+      const slotInfo = await new sql.Request(transaction)
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('slot_id', sql.NVarChar(30), slotId)
-        .input('updated_by', sql.NVarChar(30), userId)
         .query(`
-          UPDATE nucleo.slot
-          SET activo = 0, updated_at = SYSUTCDATETIME(), updated_by = TRY_CONVERT(BIGINT, @updated_by)
-          OUTPUT ${OUTPUT_INSERTED_COLUMNS}
+          SELECT id, rack_id, numero_slot
+          FROM nucleo.slot
           WHERE id = TRY_CONVERT(BIGINT, @slot_id)
             AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
             AND activo = 1;
         `);
+      const slot = slotInfo.recordset[0];
 
-      const row = result.recordset[0];
-
-      if (!row) {
+      if (!slot) {
+        await transaction.rollback();
         res.status(404).json({ error: 'slot_not_found', message: 'Slot does not exist in this project or is already inactive.' });
         return;
       }
 
-      res.status(200).json({ slot: serialize(row) });
+      const moduloInfo = await new sql.Request(transaction)
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('slot_id', sql.NVarChar(30), slotId)
+        .query(`
+          SELECT
+            m.id, m.tag, m.surge_protector_tag,
+            bt.id AS bloque_terminal_id, bt.codigo AS tb_codigo,
+            (SELECT COUNT(*) FROM nucleo.canal c JOIN nucleo.senal s ON s.canal_id = c.id AND s.activo = 1 WHERE c.modulo_id = m.id AND c.activo = 1) AS senales_activas,
+            (SELECT COUNT(*) FROM nucleo.punto_conexion pc WHERE pc.modulo_id = m.id) AS puntos_conexion,
+            (SELECT COUNT(*) FROM nucleo.terminal t JOIN nucleo.posicion_terminal pt ON pt.terminal_id = t.id AND pt.activo = 1
+               JOIN nucleo.terminacion te ON te.posicion_terminal_id = pt.id AND te.activo = 1
+             WHERE t.bloque_terminal_id = bt.id AND t.activo = 1) AS posiciones_ocupadas
+          FROM nucleo.modulo m
+          LEFT JOIN nucleo.bloque_terminal bt ON bt.modulo_id = m.id AND bt.activo = 1
+          WHERE m.slot_id = TRY_CONVERT(BIGINT, @slot_id)
+            AND m.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND m.activo = 1;
+        `);
+      const modulo = moduloInfo.recordset[0];
+
+      if (modulo && modulo.senales_activas > 0) {
+        await transaction.rollback();
+        res.status(409).json({
+          error: 'slot_no_vacio',
+          message: 'No se puede eliminar: el slot tiene un módulo con canales activos en uso por señales activas.'
+        });
+        return;
+      }
+
+      if (modulo && modulo.puntos_conexion > 0) {
+        await transaction.rollback();
+        res.status(409).json({
+          error: 'slot_no_vacio',
+          message: 'No se puede eliminar: el módulo de este slot tiene puntos de conexión reales asociados.'
+        });
+        return;
+      }
+
+      if (modulo && modulo.posiciones_ocupadas > 0) {
+        await transaction.rollback();
+        res.status(409).json({
+          error: 'slot_no_vacio',
+          message: 'No se puede eliminar: el Terminal Block de este módulo tiene una posición ocupada por una terminación real.'
+        });
+        return;
+      }
+
+      const teniaTagsAsignados = Boolean(
+        modulo && (modulo.tag || modulo.surge_protector_tag || (modulo.tb_codigo && modulo.tb_codigo !== 'MODULO'))
+      );
+
+      if (modulo) {
+        if (modulo.bloque_terminal_id) {
+          await new sql.Request(transaction)
+            .input('bloque_terminal_id', sql.NVarChar(30), String(modulo.bloque_terminal_id))
+            .query(`
+              DELETE pt
+              FROM nucleo.posicion_terminal pt
+              JOIN nucleo.terminal t ON t.id = pt.terminal_id
+              WHERE t.bloque_terminal_id = TRY_CONVERT(BIGINT, @bloque_terminal_id);
+
+              DELETE FROM nucleo.terminal WHERE bloque_terminal_id = TRY_CONVERT(BIGINT, @bloque_terminal_id);
+
+              DELETE FROM nucleo.bloque_terminal WHERE id = TRY_CONVERT(BIGINT, @bloque_terminal_id);
+            `);
+        }
+
+        await new sql.Request(transaction)
+          .input('modulo_id', sql.NVarChar(30), String(modulo.id))
+          .query(`
+            DELETE FROM nucleo.canal WHERE modulo_id = TRY_CONVERT(BIGINT, @modulo_id);
+            DELETE FROM nucleo.modulo WHERE id = TRY_CONVERT(BIGINT, @modulo_id);
+          `);
+      }
+
+      await new sql.Request(transaction)
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('slot_id', sql.NVarChar(30), slotId)
+        .query(`
+          DELETE FROM nucleo.slot
+          WHERE id = TRY_CONVERT(BIGINT, @slot_id)
+            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id);
+        `);
+
+      /*
+       * Renumeración sin huecos (pedido explícito del usuario) — todo slot
+       * ACTIVO del mismo rack con numero_slot mayor al que se acaba de
+       * eliminar baja 1. Es un único UPDATE de conjunto (no fila por fila):
+       * SQL Server valida UX_slot_rack_numero contra la imagen FINAL del
+       * statement completo, así que ningún valor intermedio choca aunque
+       * el rango de destino se solape con el de origen.
+       */
+      const renumerados = await new sql.Request(transaction)
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .input('rack_id', sql.NVarChar(30), String(slot.rack_id))
+        .input('numero_slot_eliminado', sql.SmallInt, slot.numero_slot)
+        .query(`
+          UPDATE nucleo.slot
+          SET numero_slot = numero_slot - 1,
+              updated_at = SYSUTCDATETIME()
+          WHERE rack_id = TRY_CONVERT(BIGINT, @rack_id)
+            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND activo = 1
+            AND numero_slot > @numero_slot_eliminado;
+        `);
+
+      await transaction.commit();
+
+      res.status(200).json({
+        slot: { id: String(slot.id), projectId, rackId: String(slot.rack_id), numeroSlot: slot.numero_slot, active: false },
+        slotsRenumerados: renumerados.rowsAffected[0],
+        advertenciaRetagear: teniaTagsAsignados
+      });
 
     } catch (error) {
+      if (transaction) await transaction.rollback().catch(() => {});
       next(error);
     }
   }

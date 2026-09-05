@@ -47,6 +47,7 @@ function serialize(row: Record<string, any>) {
     projectId: String(row.proyecto_id),
     gabineteId: String(row.gabinete_id),
     numeroRack: row.numero_rack,
+    limiteSlots: row.limite_slots === null ? null : row.limite_slots,
     active: Boolean(row.activo),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -56,7 +57,7 @@ function serialize(row: Record<string, any>) {
 }
 
 const COLUMN_NAMES = [
-  'id', 'proyecto_id', 'gabinete_id', 'numero_rack', 'activo',
+  'id', 'proyecto_id', 'gabinete_id', 'numero_rack', 'limite_slots', 'activo',
   'created_at', 'updated_at', 'created_by', 'updated_by'
 ];
 const COLUMNS = COLUMN_NAMES.join(', ');
@@ -157,7 +158,7 @@ racksRouter.post(
     try {
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
-      const { gabineteId, numeroRack } = req.body ?? {};
+      const { gabineteId, numeroRack, limiteSlots = null } = req.body ?? {};
 
       if (!isPositiveIntString(gabineteId)) {
         res.status(400).json({ error: 'validation_error', message: 'gabineteId is required and must be a numeric id.' });
@@ -174,6 +175,14 @@ racksRouter.post(
         return;
       }
 
+      if (
+        limiteSlots !== null &&
+        (typeof limiteSlots !== 'number' || !Number.isInteger(limiteSlots) || limiteSlots <= 0 || limiteSlots > 32767)
+      ) {
+        res.status(400).json({ error: 'validation_error', message: 'limiteSlots must be a positive integer or null.' });
+        return;
+      }
+
       const pool = await getDbPool();
       const result = await pool
         .request()
@@ -181,6 +190,7 @@ racksRouter.post(
         .input('created_by', sql.NVarChar(30), userId)
         .input('gabinete_id', sql.NVarChar(30), gabineteId)
         .input('numero_rack', sql.SmallInt, numeroRack)
+        .input('limite_slots', sql.SmallInt, limiteSlots)
         .query(`
           IF EXISTS (
             SELECT 1 FROM nucleo.rack
@@ -191,9 +201,9 @@ racksRouter.post(
             THROW 54401, 'Ya existe un rack activo con ese número en ese gabinete.', 1;
           END;
 
-          INSERT INTO nucleo.rack (proyecto_id, gabinete_id, numero_rack, activo, created_at, created_by)
+          INSERT INTO nucleo.rack (proyecto_id, gabinete_id, numero_rack, limite_slots, activo, created_at, created_by)
           OUTPUT ${OUTPUT_INSERTED_COLUMNS}
-          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @gabinete_id), @numero_rack, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
+          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @gabinete_id), @numero_rack, @limite_slots, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 
       const row = result.recordset[0];
@@ -244,26 +254,53 @@ racksRouter.patch(
         return;
       }
 
-      const { numeroRack } = req.body ?? {};
+      const body = req.body ?? {};
+      const hasNumeroRack = 'numeroRack' in body;
+      const hasLimiteSlots = 'limiteSlots' in body;
+
+      if (!hasNumeroRack && !hasLimiteSlots) {
+        res.status(400).json({ error: 'validation_error', message: 'At least one of numeroRack/limiteSlots is required.' });
+        return;
+      }
 
       if (
-        typeof numeroRack !== 'number' ||
-        !Number.isInteger(numeroRack) ||
-        numeroRack < 0 ||
-        numeroRack > 32767
+        hasNumeroRack &&
+        (typeof body.numeroRack !== 'number' ||
+          !Number.isInteger(body.numeroRack) ||
+          body.numeroRack < 0 ||
+          body.numeroRack > 32767)
       ) {
         res.status(400).json({ error: 'validation_error', message: 'numeroRack must be a non-negative integer.' });
         return;
       }
 
+      if (
+        hasLimiteSlots &&
+        body.limiteSlots !== null &&
+        (typeof body.limiteSlots !== 'number' || !Number.isInteger(body.limiteSlots) || body.limiteSlots <= 0 || body.limiteSlots > 32767)
+      ) {
+        res.status(400).json({ error: 'validation_error', message: 'limiteSlots must be a positive integer or null.' });
+        return;
+      }
+
+      const assignments: string[] = [];
       const pool = await getDbPool();
-      const result = await pool
+      const request = pool
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('rack_id', sql.NVarChar(30), rackId)
-        .input('numero_rack', sql.SmallInt, numeroRack)
-        .input('updated_by', sql.NVarChar(30), userId)
-        .query(`
+        .input('updated_by', sql.NVarChar(30), userId);
+
+      if (hasNumeroRack) {
+        request.input('numero_rack', sql.SmallInt, body.numeroRack);
+        assignments.push('numero_rack = @numero_rack');
+      }
+      if (hasLimiteSlots) {
+        request.input('limite_slots', sql.SmallInt, body.limiteSlots);
+        assignments.push('limite_slots = @limite_slots');
+      }
+
+      const result = await request.query(`
           DECLARE @gabinete_id BIGINT;
           SELECT @gabinete_id = gabinete_id FROM nucleo.rack
           WHERE id = TRY_CONVERT(BIGINT, @rack_id)
@@ -275,6 +312,7 @@ racksRouter.patch(
             THROW 54402, 'El rack no existe en este proyecto o está inactivo.', 1;
           END;
 
+          ${hasNumeroRack ? `
           IF EXISTS (
             SELECT 1 FROM nucleo.rack
             WHERE gabinete_id = @gabinete_id AND numero_rack = @numero_rack AND activo = 1
@@ -282,10 +320,18 @@ racksRouter.patch(
           )
           BEGIN
             THROW 54401, 'Ya existe un rack activo con ese número en ese gabinete.', 1;
-          END;
+          END;` : ''}
+
+          ${hasLimiteSlots ? `
+          IF @limite_slots IS NOT NULL AND @limite_slots < (
+            SELECT COUNT(*) FROM nucleo.slot WHERE rack_id = TRY_CONVERT(BIGINT, @rack_id) AND activo = 1
+          )
+          BEGIN
+            THROW 54403, 'El límite de slots no puede ser menor a la cantidad de slots activos que ya tiene el rack.', 1;
+          END;` : ''}
 
           UPDATE nucleo.rack
-          SET numero_rack = @numero_rack,
+          SET ${assignments.join(', ')},
               updated_at = SYSUTCDATETIME(),
               updated_by = TRY_CONVERT(BIGINT, @updated_by)
           OUTPUT ${OUTPUT_INSERTED_COLUMNS}
@@ -305,6 +351,13 @@ racksRouter.patch(
       }
       if (number === 54402) {
         res.status(404).json({ error: 'rack_not_found', message: 'Rack does not exist in this project or is inactive.' });
+        return;
+      }
+      if (number === 54403) {
+        res.status(409).json({
+          error: 'limite_slots_menor_a_ocupados',
+          message: 'El límite de slots no puede ser menor a la cantidad de slots activos que ya tiene el rack.'
+        });
         return;
       }
 

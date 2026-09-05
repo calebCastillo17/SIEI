@@ -93,12 +93,15 @@ const FILAS_BASE_PLANTILLA = 10;
  * nunca se reduce por debajo de este valor. */
 const ALTURA_FILA_BASE = 25.2;
 /** Alto adicional por cada línea de texto envuelta más allá de la
- * primera — valor conservador (más generoso que el mínimo teórico de un
- * renglón a 10pt) para priorizar "nunca cortar texto" sobre "altura
- * mínima exacta", que es lo que pidió el usuario. No hay forma de
- * verificar el resultado pixel a pixel sin abrir Excel de verdad — esto
- * es una estimación razonada, a confirmar visualmente. */
-const ALTURA_POR_LINEA_ADICIONAL = 15;
+ * primera. Empezó en 15 ("valor conservador... a confirmar
+ * visualmente" — nunca se había abierto el resultado real). El usuario
+ * lo confirmó visualmente y pidió más margen: con 15, cada línea
+ * adicional quedaba más apretada que la primera (la primera línea ya
+ * vive dentro de `ALTURA_FILA_BASE`, medida real de la plantilla con
+ * bastante aire; una línea extra a solo +15 no tenía ese mismo
+ * respiro) — "se ve muy ajustado". Subido a 18 para que cada línea
+ * extra tenga un margen comparable, no exacto al mínimo teórico. */
+const ALTURA_POR_LINEA_ADICIONAL = 18;
 /** Caracteres por unidad de ancho de columna de Excel para Arial Narrow
  * 10pt — subestimado a propósito (más líneas de las que probablemente
  * hagan falta) para el mismo motivo: preferir una fila más alta de lo
@@ -106,6 +109,16 @@ const ALTURA_POR_LINEA_ADICIONAL = 15;
 const CARACTERES_POR_UNIDAD_ANCHO = 1.3;
 
 const LOCACION_SIN_VALOR = '(SIN LOCACIÓN)';
+
+/** Gris claro para la fila de sección de LOCACIÓN — pedido explícito del
+ * usuario: no el mismo gris oscuro del encabezado (heredado antes vía
+ * `escribirFilaDeSeccion` clonando el fill real del header), sino un
+ * gris más suave que solo separa visualmente los grupos. */
+const FILL_SECCION_GRIS_CLARO: ExcelJS.Fill = {
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: { argb: 'FFE8E8E8' }
+};
 
 /** Filas de la tabla de revisiones en Carátula: B32:J36 (5 filas), la más
  * reciente siempre en la 36; en la plantilla oficial vigente el
@@ -343,12 +356,14 @@ function calcularAlturaFila(
   return ALTURA_FILA_BASE + (maxLineas - 1) * ALTURA_POR_LINEA_ADICIONAL;
 }
 
-/** Clona el estilo (fuente/relleno/borde/alineación) de la fila de
- * encabezado real de la plantilla sobre la fila de sección de LOCACIÓN —
- * no hay una fila "separadora" propia en la plantilla base para copiar,
- * así que se reutiliza la del encabezado (ya tiene el aspecto de
- * "cabecera": negrita, fondo sombreado, bordes, centrado) en vez de
- * inventar un estilo nuevo de cero.
+/** Clona fuente/borde/alineación de la fila de encabezado real de la
+ * plantilla sobre la fila de sección de LOCACIÓN (negrita, bordes,
+ * centrado) — no hay una fila "separadora" propia en la plantilla base
+ * para copiar, así que se reutiliza el aspecto del encabezado en vez de
+ * inventar un estilo nuevo de cero. El RELLENO es la única excepción
+ * deliberada: no se clona el del encabezado (gris oscuro) — pedido
+ * explícito del usuario, un gris más claro que solo separa visualmente
+ * los grupos sin verse como un segundo encabezado.
  *
  * IMPORTANTE — orden de operaciones: hay que combinar (`mergeCells`)
  * PRIMERO y recién después asignar estilo a la celda ancla. Probado
@@ -359,6 +374,25 @@ function calcularAlturaFila(
  * combinar serializa correctamente. Las demás celdas del rango no
  * necesitan estilo propio: una vez combinadas, Excel solo renderiza el
  * de la celda ancla.
+ *
+ * OTRO hallazgo empírico, en `exceljs/lib/doc/worksheet.js`
+ * (`duplicateRow`/`spliceRows`): al duplicar filas para hacer espacio,
+ * exceljs hace `rDst.getCell(colNumber).style = cell.style` — copia la
+ * REFERENCIA al objeto de estilo de la fila origen, no un clon. Todas
+ * las filas de datos duplicadas de la columna ÍTEM terminan literalmente
+ * compartiendo UN MISMO objeto `style` con la fila modelo. Y como
+ * `Cell.prototype.set fill` (`cell.js`) hace `this.style.fill = value`
+ * — MUTA esa propiedad sobre el objeto que tenga en ese momento, en vez
+ * de reemplazarlo — asignar `anchorCell.fill = X` en cualquier celda que
+ * comparta ese objeto termina coloreando TODAS las que lo comparten, sin
+ * importar el orden en que se escriban (inclusive hacia celdas ya
+ * escritas antes). Por eso acá NUNCA se asigna `anchor.font = ...` /
+ * `anchor.fill = ...` por separado (eso es exactamente lo que mancha
+ * filas ajenas) — se reemplaza `anchor.style` completo por un objeto
+ * NUEVO (vía spread), lo que desengancha esta celda del objeto
+ * compartido en vez de mutarlo. La columna ÍTEM de las filas de datos
+ * nunca necesita este tratamiento porque nunca se le asigna un estilo
+ * nuevo — se deja tal cual la dejó `duplicateRow`.
  */
 function escribirFilaDeSeccion(
   ws: ExcelJS.Worksheet,
@@ -372,10 +406,13 @@ function escribirFilaDeSeccion(
 
   const anchor = ws.getRow(filaExcel).getCell(minCol);
   const srcAnchor = ws.getRow(headerRow).getCell(minCol);
-  anchor.font = JSON.parse(JSON.stringify(srcAnchor.font));
-  anchor.fill = JSON.parse(JSON.stringify(srcAnchor.fill));
-  anchor.border = JSON.parse(JSON.stringify(srcAnchor.border));
-  anchor.alignment = JSON.parse(JSON.stringify(srcAnchor.alignment));
+  anchor.style = {
+    ...anchor.style,
+    font: JSON.parse(JSON.stringify(srcAnchor.font)),
+    fill: FILL_SECCION_GRIS_CLARO,
+    border: JSON.parse(JSON.stringify(srcAnchor.border)),
+    alignment: JSON.parse(JSON.stringify(srcAnchor.alignment))
+  };
   anchor.value = locacion || LOCACION_SIN_VALOR;
 
   ws.getRow(filaExcel).height = ALTURA_FILA_BASE;
@@ -386,6 +423,21 @@ export async function generarLdiExcel(input: GenerarLdiExcelInput): Promise<Buff
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(plantillaSaneada as unknown as ExcelJS.Buffer);
+
+  // La plantilla oficial trae, en docProps/core.xml, el nombre real de
+  // quien la creó/editó en Excel (dc:creator / cp:lastModifiedBy) —
+  // exceljs los lee al cargar el paquete y los reescribe TAL CUAL al
+  // guardar, así que sin esto cada LDI emitido heredaría esos dos
+  // nombres de persona. Es justo lo que dispara el aviso de Excel al
+  // GUARDAR ("es posible que su documento incluya información personal
+  // que el Inspector de documento no puede quitar") — el Inspector no
+  // puede "quitarla" porque, desde su punto de vista, es simplemente el
+  // autor/último editor legítimo del archivo, no un dato oculto. Un LDI
+  // es un entregable oficial de control, no el archivo de trabajo de
+  // una persona — se limpia a un autor neutro en vez de dejar pasar el
+  // nombre de quien creó la plantilla.
+  workbook.creator = 'SIEI';
+  workbook.lastModifiedBy = 'SIEI';
 
   const caratula = findSheet(workbook, CARATULA_SHEET_NAMES);
   const hojaDatos = findSheet(workbook, DATOS_SHEET_NAMES);

@@ -44,6 +44,11 @@ import { ControlSignalsPage } from './pages/ControlSignalsPage';
 import { ControlHardwarePage } from './pages/ControlHardwarePage';
 import { ControlGroupsPage } from './pages/ControlGroupsPage';
 import { ControlPlanosPage } from './pages/ControlPlanosPage';
+import { ControlConexionadoPage } from './pages/ControlConexionadoPage';
+import { ControlCajasConexionadoPage } from './pages/ControlCajasConexionadoPage';
+import { ControlCajasHardwarePage } from './pages/ControlCajasHardwarePage';
+import { ControlRuteoPage } from './pages/ControlRuteoPage';
+import { ControlLayout } from './components/ControlLayout';
 import { ControlSignalDetailPage } from './pages/ControlSignalDetailPage';
 
 function App() {
@@ -84,14 +89,22 @@ function App() {
           path="/projects/:projectId/equipment/:equipmentId"
           element={<EquipmentDetailPage />}
         />
-        <Route path="/projects/:projectId/control" element={<ControlSignalsPage />} />
-        <Route path="/projects/:projectId/control/hardware" element={<ControlHardwarePage />} />
-        <Route path="/projects/:projectId/control/groups" element={<ControlGroupsPage />} />
-        <Route path="/projects/:projectId/control/planos" element={<ControlPlanosPage />} />
-        <Route
-          path="/projects/:projectId/control/signals/:signalId"
-          element={<ControlSignalDetailPage />}
-        />
+        {/* Hardware es la pantalla principal de Control (pedido explícito
+            del usuario) — Señales pasó de la ruta base a /control/signals.
+            ControlLayout agrupa la sub-navegación (Señales/Gabinetes/
+            Cajas/Planos) una sola vez para toda la sección — ver ese
+            componente. */}
+        <Route path="/projects/:projectId/control" element={<ControlLayout />}>
+          <Route index element={<ControlHardwarePage />} />
+          <Route path="signals" element={<ControlSignalsPage />} />
+          <Route path="signals/:signalId" element={<ControlSignalDetailPage />} />
+          <Route path="groups" element={<ControlGroupsPage />} />
+          <Route path="planos" element={<ControlPlanosPage />} />
+          <Route path="conexionado" element={<ControlConexionadoPage />} />
+          <Route path="conexionado-cajas" element={<ControlCajasConexionadoPage />} />
+          <Route path="cajas" element={<ControlCajasHardwarePage />} />
+          <Route path="ruteo" element={<ControlRuteoPage />} />
+        </Route>
         <Route path="/projects/:projectId/gabinetes" element={<GabinetesListPage />} />
         <Route path="/projects/:projectId/gabinetes/:gabineteId" element={<GabineteDetailPage />} />
         <Route path="/projects/:projectId/planos" element={<PlanosListPage />} />

@@ -14,9 +14,11 @@ import {
 } from '../api/planos';
 import { listGabinetes } from '../api/gabinetes';
 import { listBoxes } from '../api/boxes';
+import { updateModule } from '../api/modules';
 import { useAsyncData } from '../lib/useAsyncData';
+import { usePhysicalTree } from '../components/usePhysicalTree';
 import { usePlanoFormOptions } from '../components/usePlanoFormOptions';
-import type { Box, Gabinete, PlanoDetail, PlanoInput } from '../api/types';
+import type { Box, Gabinete, PhysicalModule, PlanoDetail, PlanoInput } from '../api/types';
 import { PlanoForm } from '../components/PlanoForm';
 import { CatalogSelect } from '../components/CatalogSelect';
 import { ErrorMessage } from '../components/ErrorMessage';
@@ -233,6 +235,131 @@ function CajasAsociadasSection({
   );
 }
 
+/* ---- Sección "Módulos de conexionado": el "espacio para diseñar" pedido
+ * por el usuario — elige un gabinete y va marcando qué módulos/slots de
+ * ese gabinete quedan dibujados en ESTE plano. El backend
+ * (TR_modulo_validar_plano_gabinete, migración 024) es quien realmente
+ * impide mezclar módulos de dos gabinetes en el mismo plano y quien
+ * auto-asocia el gabinete al plano (gabinete_plano) — esta sección solo
+ * refleja ese estado, no reimplementa la regla en el cliente. */
+
+function ModulosDeConexionadoSection({
+  projectId,
+  devUserEmail,
+  plano,
+  gabinetes,
+  permissions,
+  onChange
+}: {
+  projectId: string;
+  devUserEmail: string;
+  plano: PlanoDetail;
+  gabinetes: Gabinete[];
+  permissions: PermissionFlags;
+  onChange: () => void;
+}) {
+  const { data: tree, refresh: refreshTree } = usePhysicalTree(projectId, devUserEmail);
+
+  const [selectedGabineteId, setSelectedGabineteId] = useState<string | null>(
+    plano.gabinetes[0]?.gabineteId ?? null
+  );
+  const [savingModuleId, setSavingModuleId] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+
+  async function handleToggle(modulo: PhysicalModule, checked: boolean) {
+    setSavingModuleId(modulo.id);
+    setError(null);
+    try {
+      await updateModule(projectId, modulo.id, { planoId: checked ? plano.id : null }, devUserEmail);
+      await refreshTree();
+      onChange();
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error('Error desconocido.'));
+    } finally {
+      setSavingModuleId(null);
+    }
+  }
+
+  const racks = (tree?.racks ?? [])
+    .filter((r) => r.active && r.gabineteId === selectedGabineteId)
+    .sort((a, b) => a.numeroRack - b.numeroRack);
+
+  return (
+    <section className="form__section">
+      <h2>Módulos de conexionado</h2>
+      <p className="physical-hint">
+        Marca qué módulos (slots) van dibujados en este plano. Todos deben pertenecer al mismo gabinete —
+        si un módulo ya está en otro plano, primero hay que quitarlo de allá.
+      </p>
+
+      <ErrorMessage error={error} />
+
+      <label className="form__field">
+        <span>Gabinete</span>
+        <CatalogSelect
+          disabled={!permissions.canWrite}
+          value={selectedGabineteId}
+          onChange={setSelectedGabineteId}
+          options={gabinetes.map((g) => ({ id: g.id, label: g.tagGabinete }))}
+          emptyLabel="— elegir gabinete —"
+        />
+      </label>
+
+      {!selectedGabineteId && <p className="physical-hint">Elige un gabinete para ver sus racks y slots.</p>}
+
+      {selectedGabineteId && racks.length === 0 && (
+        <p className="physical-hint">Este gabinete todavía no tiene racks.</p>
+      )}
+
+      {racks.map((rack) => {
+        const slots = (tree?.slots ?? [])
+          .filter((s) => s.active && s.rackId === rack.id)
+          .sort((a, b) => a.numeroSlot - b.numeroSlot);
+
+        return (
+          <div key={rack.id} className="physical-rack">
+            <div className="physical-rack__header">
+              <span className="physical-slot__title">Rack {rack.numeroRack}</span>
+            </div>
+            <div className="physical-rack__body">
+              {slots.map((slot) => {
+                const modulo = (tree?.modules ?? []).find((m) => m.active && m.slotId === slot.id) ?? null;
+
+                return (
+                  <div key={slot.id} className="physical-slot">
+                    <div className="physical-slot__header">
+                      <span className="physical-slot__title">Slot {slot.numeroSlot}</span>
+                      {!modulo && <span className="physical-slot__module-desc">— vacío —</span>}
+                      {modulo && (
+                        <label className="physical-slot__module">
+                          <input
+                            type="checkbox"
+                            checked={modulo.planoId === plano.id}
+                            disabled={
+                              !permissions.canWrite ||
+                              savingModuleId === modulo.id ||
+                              (modulo.planoId !== null && modulo.planoId !== plano.id)
+                            }
+                            onChange={(event) => handleToggle(modulo, event.target.checked)}
+                          />
+                          {modulo.tag ?? modulo.modelo}
+                          {modulo.planoId !== null && modulo.planoId !== plano.id && (
+                            <span className="physical-hint"> (ya en plano {modulo.planoCodigoPlano ?? `#${modulo.planoId}`})</span>
+                          )}
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 export function PlanoDetailPage() {
   const { projectId, planoId } = useParams<{ projectId: string; planoId: string }>();
   const { devUser } = useDevUser();
@@ -397,6 +524,15 @@ export function PlanoDetailPage() {
             devUserEmail={devUser.email}
             plano={plano}
             cajas={cajas ?? []}
+            permissions={permissions}
+            onChange={load}
+          />
+
+          <ModulosDeConexionadoSection
+            projectId={projectId}
+            devUserEmail={devUser.email}
+            plano={plano}
+            gabinetes={gabinetes ?? []}
             permissions={permissions}
             onChange={load}
           />

@@ -5,8 +5,36 @@ import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import { getControlHardware } from '../api/controlOverview';
 import { useAsyncData } from '../lib/useAsyncData';
-import type { ControlCanalSenal, ControlGabinete, ControlHardwareResponse, ControlRack } from '../api/types';
+import type { ControlCanal, ControlCanalSenal, ControlGabinete, ControlHardwareResponse, ControlRack } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
+
+/** Ocupación (OCUPADO vs RESERVA) de un conjunto de canales — se usa
+ * tanto a nivel de un módulo/slot como agregada a nivel de gabinete
+ * completo (pedido explícito del usuario: ambos niveles). */
+function contarOcupacion(canales: ControlCanal[]): { ocupados: number; total: number; pct: number } {
+  const total = canales.length;
+  const ocupados = canales.filter((c) => c.estado === 'OCUPADO').length;
+  return { ocupados, total, pct: total > 0 ? Math.round((ocupados / total) * 100) : 0 };
+}
+
+function canalesDeGabinete(g: ControlGabinete): ControlCanal[] {
+  return g.racks.flatMap((r) => r.slots.flatMap((sl) => sl.modulo?.canales ?? []));
+}
+
+/** Barrita compacta de ocupación — pedido explícito del usuario: "tampoco
+ * que ocupe tanto espacio". Sin canales (slot vacío) no se dibuja nada. */
+function OcupacionBar({ canales }: { canales: ControlCanal[] }) {
+  const { ocupados, total, pct } = contarOcupacion(canales);
+  if (total === 0) return null;
+  return (
+    <span className="occ-bar" title={`${ocupados}/${total} canales ocupados (${pct}%)`}>
+      <span className="occ-bar__track">
+        <span className="occ-bar__fill" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="occ-bar__pct">{pct}%</span>
+    </span>
+  );
+}
 
 const ESTADO_DOT: Record<string, string> = {
   IO_PENDIENTE: '○',
@@ -67,9 +95,21 @@ function CanalRow({ numeroCanal, senal, projectId }: { numeroCanal: number; sena
       {senal ? (
         <>
           <span className="hw-canal__estado">{ESTADO_DOT[senal.estadoConexionado]}</span>
+          {/* Pedido explícito del usuario: no repetir el dueño acá — el
+           * tag de la señal ya lo implica, y el detalle completo está a
+           * un click. Solo se marca la alerta real (dueño ausente), que
+           * es información distinta, no una repetición. */}
           <span className="hw-canal__label">{senal.tagSenal ?? senal.codigoSenal}</span>
           <span className="hw-canal__dueno">
-            {senal.duenoAusente ? '⚠ sin dueño' : (senal.duenoTag ?? '—')}
+            {senal.duenoAusente && <span className="hw-canal__dueno--alerta">⚠ sin dueño</span>}
+          </span>
+          <span className="hw-canal__ruta">
+            {/* Flechita "direccionado" antes del cable — pedido explícito
+             * del usuario. */}
+            {(senal.cajaTag || senal.cableTagCampo) && '→ '}
+            {senal.cajaTag}
+            {senal.cajaTag && senal.cableTagCampo ? ' · ' : ''}
+            {senal.cableTagCampo}
           </span>
         </>
       ) : (
@@ -156,15 +196,6 @@ export function ControlHardwarePage() {
           <button type="button" className="button button--secondary" onClick={refresh}>
             Actualizar
           </button>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control`}>
-            Ver señales
-          </Link>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control/groups`}>
-            Ver agrupaciones
-          </Link>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control/planos`}>
-            Ver planos
-          </Link>
         </div>
       </div>
 
@@ -200,6 +231,7 @@ export function ControlHardwarePage() {
                   <span className="page-subtitle">
                     {g.racks.length} rack(s), {nSlots} slot(s)
                   </span>
+                  <OcupacionBar canales={canalesDeGabinete(g)} />
                 </button>
 
                 {gOpen && (
@@ -234,7 +266,10 @@ export function ControlHardwarePage() {
                             <IconModulo />
                             <span>SLOT-{String(sl.numeroSlot).padStart(2, '0')}</span>
                             {sl.modulo ? (
-                              <span className="page-subtitle">{sl.modulo.modelo} · {sl.modulo.tipoIoCodigo}</span>
+                              <>
+                                <span className="page-subtitle">{sl.modulo.modelo} · {sl.modulo.tipoIoCodigo}</span>
+                                <OcupacionBar canales={sl.modulo.canales} />
+                              </>
                             ) : (
                               <span className="page-subtitle">vacío</span>
                             )}

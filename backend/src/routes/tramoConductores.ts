@@ -10,6 +10,7 @@ import sql from 'mssql';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireProjectPermission } from '../middleware/requireProjectPermission.js';
 import { getDbPool } from '../db/sql.js';
+import { sincronizarTagCable, desactivarYRecompactarSiVacio } from '../lib/cableTagging.js';
 
 /*
  * nucleo.tramo_conductor + nucleo.terminacion (migración 015) — qué
@@ -243,6 +244,18 @@ tramoConductoresRouter.post(
       const newId = String(insertResult.recordset[0].id);
       const detail = await fetchTramoConductorDetail(pool, projectId, newId);
 
+      // Tageado automático de cables (pedido explícito del usuario, ver
+      // cableTagging.ts) — recién acá se sabe a qué señal/tipo_io queda
+      // asociado el cable de este conductor. Best-effort: nunca revienta
+      // esta respuesta si falla.
+      const cableRow = await pool
+        .request()
+        .input('conductor_id', sql.NVarChar(30), conductorId)
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .query(`SELECT cable_id FROM nucleo.conductor WHERE id = TRY_CONVERT(BIGINT, @conductor_id) AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id);`);
+      const cableId = cableRow.recordset[0]?.cable_id;
+      if (cableId) await sincronizarTagCable(pool, projectId, String(cableId), userId);
+
       res
         .status(201)
         .location(`/api/projects/${projectId}/tramo-conductores/${newId}`)
@@ -287,11 +300,11 @@ tramoConductoresRouter.delete(
         .input('updated_by', sql.NVarChar(30), userId)
         .query(`
           -- TR_tramo_conductor_desactivar_terminaciones es AFTER UPDATE.
-          DECLARE @desactivados TABLE (id BIGINT, activo BIT);
+          DECLARE @desactivados TABLE (id BIGINT, activo BIT, conductor_id BIGINT);
 
           UPDATE nucleo.tramo_conductor
           SET activo = 0, updated_at = SYSUTCDATETIME(), updated_by = TRY_CONVERT(BIGINT, @updated_by)
-          OUTPUT INSERTED.id, INSERTED.activo
+          OUTPUT INSERTED.id, INSERTED.activo, INSERTED.conductor_id
           INTO @desactivados
           WHERE id = TRY_CONVERT(BIGINT, @id) AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND activo = 1;
 
@@ -303,6 +316,17 @@ tramoConductoresRouter.delete(
         res.status(404).json({ error: 'tramo_conductor_not_found', message: 'tramo_conductor does not exist in this project or is already inactive.' });
         return;
       }
+
+      // Tageado automático de cables (ver cableTagging.ts) — si este era
+      // el último conductor en uso del cable, se desactiva y se
+      // recompactan sus hermanos. Best-effort.
+      const cableRow = await pool
+        .request()
+        .input('conductor_id', sql.NVarChar(30), String(row.conductor_id))
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .query(`SELECT cable_id FROM nucleo.conductor WHERE id = TRY_CONVERT(BIGINT, @conductor_id) AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id);`);
+      const cableId = cableRow.recordset[0]?.cable_id;
+      if (cableId) await desactivarYRecompactarSiVacio(pool, projectId, String(cableId), userId);
 
       res.status(200).json({ tramoConductor: { id: String(row.id), active: Boolean(row.activo) } });
 

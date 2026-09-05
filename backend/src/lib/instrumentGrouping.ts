@@ -1,13 +1,14 @@
 /*
- * Agrupamiento de instrumentos por Instrumento Asociado — compartido entre
- * el motor de orden del LDI (backend/src/lib/ldi/order.ts) y el listado de
- * Instrumentos del Master (backend/src/routes/instruments.ts). Vivía
- * originalmente solo dentro de ldi/order.ts; se extrajo acá cuando el
- * usuario pidió el mismo agrupamiento visual ("los PIT juntos") también en
- * el Master — una sola fuente de verdad evita que las dos pantallas
- * diverjan en el criterio (ya pasó una vez: el Master usaba TAG literal
- * para instrumentos explícitamente asociados mientras el LDI, antes de la
- * corrección, recortaba al correlativo — ver historial de order.ts).
+ * Agrupamiento de instrumentos por Instrumento Asociado — usado
+ * exclusivamente por el motor de orden del LDI (backend/src/lib/ldi/
+ * order.ts, criterio `orden_instrumentos_asociados`). El Master
+ * (backend/src/routes/instruments.ts) llegó a reutilizar esto para
+ * clusterizar su propio listado por defecto ("los PIT juntos") — pedido
+ * explícito del usuario en su momento — pero el usuario volvió sobre esa
+ * decisión: el Master lista instrumentos plano, sin agrupar; el
+ * agrupamiento visual es cosa del entregable LDI, no de la vista del
+ * Master. `calcularOrdenAgrupado` (el wrapper que existía solo para eso)
+ * se quitó junto con ese uso.
  */
 
 export interface InstrumentoParaAgrupar {
@@ -87,34 +88,4 @@ export function resolverGrupoInstrumentoAsociado(
     return row.tagInstrumento;
   }
   return obtenerGrupoTagInferido(row.tagInstrumento);
-}
-
-/**
- * Calcula, para TODO un dataset a la vez, el grupo de orden (incluye el
- * fallback por texto) y quién es cabeza explícita (alguien más lo señala
- * vía instrumentoAsociadoId) — pensado para ordenar/clusterizar una lista
- * completa, no para decidir qué se le muestra al usuario como "Grupo": eso
- * sigue siendo la relación curada real (ver `grupoTag`/`esCabezaDeGrupo`
- * en instruments.ts), que a propósito NO usa el fallback por texto — un
- * instrumento suelto sin relación real no debería aparentar tener un
- * "grupo" ante el usuario solo porque comparte tipo+número con otro.
- */
-export function calcularOrdenAgrupado<T extends InstrumentoParaAgrupar>(
-  rows: T[]
-): Map<string, { ordenGrupoTag: string; esCabezaExplicita: boolean }> {
-  const tagPorInstrumentoId = new Map(rows.map((r) => [r.id, r.tagInstrumento]));
-
-  const cabezaIds = new Set<string>();
-  for (const row of rows) {
-    if (row.instrumentoAsociadoId) cabezaIds.add(row.instrumentoAsociadoId);
-  }
-
-  const result = new Map<string, { ordenGrupoTag: string; esCabezaExplicita: boolean }>();
-  for (const row of rows) {
-    result.set(row.id, {
-      ordenGrupoTag: resolverGrupoInstrumentoAsociado(row, tagPorInstrumentoId, cabezaIds),
-      esCabezaExplicita: cabezaIds.has(row.id)
-    });
-  }
-  return result;
 }

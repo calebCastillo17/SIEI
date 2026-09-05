@@ -59,7 +59,7 @@ export function ControlSignalDetailPage() {
           <Link className="button button--secondary" to={`/projects/${projectId}/signals/${signalId}`}>
             Editar (vista genérica)
           </Link>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control`}>
+          <Link className="button button--secondary" to={`/projects/${projectId}/control/signals`}>
             Volver a Control
           </Link>
         </div>

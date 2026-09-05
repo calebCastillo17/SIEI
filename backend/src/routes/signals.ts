@@ -223,6 +223,7 @@ const SIGNAL_SELECT_COLUMNS = `
   s.prioridad_alarma_id,
   s.tag_senal,
   s.codigo_senal,
+  s.servicio,
   s.causa_alarma,
   s.tipo_dato_com_id,
   tdc.codigo AS tipo_dato_com_codigo,
@@ -285,6 +286,11 @@ function serializeSignal(row: Record<string, any>) {
 
     tagSenal: row.tag_senal,
     codigoSenal: row.codigo_senal,
+    // Servicio DE LA SEÑAL (migración 028) — más granular que
+    // instrumento.servicio, ver CLAUDE.md; pensado sobre todo para
+    // señales de equipo (sin esa columna propia), disponible para
+    // cualquier señal como respaldo puntual.
+    servicio: row.servicio,
     causaAlarma: row.causa_alarma === null ? null : Boolean(row.causa_alarma),
 
     tipoDatoComId: nullableId(row.tipo_dato_com_id),
@@ -349,6 +355,7 @@ const SIGNAL_FIELDS: Record<string, FieldSpec> = {
 
   tagSenal: { column: 'tag_senal', kind: 'string', max: 80, sqlType: sql.NVarChar(80) },
   codigoSenal: { column: 'codigo_senal', kind: 'string', max: 20, sqlType: sql.NVarChar(20) },
+  servicio: { column: 'servicio', kind: 'string', max: 200, sqlType: sql.NVarChar(200) },
   causaAlarma: { column: 'causa_alarma', kind: 'boolean', sqlType: sql.Bit },
   tipoDatoComId: { column: 'tipo_dato_com_id', kind: 'bigintId', sqlType: sql.NVarChar(30) },
   esLoopPowered: { column: 'es_loop_powered', kind: 'boolean', sqlType: sql.Bit },

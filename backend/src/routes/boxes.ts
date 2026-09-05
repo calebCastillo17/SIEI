@@ -43,6 +43,7 @@ function serialize(row: Record<string, any>) {
     id: String(row.id),
     projectId: String(row.proyecto_id),
     tagCaja: row.tag_caja,
+    tagAnterior: row.tag_anterior,
     descripcion: row.descripcion,
     active: Boolean(row.activo),
     createdAt: row.created_at,
@@ -53,7 +54,7 @@ function serialize(row: Record<string, any>) {
 }
 
 const COLUMNS = [
-  'id', 'proyecto_id', 'tag_caja', 'descripcion', 'activo',
+  'id', 'proyecto_id', 'tag_caja', 'tag_anterior', 'descripcion', 'activo',
   'created_at', 'updated_at', 'created_by', 'updated_by'
 ].join(', ');
 
@@ -145,7 +146,7 @@ boxesRouter.post(
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
 
-      const { tagCaja, descripcion = null } = req.body ?? {};
+      const { tagCaja, descripcion = null, tagAnterior = null } = req.body ?? {};
 
       if (typeof tagCaja !== 'string' || tagCaja.trim().length === 0) {
         res.status(400).json({ error: 'validation_error', message: 'tagCaja is required.' });
@@ -168,6 +169,15 @@ boxesRouter.post(
         return;
       }
 
+      if (tagAnterior !== null && tagAnterior !== undefined && typeof tagAnterior !== 'string') {
+        res.status(400).json({ error: 'validation_error', message: 'tagAnterior must be a string or null.' });
+        return;
+      }
+      if (typeof tagAnterior === 'string' && tagAnterior.length > 50) {
+        res.status(400).json({ error: 'validation_error', message: 'tagAnterior cannot exceed 50 characters.' });
+        return;
+      }
+
       const pool = await getDbPool();
       const result = await pool
         .request()
@@ -175,6 +185,7 @@ boxesRouter.post(
         .input('created_by', sql.NVarChar(30), userId)
         .input('tag_caja', sql.NVarChar(50), tag)
         .input('descripcion', sql.NVarChar(300), descripcion)
+        .input('tag_anterior', sql.NVarChar(50), tagAnterior)
         .query(`
           IF EXISTS (
             SELECT 1 FROM nucleo.caja
@@ -185,11 +196,11 @@ boxesRouter.post(
             THROW 55001, 'Ya existe una caja activa con ese TAG en el proyecto.', 1;
           END;
 
-          INSERT INTO nucleo.caja (proyecto_id, tag_caja, descripcion, activo, created_at, created_by)
-          OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_caja, INSERTED.descripcion,
+          INSERT INTO nucleo.caja (proyecto_id, tag_caja, tag_anterior, descripcion, activo, created_at, created_by)
+          OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_caja, INSERTED.tag_anterior, INSERTED.descripcion,
                  INSERTED.activo, INSERTED.created_at, INSERTED.created_by,
                  INSERTED.updated_at, INSERTED.updated_by
-          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), @tag_caja, @descripcion, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
+          VALUES (TRY_CONVERT(BIGINT, @proyecto_id), @tag_caja, @tag_anterior, @descripcion, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
         `);
 
       const row = result.recordset[0];
@@ -232,7 +243,8 @@ boxesRouter.patch(
 
       const allowedFields = {
         tagCaja: { column: 'tag_caja', sqlType: sql.NVarChar(50), max: 50 },
-        descripcion: { column: 'descripcion', sqlType: sql.NVarChar(300), max: 300 }
+        descripcion: { column: 'descripcion', sqlType: sql.NVarChar(300), max: 300 },
+        tagAnterior: { column: 'tag_anterior', sqlType: sql.NVarChar(50), max: 50 }
       } as const;
 
       const body = req.body ?? {};
@@ -317,7 +329,7 @@ boxesRouter.patch(
           updated_at = SYSUTCDATETIME(),
           updated_by = TRY_CONVERT(BIGINT, @updated_by)
         OUTPUT
-          INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_caja, INSERTED.descripcion,
+          INSERTED.id, INSERTED.proyecto_id, INSERTED.tag_caja, INSERTED.tag_anterior, INSERTED.descripcion,
           INSERTED.activo, INSERTED.created_at, INSERTED.updated_at,
           INSERTED.created_by, INSERTED.updated_by
         WHERE id = TRY_CONVERT(BIGINT, @caja_id)

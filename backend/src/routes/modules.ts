@@ -88,6 +88,26 @@ function mapModuleSqlError(error: unknown): { status: number; body: Record<strin
     };
   }
 
+  if (number === 51035) {
+    return {
+      status: 409,
+      body: {
+        error: 'module_tipo_io_conflict',
+        message: 'No se puede cambiar el tipo de E/S del módulo: tiene canales con señal activa.'
+      }
+    };
+  }
+
+  if (number === 51036) {
+    return {
+      status: 409,
+      body: {
+        error: 'module_plano_gabinete_conflict',
+        message: 'Todos los módulos asignados a un mismo plano deben pertenecer al mismo gabinete.'
+      }
+    };
+  }
+
   if (number === 51019) {
     return {
       status: 409,
@@ -105,6 +125,9 @@ function mapModuleSqlError(error: unknown): { status: number; body: Record<strin
     if (message.includes('FK_modulo_catalogo_modulo')) {
       return { status: 400, body: { error: 'invalid_reference', message: 'catalogoModuloId no existe en el catálogo de tipos de módulo.' } };
     }
+    if (message.includes('FK_modulo_plano')) {
+      return { status: 400, body: { error: 'invalid_reference', message: 'planoId no existe o no pertenece a este proyecto.' } };
+    }
   }
 
   return null;
@@ -118,7 +141,12 @@ function serialize(row: Record<string, any>) {
     catalogoModuloId: String(row.catalogo_modulo_id),
     fabricante: row.fabricante,
     modelo: row.modelo,
+    tipoIoCodigo: row.tipo_io_codigo,
     canalesMax: row.canales_max,
+    tag: row.tag,
+    surgeProtectorTag: row.surge_protector_tag,
+    planoId: row.plano_id === null ? null : String(row.plano_id),
+    planoCodigoPlano: row.plano_codigo_plano,
     active: Boolean(row.activo),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -129,13 +157,17 @@ function serialize(row: Record<string, any>) {
 
 const SELECT_COLUMNS = `
   m.id, m.proyecto_id, m.slot_id, m.catalogo_modulo_id,
-  cmi.fabricante, cmi.modelo, cmi.canales_max,
+  cmi.fabricante, cmi.modelo, cmi.canales_max, tio.codigo AS tipo_io_codigo,
+  m.tag, m.surge_protector_tag,
+  m.plano_id, pl.codigo_plano AS plano_codigo_plano,
   m.activo, m.created_at, m.updated_at, m.created_by, m.updated_by
 `;
 
 const FROM_CLAUSE = `
   FROM nucleo.modulo m
   JOIN cat.cat_modulo_io cmi ON cmi.id = m.catalogo_modulo_id
+  JOIN cat.cat_tipo_io tio ON tio.id = cmi.tipo_io_id
+  LEFT JOIN nucleo.plano pl ON pl.id = m.plano_id
 `;
 
 
@@ -236,7 +268,7 @@ modulesRouter.post(
     try {
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
-      const { slotId, catalogoModuloId } = req.body ?? {};
+      const { slotId, catalogoModuloId, tag = null, surgeProtectorTag = null } = req.body ?? {};
 
       if (!isPositiveIntString(slotId)) {
         res.status(400).json({ error: 'validation_error', message: 'slotId is required and must be a numeric id.' });
@@ -248,6 +280,16 @@ modulesRouter.post(
         return;
       }
 
+      if (tag !== null && (typeof tag !== 'string' || tag.trim().length === 0 || tag.length > 20)) {
+        res.status(400).json({ error: 'validation_error', message: 'tag must be a non-empty string of at most 20 characters, or null.' });
+        return;
+      }
+
+      if (surgeProtectorTag !== null && (typeof surgeProtectorTag !== 'string' || surgeProtectorTag.trim().length === 0 || surgeProtectorTag.length > 20)) {
+        res.status(400).json({ error: 'validation_error', message: 'surgeProtectorTag must be a non-empty string of at most 20 characters, or null.' });
+        return;
+      }
+
       const pool = await getDbPool();
       const request = pool.request();
 
@@ -255,7 +297,9 @@ modulesRouter.post(
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('created_by', sql.NVarChar(30), userId)
         .input('slot_id', sql.NVarChar(30), slotId)
-        .input('catalogo_modulo_id', sql.NVarChar(30), catalogoModuloId);
+        .input('catalogo_modulo_id', sql.NVarChar(30), catalogoModuloId)
+        .input('tag_explicito', sql.NVarChar(20), tag)
+        .input('surge_protector_tag', sql.NVarChar(20), surgeProtectorTag);
 
       const insertResult = await request.query(`
         IF EXISTS (
@@ -266,11 +310,40 @@ modulesRouter.post(
           THROW 54601, 'Ese slot ya tiene un módulo activo.', 1;
         END;
 
+        -- tag sugerido por defecto (solo si no vino explícito en el body):
+        -- {TIPO_IO}-{2 dígitos}, contando SOLO los módulos del mismo
+        -- tipo_io en el mismo rack que YA tienen tag puesto — un módulo
+        -- del mismo tipo sin tag todavía no consume número (pedido
+        -- explícito del usuario: "si a un módulo no le pongo tag, se
+        -- salta"). Nunca recalcula tags ya asignados a otros módulos.
+        DECLARE @tag NVARCHAR(20) = @tag_explicito;
+        IF @tag IS NULL
+        BEGIN
+          DECLARE @rack_id BIGINT = (SELECT rack_id FROM nucleo.slot WHERE id = TRY_CONVERT(BIGINT, @slot_id));
+          DECLARE @tipo_io_codigo NVARCHAR(20) = (
+            SELECT tio.codigo FROM cat.cat_modulo_io cmi
+            JOIN cat.cat_tipo_io tio ON tio.id = cmi.tipo_io_id
+            WHERE cmi.id = TRY_CONVERT(BIGINT, @catalogo_modulo_id)
+          );
+          DECLARE @siguiente_orden INT = (
+            SELECT COUNT(*) + 1
+            FROM nucleo.modulo m2
+            JOIN nucleo.slot s2 ON s2.id = m2.slot_id
+            JOIN cat.cat_modulo_io cmi2 ON cmi2.id = m2.catalogo_modulo_id
+            JOIN cat.cat_tipo_io tio2 ON tio2.id = cmi2.tipo_io_id
+            WHERE s2.rack_id = @rack_id
+              AND m2.activo = 1
+              AND m2.tag IS NOT NULL
+              AND tio2.codigo = @tipo_io_codigo
+          );
+          SET @tag = @tipo_io_codigo + '-' + RIGHT('0' + CAST(@siguiente_orden AS NVARCHAR(10)), 2);
+        END;
+
         DECLARE @nuevos_ids TABLE (id BIGINT);
 
-        INSERT INTO nucleo.modulo (proyecto_id, slot_id, catalogo_modulo_id, activo, created_at, created_by)
+        INSERT INTO nucleo.modulo (proyecto_id, slot_id, catalogo_modulo_id, tag, surge_protector_tag, activo, created_at, created_by)
         OUTPUT INSERTED.id INTO @nuevos_ids
-        VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @slot_id), TRY_CONVERT(BIGINT, @catalogo_modulo_id), 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
+        VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @slot_id), TRY_CONVERT(BIGINT, @catalogo_modulo_id), @tag, @surge_protector_tag, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
 
         SELECT id FROM @nuevos_ids;
       `);
@@ -308,9 +381,15 @@ modulesRouter.post(
 /*
  * PATCH /api/projects/:projectId/modules/:moduleId
  *
- * Solo permite reasignar catalogoModuloId (p.ej. subir de un módulo de 8
- * canales a uno de 16). Reasignar slotId no está soportado aquí, igual que
- * en racks/slots.
+ * catalogoModuloId (p.ej. subir de un módulo de 8 canales a uno de 16),
+ * tag y surgeProtectorTag (NVARCHAR(20), migración 017) se pueden editar
+ * de forma independiente — al menos uno es requerido. tag/surgeProtectorTag
+ * aceptan `null` explícito (quitar el tag / quitar el surge protector).
+ * planoId (migración 024, "en qué plano de conexionado está este módulo")
+ * también acepta `null` explícito (quitarlo de su plano actual);
+ * asignarlo dispara TR_modulo_validar_plano_gabinete, que rechaza
+ * (51036) mezclar módulos de dos gabinetes distintos en el mismo plano.
+ * Reasignar slotId no está soportado aquí, igual que en racks/slots.
  */
 modulesRouter.patch(
   '/:moduleId',
@@ -326,22 +405,67 @@ modulesRouter.patch(
         return;
       }
 
-      const { catalogoModuloId } = req.body ?? {};
+      const body = req.body ?? {};
+      const hasCatalogoModuloId = 'catalogoModuloId' in body;
+      const hasTag = 'tag' in body;
+      const hasSurgeProtectorTag = 'surgeProtectorTag' in body;
+      const hasPlanoId = 'planoId' in body;
 
-      if (!isPositiveIntString(catalogoModuloId)) {
-        res.status(400).json({ error: 'validation_error', message: 'catalogoModuloId is required and must be a numeric id.' });
+      if (!hasCatalogoModuloId && !hasTag && !hasSurgeProtectorTag && !hasPlanoId) {
+        res.status(400).json({ error: 'validation_error', message: 'At least one of catalogoModuloId/tag/surgeProtectorTag/planoId is required.' });
+        return;
+      }
+
+      if (hasPlanoId && body.planoId !== null && !isPositiveIntString(body.planoId)) {
+        res.status(400).json({ error: 'validation_error', message: 'planoId must be a numeric id or null.' });
+        return;
+      }
+
+      if (hasCatalogoModuloId && !isPositiveIntString(body.catalogoModuloId)) {
+        res.status(400).json({ error: 'validation_error', message: 'catalogoModuloId must be a numeric id.' });
+        return;
+      }
+
+      if (hasTag && body.tag !== null && (typeof body.tag !== 'string' || body.tag.trim().length === 0 || body.tag.length > 20)) {
+        res.status(400).json({ error: 'validation_error', message: 'tag must be a non-empty string of at most 20 characters, or null.' });
+        return;
+      }
+
+      if (
+        hasSurgeProtectorTag &&
+        body.surgeProtectorTag !== null &&
+        (typeof body.surgeProtectorTag !== 'string' || body.surgeProtectorTag.trim().length === 0 || body.surgeProtectorTag.length > 20)
+      ) {
+        res.status(400).json({ error: 'validation_error', message: 'surgeProtectorTag must be a non-empty string of at most 20 characters, or null.' });
         return;
       }
 
       const pool = await getDbPool();
-
-      await pool
+      const assignments: string[] = [];
+      const request = pool
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('modulo_id', sql.NVarChar(30), moduleId)
-        .input('catalogo_modulo_id', sql.NVarChar(30), catalogoModuloId)
-        .input('updated_by', sql.NVarChar(30), userId)
-        .query(`
+        .input('updated_by', sql.NVarChar(30), userId);
+
+      if (hasCatalogoModuloId) {
+        request.input('catalogo_modulo_id', sql.NVarChar(30), body.catalogoModuloId);
+        assignments.push('catalogo_modulo_id = TRY_CONVERT(BIGINT, @catalogo_modulo_id)');
+      }
+      if (hasTag) {
+        request.input('tag', sql.NVarChar(20), body.tag);
+        assignments.push('tag = @tag');
+      }
+      if (hasSurgeProtectorTag) {
+        request.input('surge_protector_tag', sql.NVarChar(20), body.surgeProtectorTag);
+        assignments.push('surge_protector_tag = @surge_protector_tag');
+      }
+      if (hasPlanoId) {
+        request.input('plano_id', sql.NVarChar(30), body.planoId);
+        assignments.push('plano_id = TRY_CONVERT(BIGINT, @plano_id)');
+      }
+
+      await request.query(`
           IF NOT EXISTS (
             SELECT 1 FROM nucleo.modulo
             WHERE id = TRY_CONVERT(BIGINT, @modulo_id)
@@ -353,7 +477,7 @@ modulesRouter.patch(
           END;
 
           UPDATE nucleo.modulo
-          SET catalogo_modulo_id = TRY_CONVERT(BIGINT, @catalogo_modulo_id),
+          SET ${assignments.join(', ')},
               updated_at = SYSUTCDATETIME(),
               updated_by = TRY_CONVERT(BIGINT, @updated_by)
           WHERE id = TRY_CONVERT(BIGINT, @modulo_id)
@@ -392,13 +516,29 @@ modulesRouter.patch(
  * Desactivación lógica. Bloqueada por TR_modulo_validar_desactivacion
  * (51019) si el módulo tiene canales activos en uso por señales activas.
  */
+/*
+ * DELETE /api/projects/:projectId/modules/:moduleId
+ *
+ * BORRADO FÍSICO REAL (pedido explícito del usuario — "no quiero
+ * desactivar en este caso"), igual criterio que DELETE /slots/:slotId:
+ * un módulo no tiene valor histórico propio, así que se borra de verdad
+ * en vez de desactivarse. El slot queda vacío (no se toca) — para borrar
+ * también el slot, ver DELETE /slots/:slotId.
+ *
+ * Como es un DELETE físico, ningún trigger "validar desactivación"
+ * existente se dispara (son AFTER UPDATE) — se reimplementan a mano las
+ * mismas 3 validaciones de "está realmente vacío" antes de borrar nada:
+ * canales con señal activa, puntos de conexión reales, y posiciones de
+ * terminal ocupadas por una terminación real.
+ */
 modulesRouter.delete(
   '/:moduleId',
   requireProjectPermission('deactivate'),
   async (req: Request, res: Response, next: NextFunction) => {
+    let transaction: sql.Transaction | undefined;
+
     try {
       const projectId = req.projectAccess!.projectId;
-      const userId = req.authUser!.id;
       const moduleId = normalizeParam(req.params.moduleId);
 
       if (!isPositiveIntString(moduleId)) {
@@ -407,49 +547,92 @@ modulesRouter.delete(
       }
 
       const pool = await getDbPool();
+      transaction = new sql.Transaction(pool);
+      await transaction.begin();
 
-      const result = await pool
-        .request()
+      const moduloInfo = await new sql.Request(transaction)
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .input('modulo_id', sql.NVarChar(30), moduleId)
-        .input('updated_by', sql.NVarChar(30), userId)
         .query(`
-          DECLARE @desactivados TABLE (
-            id BIGINT, proyecto_id BIGINT, slot_id BIGINT, activo BIT,
-            updated_at DATETIME2, updated_by BIGINT
-          );
-
-          UPDATE nucleo.modulo
-          SET activo = 0, updated_at = SYSUTCDATETIME(), updated_by = TRY_CONVERT(BIGINT, @updated_by)
-          OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.slot_id, INSERTED.activo,
-                 INSERTED.updated_at, INSERTED.updated_by
-          INTO @desactivados
-          WHERE id = TRY_CONVERT(BIGINT, @modulo_id)
-            AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1;
-
-          SELECT * FROM @desactivados;
+          SELECT
+            m.id, m.slot_id,
+            bt.id AS bloque_terminal_id,
+            (SELECT COUNT(*) FROM nucleo.canal c JOIN nucleo.senal s ON s.canal_id = c.id AND s.activo = 1 WHERE c.modulo_id = m.id AND c.activo = 1) AS senales_activas,
+            (SELECT COUNT(*) FROM nucleo.punto_conexion pc WHERE pc.modulo_id = m.id) AS puntos_conexion,
+            (SELECT COUNT(*) FROM nucleo.terminal t JOIN nucleo.posicion_terminal pt ON pt.terminal_id = t.id AND pt.activo = 1
+               JOIN nucleo.terminacion te ON te.posicion_terminal_id = pt.id AND te.activo = 1
+             WHERE t.bloque_terminal_id = bt.id AND t.activo = 1) AS posiciones_ocupadas
+          FROM nucleo.modulo m
+          LEFT JOIN nucleo.bloque_terminal bt ON bt.modulo_id = m.id AND bt.activo = 1
+          WHERE m.id = TRY_CONVERT(BIGINT, @modulo_id)
+            AND m.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND m.activo = 1;
         `);
+      const modulo = moduloInfo.recordset[0];
 
-      const row = result.recordset[0];
-
-      if (!row) {
+      if (!modulo) {
+        await transaction.rollback();
         res.status(404).json({ error: 'module_not_found', message: 'Module does not exist in this project or is already inactive.' });
         return;
       }
 
+      if (modulo.senales_activas > 0) {
+        await transaction.rollback();
+        res.status(409).json({
+          error: 'module_channels_in_use',
+          message: 'No se puede eliminar: el módulo tiene canales activos en uso por señales activas.'
+        });
+        return;
+      }
+
+      if (modulo.puntos_conexion > 0) {
+        await transaction.rollback();
+        res.status(409).json({
+          error: 'module_in_use',
+          message: 'No se puede eliminar: el módulo tiene puntos de conexión reales asociados.'
+        });
+        return;
+      }
+
+      if (modulo.posiciones_ocupadas > 0) {
+        await transaction.rollback();
+        res.status(409).json({
+          error: 'module_in_use',
+          message: 'No se puede eliminar: el Terminal Block de este módulo tiene una posición ocupada por una terminación real.'
+        });
+        return;
+      }
+
+      if (modulo.bloque_terminal_id) {
+        await new sql.Request(transaction)
+          .input('bloque_terminal_id', sql.NVarChar(30), String(modulo.bloque_terminal_id))
+          .query(`
+            DELETE pt
+            FROM nucleo.posicion_terminal pt
+            JOIN nucleo.terminal t ON t.id = pt.terminal_id
+            WHERE t.bloque_terminal_id = TRY_CONVERT(BIGINT, @bloque_terminal_id);
+
+            DELETE FROM nucleo.terminal WHERE bloque_terminal_id = TRY_CONVERT(BIGINT, @bloque_terminal_id);
+
+            DELETE FROM nucleo.bloque_terminal WHERE id = TRY_CONVERT(BIGINT, @bloque_terminal_id);
+          `);
+      }
+
+      await new sql.Request(transaction)
+        .input('modulo_id', sql.NVarChar(30), String(modulo.id))
+        .query(`
+          DELETE FROM nucleo.canal WHERE modulo_id = TRY_CONVERT(BIGINT, @modulo_id);
+          DELETE FROM nucleo.modulo WHERE id = TRY_CONVERT(BIGINT, @modulo_id);
+        `);
+
+      await transaction.commit();
+
       res.status(200).json({
-        module: {
-          id: String(row.id),
-          projectId: String(row.proyecto_id),
-          slotId: String(row.slot_id),
-          active: Boolean(row.activo),
-          updatedAt: row.updated_at,
-          updatedBy: row.updated_by === null ? null : String(row.updated_by)
-        }
+        module: { id: String(modulo.id), projectId, slotId: String(modulo.slot_id), active: false }
       });
 
     } catch (error) {
+      if (transaction) await transaction.rollback().catch(() => {});
       const mapped = mapModuleSqlError(error);
       if (mapped) {
         res.status(mapped.status).json(mapped.body);

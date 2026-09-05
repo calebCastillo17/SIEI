@@ -9,12 +9,19 @@ import type {
 
 const base = (projectId: string) => `/api/projects/${projectId}/instruments`;
 
-/** GET /api/projects/:projectId/instruments */
+/** GET /api/projects/:projectId/instruments
+ * soloPadres=true — usado por el listado del Master: excluye los
+ * instrumentos "hijo" (instrumentoAsociadoId no nulo), que no son
+ * instrumentos independientes sino tags del padre. Omitido (o false) en
+ * cualquier otro selector (Señales/Puntos de Conexión/Rutas/Enlaces COM)
+ * para seguir pudiendo elegir un hijo como dueño real. */
 export function listInstruments(
   projectId: string,
-  devUserEmail: string
+  devUserEmail: string,
+  options: { soloPadres?: boolean } = {}
 ): Promise<InstrumentsListResponse> {
-  return apiFetch<InstrumentsListResponse>(base(projectId), { devUserEmail });
+  const query = options.soloPadres ? '?soloPadres=true' : '';
+  return apiFetch<InstrumentsListResponse>(`${base(projectId)}${query}`, { devUserEmail });
 }
 
 /** GET /api/projects/:projectId/instruments/:instrumentId */

@@ -10,7 +10,6 @@ import sql from 'mssql';
 import { authenticate } from '../middleware/authenticate.js';
 import { requireProjectPermission } from '../middleware/requireProjectPermission.js';
 import { getDbPool } from '../db/sql.js';
-import { calcularOrdenAgrupado } from '../lib/instrumentGrouping.js';
 
 export const instrumentsRouter = Router({ mergeParams: true });
 
@@ -46,6 +45,15 @@ instrumentsRouter.get(
     try {
       const projectId = req.projectAccess!.projectId;
       const pool = await getDbPool();
+
+      // soloPadres=true: usado SOLO por el listado del Master (pedido
+      // explícito del usuario — "los hijos no son instrumentos en sí, son
+      // tags") — excluye filas hijas (instrumento_asociado_id NOT NULL).
+      // Por defecto (sin el parámetro) NO filtra nada: los selectores de
+      // instrumento dueño (Señales/Puntos de Conexión/Rutas/Enlaces COM)
+      // siguen viendo la lista completa, porque un hijo SÍ puede ser el
+      // dueño real de una señal.
+      const soloPadres = normalizeParam(req.query.soloPadres as string | string[] | undefined) === 'true';
 
       const result = await pool
         .request()
@@ -107,34 +115,24 @@ instrumentsRouter.get(
                   AND h.activo = 1
               ) THEN i.tag_instrumento
               ELSE NULL
-            END AS grupo_tag
+            END AS grupo_tag,
+            -- Tags de los HIJOS de este instrumento (los que lo señalan
+            -- vía su propio instrumento_asociado_id), unidos por coma —
+            -- puramente de visualización para el listado del Master
+            -- (soloPadres=true), nunca se guarda en ningún lado.
+            (
+              SELECT STRING_AGG(h.tag_instrumento, ', ')
+              FROM nucleo.instrumento h
+              WHERE h.proyecto_id = i.proyecto_id
+                AND h.instrumento_asociado_id = i.id
+                AND h.activo = 1
+            ) AS hijos_tags
           FROM nucleo.instrumento i
           WHERE i.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
             AND i.activo = 1
+            ${soloPadres ? 'AND i.instrumento_asociado_id IS NULL' : ''}
           ORDER BY i.tag_instrumento;
         `);
-
-      /*
-       * ordenGrupoTag: clave de orden que SÍ usa el fallback por texto
-       * (mismo motor que el LDI, ver lib/instrumentGrouping.ts) — a
-       * diferencia de `grupoTag` (arriba, calculado en SQL, solo relación
-       * curada real), esto agrupa también instrumentos SUELTOS que
-       * comparten tipo+correlativo, para que el listado del Master salga
-       * clusterizado igual que el LDI ("los PIT juntos") — pedido
-       * explícito del usuario tras ver el mismo fix ya aplicado ahí. No
-       * se usa para lo que se le MUESTRA al usuario como "Grupo" (eso
-       * sigue siendo solo la relación real), únicamente para el orden por
-       * defecto que arma el frontend.
-       */
-      const ordenAgrupado = calcularOrdenAgrupado(
-        result.recordset.map((row) => ({
-          id: String(row.id),
-          tagInstrumento: row.tag_instrumento as string,
-          instrumentoAsociadoId:
-            row.instrumento_asociado_id === null ? null : String(row.instrumento_asociado_id),
-          instrumentoAsociadoTag: row.instrumento_asociado_tag as string | null
-        }))
-      );
 
       res.status(200).json({
         projectId,
@@ -170,7 +168,7 @@ instrumentsRouter.get(
           instrumentoAsociadoTag: row.instrumento_asociado_tag,
           esCabezaDeGrupo: Boolean(row.es_cabeza_de_grupo),
           grupoTag: row.grupo_tag,
-          ordenGrupoTag: ordenAgrupado.get(String(row.id))!.ordenGrupoTag,
+          hijosTags: row.hijos_tags,
 
           fechaAgregado: row.fecha_agregado,
           fechaUltimaRevision: row.fecha_ultima_revision,
@@ -1472,6 +1470,8 @@ instrumentsRouter.delete(
         let tramosConexionEliminados = 0;
         let rutasConexionDesactivadas = 0;
         let puntosConexionEliminados = 0;
+        let terminacionesEliminadas = 0;
+        let tramoConductoresEliminados = 0;
 
         if (puntoIds.length > 0) {
           const puntoIdsSql = puntoIds.join(',');
@@ -1484,6 +1484,35 @@ instrumentsRouter.delete(
           const rutaIds = rutasTocadas.recordset.map((r) => String(r.ruta_conexion_id));
 
           if (rutaIds.length > 0) {
+            /*
+             * Migración 015 (terminaciones): nucleo.tramo_conductor tiene
+             * FK_tramo_conductor_tramo -> tramo_conexion SIN cascada, y
+             * nucleo.terminacion referencia tramo_conductor de la misma
+             * forma — este bloque de eliminación (migración 011) es
+             * anterior a esa migración y nunca se actualizó. Sin borrar
+             * primero terminacion y tramo_conductor, el DELETE de
+             * tramo_conexion de abajo revienta con un 547 crudo (no
+             * mapeado -> 500), encontrado en vivo al intentar eliminar un
+             * instrumento cuya ruta ya tiene conductores/terminaciones
+             * reales cargados.
+             */
+            const terminacionesBorradas = await new sql.Request(transaction).query(`
+              DELETE t
+              FROM nucleo.terminacion t
+              JOIN nucleo.tramo_conductor tc ON tc.id = t.tramo_conductor_id
+              JOIN nucleo.tramo_conexion tx ON tx.id = tc.tramo_conexion_id
+              WHERE tx.ruta_conexion_id IN (${rutaIds.join(',')});
+            `);
+            terminacionesEliminadas = terminacionesBorradas.rowsAffected[0];
+
+            const tramoConductoresBorrados = await new sql.Request(transaction).query(`
+              DELETE tc
+              FROM nucleo.tramo_conductor tc
+              JOIN nucleo.tramo_conexion tx ON tx.id = tc.tramo_conexion_id
+              WHERE tx.ruta_conexion_id IN (${rutaIds.join(',')});
+            `);
+            tramoConductoresEliminados = tramoConductoresBorrados.rowsAffected[0];
+
             const tramoBorrado = await new sql.Request(transaction).query(`
               DELETE FROM nucleo.tramo_conexion WHERE ruta_conexion_id IN (${rutaIds.join(',')});
             `);
@@ -1542,7 +1571,9 @@ instrumentsRouter.delete(
             senalesAgrupadorDesvinculado: agrupadorDesvinculado.rowsAffected[0],
             puntosConexionEliminados,
             tramosConexionEliminados,
-            rutasConexionDesactivadas
+            rutasConexionDesactivadas,
+            tramoConductoresEliminados,
+            terminacionesEliminadas
           }
         });
       } catch (error) {

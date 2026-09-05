@@ -15,7 +15,8 @@ interface FieldSpec {
 /** Mismos campos y límites que valida backend/src/routes/boxes.ts. */
 const FIELDS: FieldSpec[] = [
   { key: 'tagCaja', label: 'TAG', max: 50, required: true },
-  { key: 'descripcion', label: 'Descripción', max: 300 }
+  { key: 'descripcion', label: 'Descripción', max: 300 },
+  { key: 'tagAnterior', label: 'TAG anterior', max: 50 }
 ];
 
 interface BoxFormProps {

@@ -45,6 +45,11 @@ function sqlErrorNumber(error: unknown): number | undefined {
   return undefined;
 }
 
+function sqlErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 
 function serialize(row: Record<string, any>) {
   return {
@@ -183,12 +188,15 @@ moduleTypesRouter.post(
         return;
       }
 
+      // 0 es válido (migración 019) — un módulo de comunicación sin
+      // canales de E/S propios; TR_modulo_generar_canales ya lo maneja
+      // sin generar ningún canal, sin necesitar cambios.
       if (
         typeof canalesMax !== 'number' ||
         !Number.isInteger(canalesMax) ||
-        canalesMax <= 0
+        canalesMax < 0
       ) {
-        res.status(400).json({ error: 'validation_error', message: 'canalesMax must be a positive integer.' });
+        res.status(400).json({ error: 'validation_error', message: 'canalesMax must be a non-negative integer.' });
         return;
       }
 
@@ -237,6 +245,14 @@ moduleTypesRouter.post(
       }
 
       if (number === 547) {
+        const message = sqlErrorMessage(error);
+        if (message.includes('CK_cat_modulo_io_canales_max')) {
+          res.status(400).json({
+            error: 'validation_error',
+            message: 'canalesMax must be a non-negative integer.'
+          });
+          return;
+        }
         res.status(400).json({
           error: 'invalid_reference',
           message: 'tipoIoId does not exist.'

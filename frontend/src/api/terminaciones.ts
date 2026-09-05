@@ -81,6 +81,26 @@ export function createBloqueTerminal(
   return apiFetch<BloqueTerminalResponse>(bloquesBase(projectId), { method: 'POST', body: input, devUserEmail });
 }
 
+/** PATCH — codigo/descripcion/planoId (ver bloquesTerminal.ts). El codigo
+ * de un bloque materializado por módulo (migración 015) arranca en
+ * "MODULO" (centinela de "todavía sin tag real") — esto es lo que lo
+ * renombra a algo tipo "TB-01" (migración 017, pedido del usuario).
+ * planoId (migración 025) acepta null explícito para quitarlo; asignarlo
+ * puede devolver 409 bloque_terminal_plano_dueno_conflict si el bloque es
+ * de un dueño distinto al de otros bloques ya asignados a ese plano. */
+export function updateBloqueTerminal(
+  projectId: string,
+  bloqueId: string,
+  input: { codigo?: string; descripcion?: string | null; planoId?: string | null },
+  devUserEmail: string
+): Promise<BloqueTerminalResponse> {
+  return apiFetch<BloqueTerminalResponse>(`${bloquesBase(projectId)}/${bloqueId}`, {
+    method: 'PATCH',
+    body: input,
+    devUserEmail
+  });
+}
+
 export function deactivateBloqueTerminal(
   projectId: string,
   bloqueId: string,

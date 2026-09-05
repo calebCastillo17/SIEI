@@ -46,7 +46,16 @@ export function construirSnapshotFila(
     tipo: instrumento.tipoInstrumento ?? '',
     tecnologia: instrumento.tecnologia ?? '',
     conexionProceso: instrumento.conexionProceso ?? '',
-    instrumentoAsociado: instrumento.instrumentoAsociadoTag ?? '',
+    /*
+     * Columna INSTRUMENTO ASOCIADO (G): imprime los HIJOS de este
+     * instrumento, no su propio instrumentoAsociadoTag — desde que el LDI
+     * solo lista padres (fetchInstrumentosOrdenables excluye hijos), ese
+     * campo siempre es null en la fila que llega acá (un padre nunca
+     * apunta a otro instrumento), así que imprimirlo dejaba la columna
+     * siempre vacía. Pedido explícito del usuario tras verlo en el
+     * archivo real generado.
+     */
+    instrumentoAsociado: instrumento.hijosTags ?? '',
     linea: instrumento.lineaPnid ?? '',
     equipoAsociado: instrumento.equipoAsociadoTag ?? '',
     servicio: instrumento.servicio ?? '',

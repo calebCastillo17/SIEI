@@ -57,6 +57,7 @@ function sqlErrorNumber(error: unknown): number | undefined {
 const SELECT_PLANO = `
   p.id, p.proyecto_id, p.codigo_plano, p.codigo_anterior, p.descripcion, p.activo,
   p.tipo_plano_id, t.codigo AS tipo_plano_codigo, t.descripcion AS tipo_plano_descripcion,
+  p.revision,
   p.created_at, p.updated_at, p.created_by, p.updated_by
 `;
 
@@ -64,6 +65,20 @@ const PLANO_FROM = `
   FROM nucleo.plano p
   LEFT JOIN cat.cat_tipo_plano t ON t.id = p.tipo_plano_id
 `;
+
+/** Segundo segmento del codigo_plano separado por "-" (ej. "620-E-60026" ->
+ * "E") — misma técnica ya usada para instrumentos (obtenerPrefijoTag). Se
+ * calcula en JS, no en SQL, para no depender de PARSENAME/STRING_SPLIT con
+ * un código que puede tener cualquier cantidad de guiones. */
+function calcularDisciplina(codigoPlano: string | null): 'ELECTRICIDAD' | 'INSTRUMENTACION' | null {
+  if (!codigoPlano) return null;
+  const partes = codigoPlano.toUpperCase().split('-');
+  if (partes.length < 2) return null;
+  const segundo = partes[1];
+  if (segundo === 'E') return 'ELECTRICIDAD';
+  if (segundo === 'J') return 'INSTRUMENTACION';
+  return null;
+}
 
 function serializePlano(row: Record<string, any>) {
   return {
@@ -76,6 +91,8 @@ function serializePlano(row: Record<string, any>) {
     tipoPlanoId: row.tipo_plano_id === null ? null : String(row.tipo_plano_id),
     tipoPlanoCodigo: row.tipo_plano_codigo,
     tipoPlanoDescripcion: row.tipo_plano_descripcion,
+    revision: row.revision,
+    disciplina: calcularDisciplina(row.codigo_plano),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdBy: row.created_by === null ? null : String(row.created_by),
@@ -284,7 +301,7 @@ planosRouter.post(
       const projectId = req.projectAccess!.projectId;
       const userId = req.authUser!.id;
 
-      const { codigoPlano = null, codigoAnterior = null, descripcion, tipoPlanoId } = req.body ?? {};
+      const { codigoPlano = null, codigoAnterior = null, descripcion, tipoPlanoId, revision = null } = req.body ?? {};
 
       if (typeof descripcion !== 'string' || descripcion.trim().length === 0) {
         res.status(400).json({ error: 'validation_error', message: 'descripcion is required.' });
@@ -311,6 +328,11 @@ planosRouter.post(
         return;
       }
 
+      if (revision !== null && (typeof revision !== 'string' || revision.length > 10)) {
+        res.status(400).json({ error: 'validation_error', message: 'revision must be a string of at most 10 characters, or null.' });
+        return;
+      }
+
       const pool = await getDbPool();
       const insertResult = await pool
         .request()
@@ -320,12 +342,13 @@ planosRouter.post(
         .input('codigo_anterior', sql.NVarChar(50), codigoAnterior)
         .input('descripcion', sql.NVarChar(300), descripcion.trim())
         .input('tipo_plano_id', sql.NVarChar(30), tipoPlanoId)
+        .input('revision', sql.NVarChar(10), revision)
         .query(`
-          INSERT INTO nucleo.plano (proyecto_id, codigo_plano, codigo_anterior, descripcion, tipo_plano_id, activo, created_at, created_by)
+          INSERT INTO nucleo.plano (proyecto_id, codigo_plano, codigo_anterior, descripcion, tipo_plano_id, revision, activo, created_at, created_by)
           OUTPUT INSERTED.id
           VALUES (
             TRY_CONVERT(BIGINT, @proyecto_id), @codigo_plano, @codigo_anterior, @descripcion,
-            TRY_CONVERT(BIGINT, @tipo_plano_id), 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by)
+            TRY_CONVERT(BIGINT, @tipo_plano_id), @revision, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by)
           );
         `);
 
@@ -372,7 +395,8 @@ planosRouter.patch(
         codigoPlano: { column: 'codigo_plano', sqlType: sql.NVarChar(50), max: 50 },
         codigoAnterior: { column: 'codigo_anterior', sqlType: sql.NVarChar(50), max: 50 },
         descripcion: { column: 'descripcion', sqlType: sql.NVarChar(300), max: 300 },
-        tipoPlanoId: { column: 'tipo_plano_id', sqlType: sql.NVarChar(30), max: Infinity }
+        tipoPlanoId: { column: 'tipo_plano_id', sqlType: sql.NVarChar(30), max: Infinity },
+        revision: { column: 'revision', sqlType: sql.NVarChar(10), max: 10 }
       } as const;
 
       const body = req.body ?? {};

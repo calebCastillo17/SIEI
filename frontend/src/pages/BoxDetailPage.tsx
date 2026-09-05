@@ -11,7 +11,7 @@ import { BornerasSection } from '../components/BornerasSection';
 import { ErrorMessage } from '../components/ErrorMessage';
 
 function toInput(box: Box): BoxInput {
-  return { tagCaja: box.tagCaja, descripcion: box.descripcion };
+  return { tagCaja: box.tagCaja, descripcion: box.descripcion, tagAnterior: box.tagAnterior };
 }
 
 export function BoxDetailPage() {
@@ -114,6 +114,10 @@ export function BoxDetailPage() {
           <div>
             <dt>Descripción</dt>
             <dd>{box.descripcion ?? '—'}</dd>
+          </div>
+          <div>
+            <dt>TAG anterior</dt>
+            <dd>{box.tagAnterior ?? '—'}</dd>
           </div>
           <div>
             <dt>Creado</dt>

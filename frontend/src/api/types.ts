@@ -96,14 +96,12 @@ export interface Instrument {
    * instrumento (su propio tag si es cabeza, o `instrumentoAsociadoTag` si
    * es hijo). `null` si no pertenece a ningún grupo. */
   grupoTag?: string | null;
-  /** Calculado, solo en GET lista — clave de orden que SÍ incluye el
-   * fallback por texto (tipo+correlativo, mismo motor que el LDI, ver
-   * backend/src/lib/instrumentGrouping.ts), a diferencia de `grupoTag`
-   * (arriba, solo relación curada real). Nunca se muestra al usuario como
-   * "Grupo" — solo sirve para que el orden por defecto de la lista
-   * clusterice instrumentos sueltos del mismo tipo (ej. "los PIT
-   * juntos"), igual que ya hace el LDI. */
-  ordenGrupoTag?: string;
+  /** Calculado, solo en GET lista — tags de los instrumentos HIJOS de
+   * este (los que apuntan a este vía su propio `instrumentoAsociadoId`),
+   * unidos por coma. Puramente de visualización para el listado del
+   * Master con `soloPadres=true` — nunca se guarda, se recalcula siempre
+   * al vuelo. `null` si no tiene hijos. */
+  hijosTags?: string | null;
   fechaAgregado: string | null;
   fechaUltimaRevision: string | null;
   active: boolean;
@@ -322,6 +320,11 @@ export interface Signal {
   prioridadAlarmaId: string | null;
   tagSenal: string | null;
   codigoSenal: string | null;
+  /** Servicio DE LA SEÑAL (migración 028) — más granular que
+   * instrumento.servicio; el único disponible cuando el dueño es un
+   * equipo (nucleo.equipo no tiene columna servicio propia). Dato
+   * manual, nunca derivado. */
+  servicio: string | null;
   causaAlarma: boolean | null;
   tipoDatoComId: string | null;
   tipoDatoComCodigo: string | null;
@@ -388,6 +391,7 @@ export interface SignalInput {
   estadoRevisionId: string | null;
   prioridadAlarmaId: string | null;
   codigoSenal: string | null;
+  servicio: string | null;
   causaAlarma: boolean | null;
   tipoDatoComId: string | null;
   esLoopPowered: boolean | null;
@@ -469,6 +473,9 @@ export interface Rack {
   projectId: string;
   gabineteId: string;
   numeroRack: number;
+  /** Tope de slots que este rack físico acepta (migración 017) — null =
+   * sin límite fijado. Se valida en el backend al crear un slot nuevo. */
+  limiteSlots: number | null;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -507,7 +514,25 @@ export interface PhysicalModule {
   catalogoModuloId: string;
   fabricante: string;
   modelo: string;
+  tipoIoCodigo: string;
   canalesMax: number;
+  /** Etiqueta del módulo (migración 017), ej. "DI-03" — sugerida por el
+   * backend al crear (tipo + posición entre los de su mismo tipo en el
+   * rack, saltando los que no tienen tag), editable libremente después. */
+  tag: string | null;
+  /** Etiqueta del surge protector OPCIONAL de este módulo, ej. "DISPR-02"
+   * — null significa que este módulo no lleva uno, no "falta ponerle
+   * nombre". Numeración independiente, mismo criterio de "salta los que
+   * no tienen". */
+  surgeProtectorTag: string | null;
+  /** Plano de conexionado donde este módulo está (o va a quedar)
+   * dibujado (migración 024) — null mientras no se haya asignado
+   * todavía. Todos los módulos con el mismo planoId deben pertenecer al
+   * mismo gabinete, validado por TR_modulo_validar_plano_gabinete. */
+  planoId: string | null;
+  /** Código del plano de planoId, ya resuelto (evita un round-trip extra
+   * para mostrarlo). Null si planoId es null. */
+  planoCodigoPlano: string | null;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -642,6 +667,10 @@ export interface Box {
   id: string;
   projectId: string;
   tagCaja: string;
+  /** TAG histórico previo (migración 023) — mismo patrón que
+   * instrumento.tagAnterior/gabinete.tagAnterior. Se completa cuando el
+   * TAG provisional de una caja se reemplaza por el definitivo. */
+  tagAnterior: string | null;
   descripcion: string | null;
   active: boolean;
   createdAt: string;
@@ -662,6 +691,7 @@ export interface BoxResponse {
 export interface BoxInput {
   tagCaja: string;
   descripcion: string | null;
+  tagAnterior?: string | null;
 }
 
 export interface Cable {
@@ -670,6 +700,18 @@ export interface Cable {
   tagCable: string;
   tipoCable: string | null;
   capacidadConductores: number;
+  /** Migración 029 — clasificación estructurada de tipoCable (texto libre
+   * históricamente, ej. "1-12p#18 AWG+SH"). Todos NULL en un cable
+   * todavía sin clasificar — nunca se fuerza. */
+  tipoConstruccionId: string | null;
+  cantidadUnidades: number | null;
+  calibre: string | null;
+  apantallado: boolean | null;
+  /** Solo en GET (list/:id) — cuántos de los capacidadConductores ya
+   * tienen un tramo_conductor activo. undefined en la respuesta de
+   * POST/PATCH (ahí no se calcula). capacidadConductores - conductoresEnUso
+   * = libres/sin conectar. */
+  conductoresEnUso?: number;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -690,6 +732,10 @@ export interface CableInput {
   tagCable: string;
   tipoCable: string | null;
   capacidadConductores: number;
+  tipoConstruccionId: string | null;
+  cantidadUnidades: number | null;
+  calibre: string | null;
+  apantallado: boolean | null;
 }
 
 export interface ConductorPair {
@@ -880,8 +926,19 @@ export interface BloqueTerminal {
   cajaId: string | null;
   gabineteId: string | null;
   moduloId: string | null;
+  /** Dueño EQUIPO (migración 026) — el panel propio de un equipo (ej. un
+   * armario de variador) que recibe el cable de campo directo, sin ser
+   * una caja real — pedido explícito del usuario. */
+  equipoId: string | null;
   codigo: string;
   descripcion: string | null;
+  /** Plano de conexionado donde este bloque está (o va a quedar) dibujado
+   * (migración 025, mismo concepto que PhysicalModule.planoId) — null
+   * mientras no se haya asignado. Todos los bloques con el mismo planoId
+   * deben pertenecer al mismo dueño (caja/gabinete/módulo/equipo). */
+  planoId: string | null;
+  /** Código del plano de planoId, ya resuelto. Null si planoId es null. */
+  planoCodigoPlano: string | null;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -902,10 +959,12 @@ export interface BloqueTerminalResponse {
   bloqueTerminal: BloqueTerminalConTerminales;
 }
 
-/** XOR: exactamente uno de cajaId/gabineteId (moduloId nunca se crea a mano, ver bloquesTerminal.ts). */
+/** XOR: exactamente uno de cajaId/gabineteId/equipoId (moduloId nunca se
+ * crea a mano, ver bloquesTerminal.ts). equipoId es migración 026. */
 export interface BloqueTerminalInput {
   cajaId?: string | null;
   gabineteId?: string | null;
+  equipoId?: string | null;
   codigo: string;
   descripcion?: string | null;
 }
@@ -961,6 +1020,8 @@ export interface ConexionadoConductor {
   tramoConductorId: string;
   conductorId: string;
   conductorCodigo: string;
+  /** Tag del cable físico al que pertenece este conductor. */
+  cableTag: string;
   terminaciones: ConexionadoTerminacion[];
 }
 
@@ -1537,6 +1598,13 @@ export interface Plano {
   tipoPlanoId: string | null;
   tipoPlanoCodigo: string | null;
   tipoPlanoDescripcion: string | null;
+  /** Letra de revisión del documento (migración 022), texto libre — ej. "B". */
+  revision: string | null;
+  /** Calculado (no una columna) a partir del segundo segmento de
+   * codigoPlano — "ELECTRICIDAD" (código con "-E-"), "INSTRUMENTACION"
+   * (código con "-J-"), o null si no aplica ninguna de las dos "por
+   * ahora" (ver planos.ts). */
+  disciplina: 'ELECTRICIDAD' | 'INSTRUMENTACION' | null;
   createdAt: string;
   updatedAt: string | null;
   createdBy: string | null;
@@ -1590,6 +1658,7 @@ export interface PlanoInput {
   codigoAnterior: string | null;
   descripcion: string;
   tipoPlanoId: string;
+  revision?: string | null;
 }
 
 /* ---- Sección CONTROL (vistas de solo lectura, ver controlOverview.ts) -- */
@@ -1638,6 +1707,11 @@ export interface ControlSignal {
   nombreCorto: string | null;
   descripcion: string | null;
   tipoIoCodigo: string | null;
+  /** Servicio DE LA SEÑAL (migración 028) — más granular que
+   * dueno.servicio (el del instrumento en general); el único que existe
+   * cuando el dueño es un equipo, ya que nucleo.equipo no tiene esa
+   * columna propia. */
+  servicio: string | null;
   dueno: ControlSignalDueno | null;
   agrupador: { id: string; tag: string } | null;
   io: ControlSignalIo | null;
@@ -1673,6 +1747,11 @@ export interface ControlCanalSenal {
   duenoTipo: 'instrumento' | 'equipo' | null;
   agrupadorTag: string | null;
   cajaTag: string | null;
+  /** Cable real del tramo de campo (instrumento -> caja) — null si la
+   * ruta todavía no tiene conductor/terminación cargados (o no pasa por
+   * ninguna caja). Los tramos caja -> gabinete -> módulo no tienen cable
+   * propio documentado todavía. */
+  cableTagCampo: string | null;
   duenoAusente: boolean;
   estadoConexionado: EstadoConexionado;
 }
@@ -1727,6 +1806,222 @@ export interface ControlGabinete {
 export interface ControlHardwareResponse {
   projectId: string;
   gabinetes: ControlGabinete[];
+}
+
+/* ---- Hardware de CAJAS (GET /control/cajas) — segunda etapa de la ruta
+ * de Control, sin rack/slot/módulo: la cadena real es POSICION_TERMINAL
+ * <- TERMINACION <- TRAMO_CONDUCTOR <- TRAMO_CONEXION <- RUTA_CONEXION <-
+ * SEÑAL (migración 015), no un canal_id directo. */
+
+export interface ControlPosicionSenal {
+  id: string;
+  codigoSenal: string | null;
+  tagSenal: string | null;
+  nombreCorto: string | null;
+  duenoTag: string | null;
+  duenoTipo: 'instrumento' | 'equipo' | null;
+  duenoAusente: boolean;
+  /** Código del conductor real que aterriza acá, y el cable al que
+   * pertenece — null si por alguna razón la terminación no resolvió
+   * conductor/cable (no debería pasar en datos reales). */
+  conductorCodigo: string | null;
+  tagCable: string | null;
+  /** Gabinete/RIO al que esta señal continúa en realidad (resuelto vía su
+   * propio canal_id, no vía el tramo que pasa por esta caja) — la caja es
+   * solo un nodo intermedio de la ruta física completa (instrumento ->
+   * caja -> gabinete -> módulo). Null si la señal todavía no tiene
+   * canal_id asignado. */
+  destinoGabineteTag: string | null;
+}
+
+export interface ControlPosicion {
+  id: string;
+  codigo: string;
+  senal: ControlPosicionSenal | null;
+  estado: 'OCUPADO' | 'RESERVA';
+}
+
+export interface ControlTerminal {
+  id: string;
+  numero: string;
+  posiciones: ControlPosicion[];
+}
+
+export interface ControlBloqueTerminal {
+  id: string;
+  codigo: string;
+  planoId: string | null;
+  planoCodigoPlano: string | null;
+  terminales: ControlTerminal[];
+}
+
+/** Señal que aterriza en un panel — mismos campos para los dos tipos de
+ * panel (CAJA/EQUIPO); `conductorCodigo` solo está presente para una
+ * señal de una CAJA (aterriza en un borne con conductor real) — un panel
+ * eléctrico (EQUIPO) no tiene ese detalle, no hay TB modelado ahí. */
+export interface ControlPanelSenal {
+  id: string;
+  codigoSenal: string | null;
+  tagSenal: string | null;
+  nombreCorto: string | null;
+  duenoTag: string | null;
+  duenoTipo: 'instrumento' | 'equipo' | null;
+  duenoAusente: boolean;
+  conductorCodigo?: string | null;
+  tagCable: string | null;
+  destinoGabineteTag: string | null;
+}
+
+/**
+ * Panel unificado (pedido explícito del usuario: "ya no lo llamaremos
+ * cajas sino panel... dentro de los paneles pueden ir cajas, o estos
+ * paneles eléctricos") — un mismo rol dentro de una ruta física
+ * (instrumento/equipo -> PANEL -> gabinete -> módulo), con dos variantes:
+ *   - `tipo: 'CAJA'`: una caja real, con TB/bornes modelados (`bloques`
+ *     no-null, con el detalle POSICION_TERMINAL <- TERMINACION).
+ *   - `tipo: 'EQUIPO'`: un panel eléctrico (ej. el armario de un
+ *     variador) — un EQUIPO que ocupa el mismo rol pero sin bornes/TB
+ *     modelados ("no tiene TB o no nos interesa, solamente se sabe que
+ *     llega") — `bloques` siempre null acá.
+ * `cantidadSenales`/`cantidadCables`/`gabinetesTags` son un resumen común
+ * a los dos tipos, pensado para listar/filtrar sin entrar al detalle.
+ */
+export interface ControlPanelUnificado {
+  id: string;
+  tipo: 'CAJA' | 'EQUIPO';
+  tag: string;
+  cantidadSenales: number;
+  cantidadCables: number;
+  gabinetesTags: string[];
+  senales: ControlPanelSenal[];
+  bloques: ControlBloqueTerminal[] | null;
+}
+
+export interface ControlCajasResponse {
+  projectId: string;
+  paneles: ControlPanelUnificado[];
+}
+
+/* ---- Ruteo (GET /control/ruteo) — el árbol completo RIO->rack->módulo->
+ * canal->caja->instrumento/equipo en una sola llamada, calcado del
+ * esquema de celdas combinadas del Excel maestro del usuario (hoja
+ * SENALES). Fusiona /hardware + /cajas + la cadena de conexionado, con
+ * "reserva" de cable siempre CALCULADA (capacidad - en uso), nunca un
+ * dato importado. */
+
+export interface RuteoCable {
+  tag: string;
+  tipoCable: string | null;
+  capacidad: number | null;
+  enUso: number;
+  /** capacidad - enUso, null si el cable no tiene capacidad registrada. */
+  reserva: number | null;
+}
+
+export interface RuteoBorne {
+  /** Número del borne en el TB de la caja (lo que el Excel llama
+   * BORNE_JB) — el mismo borne físico admite dos landings. Cuando
+   * `estimado` es true, este número es una numeración de continuidad
+   * (máximo real + 1, +2, ...), no necesariamente el mismo que asignaría
+   * el Excel real (esa es una secuencia corrida por caja+TB completo que
+   * ese archivo no tiene cacheada). */
+  numero: string;
+  /** Posición A ocupada — el cable caja->instrumento/equipo. */
+  campoOcupado: boolean;
+  /** Posición B ocupada — el cable RIO->caja. */
+  rioOcupado: boolean;
+  /** true = este borne todavía no tiene terminación real cargada, pero el
+   * tipo de señal lo necesita (ej. HYO necesita 5, solo hay 2 cableados)
+   * — agregado por el backend (padBornesCaja) con una numeración de
+   * continuidad, no una real confirmada; la UI lo pinta semitransparente
+   * en vez de con un texto aparte (pedido explícito del usuario: "no le
+   * pongas pendiente, solo ponlos... pero así como medio transparentes"). */
+  estimado?: boolean;
+}
+
+export interface RuteoHilo {
+  /** Terminal propio del módulo (de fábrica) para este canal — ej. "IN-0". */
+  numero: string;
+}
+
+export interface RuteoSenal {
+  id: string;
+  codigoSenal: string | null;
+  tagSenal: string | null;
+  nombreCorto: string | null;
+  /** DESTINO de la hoja SENALES del Excel ("la descripción corta de la
+   * señal") — vive en nucleo.senal.descripcion. Distinto de `duenoServicio`
+   * (más largo, con contexto del equipo/instrumento) y de `nombreCorto`
+   * (solo el sufijo del tag, ej. "RDY"). */
+  destino: string | null;
+  duenoTag: string | null;
+  duenoTipo: 'instrumento' | 'equipo' | null;
+  duenoNodo: string | null;
+  /** Servicio del instrumento dueño — nucleo.equipo no tiene esta
+   * columna, así que siempre es null cuando el dueño es un equipo. */
+  duenoServicio: string | null;
+  duenoAusente: boolean;
+  estadoConexionado: 'RUTA_PENDIENTE' | 'RUTA_CARGADA';
+  cableRio: RuteoCable | null;
+  cajaTag: string | null;
+  /** Cuando la ruta no pasa por una caja real (bloque_terminal todavía no
+   * soporta dueño equipo — ver CLAUDE.md, migración 015), el panel físico
+   * donde aterriza el cable (ej. "620-AFM-5005") — el ORIGEN del tramo,
+   * el mismo rol que cumple un instrumento en una ruta con caja. Puede
+   * ser un tag distinto del "dueño" de la señal (`duenoTag`, ej. la
+   * bomba real) o coincidir, según el proyecto. Sin bornes: se resuelve
+   * directo vía punto_conexion, no hay bloque_terminal posible acá. */
+  equipoPanelTag: string | null;
+  bloqueCajaCodigo: string | null;
+  bornes: RuteoBorne[];
+  cableCampo: RuteoCable | null;
+}
+
+export interface RuteoCanal {
+  id: string;
+  numeroCanal: number;
+  hilos: RuteoHilo[];
+  /** Bornes reales del TB propio del módulo (dentro del gabinete, prefijo
+   * "F") — calculados por regla (2 para DI/DO, 4 para AI/AO/RTD), no un
+   * dato materializado todavía (ver controlOverview.ts). */
+  bornera: RuteoHilo[];
+  estado: 'OCUPADO' | 'RESERVA';
+  senal: RuteoSenal | null;
+}
+
+export interface RuteoModulo {
+  id: string;
+  tag: string | null;
+  fabricante: string | null;
+  modelo: string | null;
+  surgeProtectorTag: string | null;
+  bloqueTerminalCodigo: string | null;
+  tipoIoCodigo: string | null;
+  canales: RuteoCanal[];
+}
+
+export interface RuteoSlot {
+  id: string;
+  numeroSlot: number;
+  modulo: RuteoModulo | null;
+}
+
+export interface RuteoRack {
+  id: string;
+  numeroRack: number;
+  slots: RuteoSlot[];
+}
+
+export interface RuteoGabinete {
+  id: string;
+  tagGabinete: string;
+  tipoGabineteCodigo: string;
+  racks: RuteoRack[];
+}
+
+export interface ControlRuteoResponse {
+  projectId: string;
+  gabinetes: RuteoGabinete[];
 }
 
 export interface ControlPlanoAsociacion {

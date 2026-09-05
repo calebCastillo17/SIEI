@@ -6,9 +6,11 @@
  */
 import { apiFetch } from './client';
 import type {
+  ControlCajasResponse,
   ControlGroupsResponse,
   ControlHardwareResponse,
   ControlPlanosResponse,
+  ControlRuteoResponse,
   ControlSignal,
   ControlSignalDetail,
   ControlSignalsResponse
@@ -61,6 +63,26 @@ export function getControlHardware(
 ): Promise<ControlHardwareResponse> {
   return apiFetch<ControlHardwareResponse>(
     `/api/projects/${projectId}/control/hardware`,
+    { devUserEmail }
+  );
+}
+
+export function getControlCajas(
+  projectId: string,
+  devUserEmail: string
+): Promise<ControlCajasResponse> {
+  return apiFetch<ControlCajasResponse>(
+    `/api/projects/${projectId}/control/cajas`,
+    { devUserEmail }
+  );
+}
+
+export function getControlRuteo(
+  projectId: string,
+  devUserEmail: string
+): Promise<ControlRuteoResponse> {
+  return apiFetch<ControlRuteoResponse>(
+    `/api/projects/${projectId}/control/ruteo`,
     { devUserEmail }
   );
 }

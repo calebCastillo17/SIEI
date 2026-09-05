@@ -68,15 +68,6 @@ export function ControlSignalsPage() {
           <button type="button" className="button button--secondary" onClick={refresh}>
             Actualizar
           </button>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control/hardware`}>
-            Ver hardware
-          </Link>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control/groups`}>
-            Ver agrupaciones
-          </Link>
-          <Link className="button button--secondary" to={`/projects/${projectId}/control/planos`}>
-            Ver planos
-          </Link>
         </div>
       </div>
 

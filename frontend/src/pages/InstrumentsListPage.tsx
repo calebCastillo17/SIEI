@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
-import { deactivateInstrument, deleteInstrumentDefinitivamente, listInstruments } from '../api/instruments';
+import { deleteInstrumentDefinitivamente, listInstruments } from '../api/instruments';
 import { useAsyncData } from '../lib/useAsyncData';
 import type { Instrument } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
@@ -42,7 +42,6 @@ export function InstrumentsListPage() {
 
   const { itemsById: pnidEstadosById } = usePnidEstados(devUser.email);
 
-  const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Error | null>(null);
 
@@ -51,7 +50,7 @@ export function InstrumentsListPage() {
   const [sistemaFilter, setSistemaFilter] = useState('');
   const [nodoFilter, setNodoFilter] = useState('');
   const [planoPnidFilter, setPlanoPnidFilter] = useState('');
-  const [grupoFilter, setGrupoFilter] = useState('');
+  const [hojaDatosFilter, setHojaDatosFilter] = useState('');
 
   const items = useMemo(() => instruments ?? [], [instruments]);
 
@@ -68,10 +67,6 @@ export function InstrumentsListPage() {
   );
   const planoPnidOptions = useMemo(
     () => [...new Set(items.map((i) => i.planoPnid).filter((v): v is string => Boolean(v)))].sort(),
-    [items]
-  );
-  const grupoOptions = useMemo(
-    () => [...new Set(items.map((i) => i.grupoTag).filter((v): v is string => Boolean(v)))].sort(),
     [items]
   );
 
@@ -96,7 +91,8 @@ export function InstrumentsListPage() {
       if (sistemaFilter && instrument.sistema !== sistemaFilter) return false;
       if (nodoFilter && instrument.nodo !== nodoFilter) return false;
       if (planoPnidFilter && instrument.planoPnid !== planoPnidFilter) return false;
-      if (grupoFilter && instrument.grupoTag !== grupoFilter) return false;
+      if (hojaDatosFilter === 'CON' && !instrument.fichaTecnicaId) return false;
+      if (hojaDatosFilter === 'SIN' && instrument.fichaTecnicaId) return false;
 
       if (needle.length === 0) return true;
 
@@ -124,31 +120,10 @@ export function InstrumentsListPage() {
     // orden al crear una revisión), no de esta vista. Se confía en el
     // ORDER BY tag_instrumento que ya trae el backend.
     return filtered;
-  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, grupoFilter, pnidEstadosById]);
+  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, hojaDatosFilter, pnidEstadosById]);
 
   if (!projectId) {
     return <p>Falta el proyecto en la URL.</p>;
-  }
-
-  async function handleDeactivate(instrument: Instrument) {
-    if (!projectId) return;
-
-    const confirmed = window.confirm(
-      `¿Desactivar el instrumento "${instrument.tagInstrumento}"? Esta acción es reversible solo reactivándolo desde la base (no hay endpoint de reactivación todavía).`
-    );
-    if (!confirmed) return;
-
-    setDeactivatingId(instrument.id);
-    setActionError(null);
-
-    try {
-      await deactivateInstrument(projectId, instrument.id, devUser.email);
-      load();
-    } catch (err) {
-      setActionError(err instanceof Error ? err : new Error('Error desconocido.'));
-    } finally {
-      setDeactivatingId(null);
-    }
   }
 
   async function handleDeleteDefinitivamente(instrument: Instrument) {
@@ -176,7 +151,6 @@ export function InstrumentsListPage() {
   }
 
   const canWrite = project?.access.permissions.write ?? false;
-  const canDeactivate = project?.access.permissions.deactivate ?? false;
   const canAdminister = project?.access.permissions.administer ?? false;
   const error = actionError ?? loadError;
 
@@ -291,14 +265,11 @@ export function InstrumentsListPage() {
               </select>
             </label>
             <label className="form__field">
-              <span>Grupo (Instrumento Asociado)</span>
-              <select value={grupoFilter} onChange={(event) => setGrupoFilter(event.target.value)}>
+              <span>Hoja de Datos</span>
+              <select value={hojaDatosFilter} onChange={(event) => setHojaDatosFilter(event.target.value)}>
                 <option value="">Todos</option>
-                {grupoOptions.map((grupo) => (
-                  <option key={grupo} value={grupo}>
-                    {grupo}
-                  </option>
-                ))}
+                <option value="CON">Con ficha técnica</option>
+                <option value="SIN">Sin ficha técnica</option>
               </select>
             </label>
             <button
@@ -338,6 +309,7 @@ export function InstrumentsListPage() {
                 <th>PnPID</th>
                 <th>P&amp;ID</th>
                 <th>Estado P&amp;ID</th>
+                <th>Hoja de Datos</th>
                 <th aria-label="Acciones" />
               </tr>
             </thead>
@@ -378,20 +350,14 @@ export function InstrumentsListPage() {
                     <td>
                       <PnidEstadoBadge codigo={estadoPnidCodigo} />
                     </td>
+                    <td>
+                      {instrument.fichaTecnicaId ? (
+                        <Link to={`/projects/${projectId}/fichas-tecnicas/${instrument.fichaTecnicaId}`}>Sí</Link>
+                      ) : (
+                        <span className="page-subtitle">No</span>
+                      )}
+                    </td>
                     <td className="table__row-actions">
-                      <button
-                        type="button"
-                        className="button button--danger button--small"
-                        disabled={!canDeactivate || deactivatingId === instrument.id}
-                        title={
-                          canDeactivate
-                            ? undefined
-                            : 'Tu rol no tiene permiso de desactivación en este proyecto.'
-                        }
-                        onClick={() => handleDeactivate(instrument)}
-                      >
-                        {deactivatingId === instrument.id ? 'Desactivando…' : 'Desactivar'}
-                      </button>
                       {/*
                         Solo aparece cuando el estado P&ID es exactamente
                         "No existe en P&ID" — mismo criterio angosto que

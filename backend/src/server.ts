@@ -43,6 +43,14 @@ import { ordenTipoInstrumentoRouter } from './routes/ordenTipoInstrumento.js';
 import { tiposEquipoRouter } from './routes/tiposEquipo.js';
 import { tiposGabineteRouter } from './routes/tiposGabinete.js';
 import { controlOverviewRouter } from './routes/controlOverview.js';
+import { sitiosRouter } from './routes/sitios.js';
+import { tuberiasRouter } from './routes/tuberias.js';
+import { documentosRouter } from './routes/documentos.js';
+import { fichasTecnicasRouter } from './routes/fichasTecnicas.js';
+import { tagProcesoRouter } from './routes/tagProceso.js';
+import { requisitosRouter } from './routes/requisitos.js';
+import { createComponentRouter } from './lib/componentRouter.js';
+import { COMPONENT_SPECS } from './lib/componentSpecs.js';
 
 const app = express();
 
@@ -217,6 +225,25 @@ app.use(
   controlOverviewRouter
 );
 
+/*
+ * Módulo Hojas de Datos (HD) — migraciones 030-041. sitios/tuberias son
+ * contexto compartido; documentos+notas son el catálogo de HD en sí
+ * (ver documentos.ts); fichas-tecnicas es la config deduplicada + sus
+ * hijos transversales (requisitos, marcas-aceptables); tag-proceso
+ * cuelga del TAG físico, no de la ficha; los 17 routers de componente
+ * (uno por tabla c_*) se generan en el loop de abajo a partir de
+ * componentSpecs.ts, todos anidados bajo fichas-tecnicas/:fichaTecnicaId.
+ */
+app.use('/api/projects/:projectId/sitios', sitiosRouter);
+app.use('/api/projects/:projectId/tuberias', tuberiasRouter);
+app.use('/api/projects/:projectId/documentos', documentosRouter);
+app.use('/api/projects/:projectId/fichas-tecnicas', fichasTecnicasRouter);
+app.use('/api/projects/:projectId/instruments/:instrumentId/tag-proceso', tagProcesoRouter);
+
+for (const [slug, spec] of Object.entries(COMPONENT_SPECS)) {
+  app.use(`/api/projects/:projectId/fichas-tecnicas/:fichaTecnicaId/componentes/${slug}`, createComponentRouter(spec));
+}
+
 app.use('/api/projects', projectsRouter);
 
 /*
@@ -301,6 +328,26 @@ app.use(
   '/api/catalogs/tipos-construccion-cable',
   createSimpleCatalogRouter('cat.cat_tipo_construccion_cable', false)
 );
+/*
+ * cat.cat_tipo_documento y cat.cat_fabricante (migración 031) — mismo
+ * patrón que interface-types/com-types: dominio ABIERTO, sin seed, la
+ * usuaria los va cargando desde la API (o el frontend) según los
+ * necesite, sin que cada tipo/fabricante nuevo requiera una migración.
+ */
+app.use(
+  '/api/catalogs/tipos-documento',
+  createSimpleCatalogRouter('cat.cat_tipo_documento', true)
+);
+app.use(
+  '/api/catalogs/fabricantes',
+  createSimpleCatalogRouter('cat.cat_fabricante', true)
+);
+/*
+ * cat.cat_requisito (migración 032) — mismo criterio abierto, pero con
+ * router propio (requisitos.ts) por la columna extra `categoria` que
+ * simpleCatalogRouter.ts no contempla.
+ */
+app.use('/api/catalogs/requisitos', requisitosRouter);
 
 app.use('/api/clients', clientsRouter);
 app.use('/api/users', usersRouter);

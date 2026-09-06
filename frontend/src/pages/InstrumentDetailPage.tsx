@@ -17,6 +17,7 @@ import { PnidEstadoBadge } from '../components/PnidEstadoBadge';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { usePnidEstados } from '../components/usePnidEstados';
 import { useProjectUserDirectory } from '../components/useProjectUserDirectory';
+import { TagProcesoSection } from '../components/TagProcesoSection';
 
 /** `createdBy`/`updatedBy` son solo un id — se muestra el nombre si el
  * directorio de miembros del proyecto lo resuelve, o el id crudo como
@@ -368,6 +369,8 @@ export function InstrumentDetailPage() {
               <dd>{instrument.tuberiaId ? <Link to={`/projects/${projectId}/tuberias`}>Ver tuberías</Link> : '—'}</dd>
             </div>
           </dl>
+
+          <TagProcesoSection projectId={projectId!} instrumentId={instrument.id} canWrite={canWrite} canDeactivate={canDeactivate} />
         </>
       )}
 

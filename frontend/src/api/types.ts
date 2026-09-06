@@ -2197,6 +2197,30 @@ export interface TuberiaResponse {
 
 export type TuberiaInput = Omit<Tuberia, 'id' | 'projectId' | 'active' | 'createdAt' | 'updatedAt'>;
 
+export interface TagProceso {
+  id: string;
+  projectId: string;
+  instrumentoId: string;
+  variable: string;
+  valorMin: string | null;
+  valorNominal: string | null;
+  valorMax: string | null;
+  unidad: string | null;
+  rangoCalibradoCampo: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface TagProcesoInput {
+  variable: string;
+  valorMin: string | null;
+  valorNominal: string | null;
+  valorMax: string | null;
+  unidad: string | null;
+  rangoCalibradoCampo: string | null;
+}
+
 /** Fila de cualquiera de las 17 tablas de componente (c_manometro,
  * c_transmisor, etc., migraciones 033-041) — forma genérica, ver
  * lib/componentSpecs.ts para los campos reales de cada tipo. */

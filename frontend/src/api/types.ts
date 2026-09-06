@@ -102,6 +102,12 @@ export interface Instrument {
    * Master con `soloPadres=true` — nunca se guarda, se recalcula siempre
    * al vuelo. `null` si no tiene hijos. */
   hijosTags?: string | null;
+  /** Módulo Hojas de Datos (migraciones 030/032) — contexto compartido
+   * (sitio/tubería) y la ficha técnica deduplicada, si esta señal ya fue
+   * cargada desde una Hoja de Datos real. */
+  sitioId: string | null;
+  tuberiaId: string | null;
+  fichaTecnicaId: string | null;
   fechaAgregado: string | null;
   fechaUltimaRevision: string | null;
   active: boolean;
@@ -2037,4 +2043,188 @@ export interface ControlPlanoAsociacion {
 export interface ControlPlanosResponse {
   projectId: string;
   planos: ControlPlanoAsociacion[];
+}
+
+/* ---- Módulo Hojas de Datos (HD) — migraciones 030-041 ------------------ */
+
+export interface Documento {
+  id: string;
+  projectId: string;
+  codigoDocumento: string | null;
+  descripcion: string;
+  tipoDocumentoId: string;
+  revision: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface DocumentosListResponse {
+  projectId: string;
+  documentos: Documento[];
+}
+
+export interface DocumentoResponse {
+  documento: Documento;
+}
+
+export interface DocumentoInput {
+  codigoDocumento: string | null;
+  descripcion: string;
+  tipoDocumentoId: string;
+  revision: string | null;
+}
+
+export interface Nota {
+  id: string;
+  projectId: string;
+  documentoId: string;
+  numero: number;
+  texto: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface NotasListResponse {
+  notas: Nota[];
+}
+
+export interface FichaTecnica {
+  id: string;
+  projectId: string;
+  documentoId: string | null;
+  fabricanteId: string | null;
+  modelo: string | null;
+  codigoReferencia: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface FichasTecnicasListResponse {
+  projectId: string;
+  fichasTecnicas: FichaTecnica[];
+}
+
+export interface FichaTecnicaResponse {
+  fichaTecnica: FichaTecnica;
+}
+
+export interface FichaTecnicaInput {
+  documentoId: string | null;
+  fabricanteId: string | null;
+  modelo: string | null;
+  codigoReferencia: string | null;
+}
+
+export type ValorRequisito = 'REQUERIDO' | 'NO_REQUERIDO' | 'NO_APLICA';
+
+export interface FichaTecnicaRequisito {
+  id: string;
+  projectId: string;
+  fichaTecnicaId: string;
+  requisitoId: string;
+  valor: ValorRequisito;
+  detalle: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface MarcaAceptable {
+  id: string;
+  projectId: string;
+  fichaTecnicaId: string;
+  componente: string;
+  fabricanteId: string;
+  preferente: boolean | null;
+  notasRef: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface Sitio {
+  id: string;
+  projectId: string;
+  altitudMsnm: number | null;
+  tempMinC: number | null;
+  tempMaxC: number | null;
+  humedadRelativaPct: number | null;
+  medioAmbiente: string | null;
+  cicloTrabajo: string | null;
+  clasificacionArea: string | null;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface SitioInput {
+  altitudMsnm: number | null;
+  tempMinC: number | null;
+  tempMaxC: number | null;
+  humedadRelativaPct: number | null;
+  medioAmbiente: string | null;
+  cicloTrabajo: string | null;
+  clasificacionArea: string | null;
+}
+
+export interface Tuberia {
+  id: string;
+  projectId: string;
+  tagLinea: string | null;
+  tamanoDiametro: string | null;
+  materialTuberia: string | null;
+  materialRevestimiento: string | null;
+  espesorRevestimiento: string | null;
+  schedule: string | null;
+  normaBridas: string | null;
+  caraBridas: string | null;
+  conexionInstrumento: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface TuberiasListResponse {
+  projectId: string;
+  tuberias: Tuberia[];
+}
+
+export interface TuberiaResponse {
+  tuberia: Tuberia;
+}
+
+export type TuberiaInput = Omit<Tuberia, 'id' | 'projectId' | 'active' | 'createdAt' | 'updatedAt'>;
+
+/** Fila de cualquiera de las 17 tablas de componente (c_manometro,
+ * c_transmisor, etc., migraciones 033-041) — forma genérica, ver
+ * lib/componentSpecs.ts para los campos reales de cada tipo. */
+export interface ComponenteItem {
+  id: string;
+  proyectoId: string;
+  fichaTecnicaId: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string | null;
+  [campo: string]: unknown;
+}
+
+export interface ComponentesListResponse {
+  items: ComponenteItem[];
+}
+
+export interface ComponenteResponse {
+  item: ComponenteItem;
+}
+
+/** cat.cat_requisito — mismo shape que CatalogItem + `categoria` propia
+ * (no reutiliza createSimpleCatalogRouter en el backend, ver
+ * requisitos.ts). */
+export interface RequisitoCatalogItem extends CatalogItem {
+  categoria: string | null;
+}
+
+export interface RequisitosCatalogListResponse {
+  items: RequisitoCatalogItem[];
 }

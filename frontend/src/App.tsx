@@ -33,6 +33,12 @@ import { ProjectMembersPage } from './pages/ProjectMembersPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { UsersPage } from './pages/UsersPage';
 import { OpenCatalogsPage } from './pages/OpenCatalogsPage';
+import { DocumentosListPage } from './pages/DocumentosListPage';
+import { DocumentoDetailPage } from './pages/DocumentoDetailPage';
+import { FichasTecnicasListPage } from './pages/FichasTecnicasListPage';
+import { FichaTecnicaDetailPage } from './pages/FichaTecnicaDetailPage';
+import { SitioPage } from './pages/SitioPage';
+import { TuberiasListPage } from './pages/TuberiasListPage';
 import { EntregablesListPage } from './pages/EntregablesListPage';
 import { EntregableFormPage } from './pages/EntregableFormPage';
 import { EntregableDetailPage } from './pages/EntregableDetailPage';
@@ -116,6 +122,12 @@ function App() {
         <Route path="/projects/:projectId/boxes/:boxId" element={<BoxDetailPage />} />
         <Route path="/projects/:projectId/cables" element={<CablesListPage />} />
         <Route path="/projects/:projectId/cables/:cableId" element={<CableDetailPage />} />
+        <Route path="/projects/:projectId/documentos" element={<DocumentosListPage />} />
+        <Route path="/projects/:projectId/documentos/:documentoId" element={<DocumentoDetailPage />} />
+        <Route path="/projects/:projectId/fichas-tecnicas" element={<FichasTecnicasListPage />} />
+        <Route path="/projects/:projectId/fichas-tecnicas/:fichaId" element={<FichaTecnicaDetailPage />} />
+        <Route path="/projects/:projectId/sitio" element={<SitioPage />} />
+        <Route path="/projects/:projectId/tuberias" element={<TuberiasListPage />} />
         <Route
           path="/projects/:projectId/connection-points"
           element={<ConnectionPointsListPage />}

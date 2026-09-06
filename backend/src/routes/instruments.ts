@@ -84,6 +84,9 @@ instrumentsRouter.get(
             i.equipo_asociado_tag,
             i.instrumento_asociado_id,
             i.instrumento_asociado_tag,
+            i.sitio_id,
+            i.tuberia_id,
+            i.ficha_tecnica_id,
             i.fecha_agregado,
             i.fecha_ultima_revision,
             i.activo,
@@ -168,6 +171,11 @@ instrumentsRouter.get(
           instrumentoAsociadoTag: row.instrumento_asociado_tag,
           esCabezaDeGrupo: Boolean(row.es_cabeza_de_grupo),
           grupoTag: row.grupo_tag,
+          // Módulo Hojas de Datos (migraciones 030/032) — contexto
+          // compartido (sitio/tubería) y la ficha técnica deduplicada.
+          sitioId: row.sitio_id === null ? null : String(row.sitio_id),
+          tuberiaId: row.tuberia_id === null ? null : String(row.tuberia_id),
+          fichaTecnicaId: row.ficha_tecnica_id === null ? null : String(row.ficha_tecnica_id),
           hijosTags: row.hijos_tags,
 
           fechaAgregado: row.fecha_agregado,
@@ -240,6 +248,9 @@ instrumentsRouter.get(
             i.equipo_asociado_tag,
             i.instrumento_asociado_id,
             i.instrumento_asociado_tag,
+            i.sitio_id,
+            i.tuberia_id,
+            i.ficha_tecnica_id,
             i.fecha_agregado,
             i.fecha_ultima_revision,
             i.activo,
@@ -316,6 +327,11 @@ instrumentsRouter.get(
           instrumentoAsociadoTag: row.instrumento_asociado_tag,
           esCabezaDeGrupo: Boolean(row.es_cabeza_de_grupo),
           grupoTag: row.grupo_tag,
+          // Módulo Hojas de Datos (migraciones 030/032) — contexto
+          // compartido (sitio/tubería) y la ficha técnica deduplicada.
+          sitioId: row.sitio_id === null ? null : String(row.sitio_id),
+          tuberiaId: row.tuberia_id === null ? null : String(row.tuberia_id),
+          fichaTecnicaId: row.ficha_tecnica_id === null ? null : String(row.ficha_tecnica_id),
 
           fechaAgregado: row.fecha_agregado,
           fechaUltimaRevision: row.fecha_ultima_revision,
@@ -804,11 +820,34 @@ instrumentsRouter.patch(
         }
       }
 
+      // Módulo Hojas de Datos (migraciones 030/032) — mismo patrón que
+      // equipoAsociadoId/instrumentoAsociadoId: FK numérica o null,
+      // validada acá, aplicada con TRY_CONVERT(BIGINT, ...) más abajo.
+      const hasSitioId = 'sitioId' in body;
+      if (hasSitioId && body.sitioId !== null && !/^\d+$/.test(String(body.sitioId))) {
+        res.status(400).json({ error: 'validation_error', message: 'sitioId must be a numeric id or null.' });
+        return;
+      }
+      const hasTuberiaId = 'tuberiaId' in body;
+      if (hasTuberiaId && body.tuberiaId !== null && !/^\d+$/.test(String(body.tuberiaId))) {
+        res.status(400).json({ error: 'validation_error', message: 'tuberiaId must be a numeric id or null.' });
+        return;
+      }
+      const hasFichaTecnicaId = 'fichaTecnicaId' in body;
+      if (hasFichaTecnicaId && body.fichaTecnicaId !== null && !/^\d+$/.test(String(body.fichaTecnicaId))) {
+        res.status(400).json({ error: 'validation_error', message: 'fichaTecnicaId must be a numeric id or null.' });
+        return;
+      }
+
       const keys = Object.keys(body).filter(
         (key) => key in allowedFields
       ) as Array<keyof typeof allowedFields>;
 
-      if (keys.length === 0 && !hasEquipoAsociadoId && !hasInstrumentoAsociadoId) {
+      if (
+        keys.length === 0 &&
+        !hasEquipoAsociadoId && !hasInstrumentoAsociadoId &&
+        !hasSitioId && !hasTuberiaId && !hasFichaTecnicaId
+      ) {
         res.status(400).json({
           error: 'validation_error',
           message: 'No editable fields were provided.'
@@ -901,6 +940,21 @@ instrumentsRouter.patch(
         assignments.push('instrumento_asociado_id = TRY_CONVERT(BIGINT, @instrumento_asociado_id)');
       }
 
+      if (hasSitioId) {
+        request.input('sitio_id', sql.NVarChar(30), body.sitioId);
+        assignments.push('sitio_id = TRY_CONVERT(BIGINT, @sitio_id)');
+      }
+
+      if (hasTuberiaId) {
+        request.input('tuberia_id', sql.NVarChar(30), body.tuberiaId);
+        assignments.push('tuberia_id = TRY_CONVERT(BIGINT, @tuberia_id)');
+      }
+
+      if (hasFichaTecnicaId) {
+        request.input('ficha_tecnica_id', sql.NVarChar(30), body.fichaTecnicaId);
+        assignments.push('ficha_tecnica_id = TRY_CONVERT(BIGINT, @ficha_tecnica_id)');
+      }
+
       /*
        * Si cambia el TAG, validar que no exista otro activo
        * con el mismo TAG dentro del proyecto.
@@ -977,6 +1031,9 @@ instrumentsRouter.patch(
           INSERTED.equipo_asociado_tag,
           INSERTED.instrumento_asociado_id,
           INSERTED.instrumento_asociado_tag,
+          INSERTED.sitio_id,
+          INSERTED.tuberia_id,
+          INSERTED.ficha_tecnica_id,
           INSERTED.fecha_agregado,
           INSERTED.fecha_ultima_revision,
           INSERTED.activo,
@@ -1068,6 +1125,9 @@ instrumentsRouter.patch(
           instrumentoAsociadoId:
             row.instrumento_asociado_id === null ? null : String(row.instrumento_asociado_id),
           instrumentoAsociadoTag: row.instrumento_asociado_tag,
+          sitioId: row.sitio_id === null ? null : String(row.sitio_id),
+          tuberiaId: row.tuberia_id === null ? null : String(row.tuberia_id),
+          fichaTecnicaId: row.ficha_tecnica_id === null ? null : String(row.ficha_tecnica_id),
 
           fechaAgregado: row.fecha_agregado,
           fechaUltimaRevision: row.fecha_ultima_revision,
@@ -1120,7 +1180,7 @@ instrumentsRouter.patch(
         res.status(400).json({
           error: 'invalid_reference',
           message:
-            'equipoAsociadoId/instrumentoAsociadoId does not exist, is inactive, or does not belong to this project.'
+            'equipoAsociadoId/instrumentoAsociadoId/sitioId/tuberiaId/fichaTecnicaId does not exist, is inactive, or does not belong to this project.'
         });
         return;
       }

@@ -465,6 +465,63 @@ a {
   grid-column: 1 / -1;
 }
 
+.form__field--compact {
+  gap: 2px;
+  font-size: 12px;
+}
+
+.form__field--compact input,
+.form__field--compact select {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+/* Módulo Hojas de Datos — componentes dinámicos (ver ComponenteSection). */
+.componente-section {
+  margin-bottom: 20px;
+}
+
+.componente-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.componente-section__header h4 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.componente-fila {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg);
+}
+
+.componente-fila--nueva {
+  border-style: dashed;
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.componente-fila__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px 12px;
+}
+
+.componente-fila__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .form__field input,
 .form__field select,
 .form__field textarea,

@@ -84,7 +84,7 @@ export const COMPONENT_SPECS: Record<string, ComponentTableSpec> = {
       { key: 'ruidoMaxDb', column: 'ruido_max_db', type: 'decimal' },
       { key: 'ruidoOperador', column: 'ruido_operador', maxLength: 5 },
       { key: 'ruidoDistanciaM', column: 'ruido_distancia_m', type: 'decimal' },
-      { key: 'posicionMontaje', column: 'posicion_montaje', maxLength: 20 },
+      { key: 'posicionMontaje', column: 'posicion_montaje', maxLength: 50 },
       { key: 'trimTipo', column: 'trim_tipo', maxLength: 100 },
       { key: 'direccionFlujo', column: 'direccion_flujo', maxLength: 50 },
       { key: 'caracteristicaFlujo', column: 'caracteristica_flujo', maxLength: 50 },

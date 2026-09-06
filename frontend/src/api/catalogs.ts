@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { CatalogInput, CatalogItemMutationResponse, CatalogListResponse } from './types';
+import type { CatalogInput, CatalogItemMutationResponse, CatalogListResponse, RequisitosCatalogListResponse } from './types';
 
 /**
  * Los 9 catálogos globales expuestos por backend/src/lib/simpleCatalogRouter.ts
@@ -79,3 +79,27 @@ export const createComType = (input: CatalogInput, devUserEmail: string) =>
 
 export const createComMediaType = (input: CatalogInput, devUserEmail: string) =>
   createCatalogItem('/api/catalogs/com-media-types', input, devUserEmail);
+
+/** Módulo Hojas de Datos (migraciones 031/032) — los 3 catálogos abiertos. */
+export const listTiposDocumento = (devUserEmail: string) =>
+  listCatalog('/api/catalogs/tipos-documento', devUserEmail);
+
+export const createTipoDocumento = (input: CatalogInput, devUserEmail: string) =>
+  createCatalogItem('/api/catalogs/tipos-documento', input, devUserEmail);
+
+export const listFabricantes = (devUserEmail: string) =>
+  listCatalog('/api/catalogs/fabricantes', devUserEmail);
+
+export const createFabricante = (input: CatalogInput, devUserEmail: string) =>
+  createCatalogItem('/api/catalogs/fabricantes', input, devUserEmail);
+
+/** cat.cat_requisito tiene su propio router (categoria extra) — no
+ * reutiliza listCatalog/createCatalogItem genéricos. */
+export const listRequisitos = (devUserEmail: string): Promise<RequisitosCatalogListResponse> =>
+  apiFetch<RequisitosCatalogListResponse>('/api/catalogs/requisitos', { devUserEmail });
+
+export const createRequisito = (
+  input: { codigo: string; descripcion: string | null; categoria: string | null },
+  devUserEmail: string
+) =>
+  apiFetch<CatalogItemMutationResponse>('/api/catalogs/requisitos', { method: 'POST', body: input, devUserEmail });

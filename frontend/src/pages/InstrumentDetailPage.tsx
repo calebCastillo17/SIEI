@@ -353,6 +353,20 @@ export function InstrumentDetailPage() {
               <dt>Fecha última revisión</dt>
               <dd>{instrument.fechaUltimaRevision ?? '—'}</dd>
             </div>
+            <div>
+              <dt>Ficha técnica (Hoja de Datos)</dt>
+              <dd>
+                {instrument.fichaTecnicaId ? (
+                  <Link to={`/projects/${projectId}/fichas-tecnicas/${instrument.fichaTecnicaId}`}>Ver ficha técnica</Link>
+                ) : (
+                  '—'
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Tubería</dt>
+              <dd>{instrument.tuberiaId ? <Link to={`/projects/${projectId}/tuberias`}>Ver tuberías</Link> : '—'}</dd>
+            </div>
           </dl>
         </>
       )}

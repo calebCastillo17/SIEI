@@ -55,6 +55,14 @@ instrumentsRouter.get(
       // dueño real de una señal.
       const soloPadres = normalizeParam(req.query.soloPadres as string | string[] | undefined) === 'true';
 
+      // soloListados=true: usado SOLO por el Master (migración 044,
+      // pedido explícito del usuario — "la idea es que se guarde todo
+      // pero los no listados no se muestran"). Por defecto NO filtra:
+      // los selectores de dueño y el resto de la app siguen viendo TODO
+      // — un instrumento con listado=0 sigue siendo real, solo que no
+      // se imprime en el LDI ni aparece por defecto en el Master.
+      const soloListados = normalizeParam(req.query.soloListados as string | string[] | undefined) === 'true';
+
       const result = await pool
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
@@ -80,6 +88,7 @@ instrumentsRouter.get(
             i.plano_pnid,
             i.linea_pnid,
             i.tipo_senal_pnid,
+            i.listado,
             i.equipo_asociado_id,
             i.equipo_asociado_tag,
             i.instrumento_asociado_id,
@@ -134,6 +143,7 @@ instrumentsRouter.get(
           WHERE i.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
             AND i.activo = 1
             ${soloPadres ? 'AND i.instrumento_asociado_id IS NULL' : ''}
+            ${soloListados ? 'AND i.listado = 1' : ''}
           ORDER BY i.tag_instrumento;
         `);
 
@@ -163,6 +173,7 @@ instrumentsRouter.get(
           planoPnid: row.plano_pnid,
           lineaPnid: row.linea_pnid,
           tipoSenalPnid: row.tipo_senal_pnid,
+          listado: Boolean(row.listado),
           equipoAsociadoId:
             row.equipo_asociado_id === null ? null : String(row.equipo_asociado_id),
           equipoAsociadoTag: row.equipo_asociado_tag,
@@ -190,6 +201,59 @@ instrumentsRouter.get(
         }))
       });
 
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+
+/*
+ * GET /api/projects/:projectId/instruments/pendientes-equipo
+ *
+ * A diferencia de las líneas (tuberías), acá el P&ID NUNCA manda solo —
+ * equipo_asociado_id es una selección manual y curada en SIEI (ver
+ * CLAUDE.md, sección "Equipos"); el importador P&ID solo escribe
+ * equipo_asociado_tag como texto de referencia, sin auto-resolver el id
+ * (eso se sacó explícitamente hace tiempo por pisar curaciones manuales).
+ * Este endpoint solo lista SUGERENCIAS: instrumentos con equipo_asociado_tag
+ * poblado pero sin equipo_asociado_id todavía. Cuando el texto coincide
+ * exacto con un nucleo.equipo activo del proyecto, viaja el id sugerido
+ * para que el frontend ofrezca "Vincular" (un PATCH normal de
+ * equipoAsociadoId, sin endpoint nuevo) — nunca se escribe nada acá.
+ * Debe registrarse ANTES de GET /:instrumentId.
+ */
+instrumentsRouter.get(
+  '/pendientes-equipo',
+  requireProjectPermission('read'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const projectId = req.projectAccess!.projectId;
+      const pool = await getDbPool();
+      const result = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .query(`
+          SELECT i.id AS instrumento_id, i.tag_instrumento, i.equipo_asociado_tag,
+            e.id AS equipo_sugerido_id, e.tag_equipo AS equipo_sugerido_tag, e.descripcion AS equipo_sugerido_descripcion
+          FROM nucleo.instrumento i
+          LEFT JOIN nucleo.equipo e ON e.tag_equipo = i.equipo_asociado_tag AND e.proyecto_id = i.proyecto_id AND e.activo = 1
+          WHERE i.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id) AND i.activo = 1
+            AND i.equipo_asociado_id IS NULL
+            AND i.equipo_asociado_tag IS NOT NULL
+          ORDER BY i.tag_instrumento;
+        `);
+      res.status(200).json({
+        projectId,
+        pendientes: result.recordset.map((row) => ({
+          instrumentId: String(row.instrumento_id),
+          tagInstrumento: row.tag_instrumento,
+          equipoAsociadoTag: row.equipo_asociado_tag,
+          equipoSugeridoId: row.equipo_sugerido_id === null ? null : String(row.equipo_sugerido_id),
+          equipoSugeridoTag: row.equipo_sugerido_tag,
+          equipoSugeridoDescripcion: row.equipo_sugerido_descripcion
+        }))
+      });
     } catch (error) {
       next(error);
     }
@@ -244,6 +308,7 @@ instrumentsRouter.get(
             i.plano_pnid,
             i.linea_pnid,
             i.tipo_senal_pnid,
+            i.listado,
             i.equipo_asociado_id,
             i.equipo_asociado_tag,
             i.instrumento_asociado_id,
@@ -319,6 +384,7 @@ instrumentsRouter.get(
           planoPnid: row.plano_pnid,
           lineaPnid: row.linea_pnid,
           tipoSenalPnid: row.tipo_senal_pnid,
+          listado: Boolean(row.listado),
           equipoAsociadoId:
             row.equipo_asociado_id === null ? null : String(row.equipo_asociado_id),
           equipoAsociadoTag: row.equipo_asociado_tag,
@@ -400,11 +466,21 @@ instrumentsRouter.post(
         planoPnid = null,
         lineaPnid = null,
         tipoSenalPnid = null,
+        listado = true,
         equipoAsociadoId = null,
         equipoAsociadoTag = null,
         instrumentoAsociadoId = null,
         instrumentoAsociadoTag = null
       } = body;
+
+      // listado (migración 044): dato de contenido, no editable-string —
+      // el alta manual normal lo deja implícito en true (mismo valor que
+      // el DEFAULT de la columna); el importador P&ID es quien pasa
+      // explícitamente false.
+      if (typeof listado !== 'boolean') {
+        res.status(400).json({ error: 'validation_error', message: 'listado must be a boolean.' });
+        return;
+      }
 
       if (
         typeof tagInstrumento !== 'string' ||
@@ -521,6 +597,7 @@ instrumentsRouter.post(
         .input('plano_pnid', sql.NVarChar(30), planoPnid)
         .input('linea_pnid', sql.NVarChar(100), lineaPnid)
         .input('tipo_senal_pnid', sql.NVarChar(50), tipoSenalPnid)
+        .input('listado', sql.Bit, listado)
         .input('equipo_asociado_id', sql.NVarChar(30), equipoAsociadoId)
         .input('equipo_asociado_tag', sql.NVarChar(50), equipoAsociadoTag)
         .input('instrumento_asociado_id', sql.NVarChar(30), instrumentoAsociadoId)
@@ -557,6 +634,7 @@ instrumentsRouter.post(
             plano_pnid,
             linea_pnid,
             tipo_senal_pnid,
+            listado,
             equipo_asociado_id,
             equipo_asociado_tag,
             instrumento_asociado_id,
@@ -595,6 +673,7 @@ instrumentsRouter.post(
             @plano_pnid,
             @linea_pnid,
             @tipo_senal_pnid,
+            @listado,
             TRY_CONVERT(BIGINT, @equipo_asociado_id),
             @equipo_asociado_tag,
             TRY_CONVERT(BIGINT, @instrumento_asociado_id),
@@ -839,6 +918,15 @@ instrumentsRouter.patch(
         return;
       }
 
+      // listado (migración 044) — dato de contenido, no de FK, se valida
+      // aparte del loop genérico de allowedFields porque ese loop solo
+      // acepta string|null.
+      const hasListado = 'listado' in body;
+      if (hasListado && typeof body.listado !== 'boolean') {
+        res.status(400).json({ error: 'validation_error', message: 'listado must be a boolean.' });
+        return;
+      }
+
       const keys = Object.keys(body).filter(
         (key) => key in allowedFields
       ) as Array<keyof typeof allowedFields>;
@@ -846,7 +934,7 @@ instrumentsRouter.patch(
       if (
         keys.length === 0 &&
         !hasEquipoAsociadoId && !hasInstrumentoAsociadoId &&
-        !hasSitioId && !hasTuberiaId && !hasFichaTecnicaId
+        !hasSitioId && !hasTuberiaId && !hasFichaTecnicaId && !hasListado
       ) {
         res.status(400).json({
           error: 'validation_error',
@@ -955,6 +1043,11 @@ instrumentsRouter.patch(
         assignments.push('ficha_tecnica_id = TRY_CONVERT(BIGINT, @ficha_tecnica_id)');
       }
 
+      if (hasListado) {
+        request.input('listado', sql.Bit, body.listado);
+        assignments.push('listado = @listado');
+      }
+
       /*
        * Si cambia el TAG, validar que no exista otro activo
        * con el mismo TAG dentro del proyecto.
@@ -1027,6 +1120,7 @@ instrumentsRouter.patch(
           INSERTED.plano_pnid,
           INSERTED.linea_pnid,
           INSERTED.tipo_senal_pnid,
+          INSERTED.listado,
           INSERTED.equipo_asociado_id,
           INSERTED.equipo_asociado_tag,
           INSERTED.instrumento_asociado_id,
@@ -1119,6 +1213,7 @@ instrumentsRouter.patch(
           planoPnid: row.plano_pnid,
           lineaPnid: row.linea_pnid,
           tipoSenalPnid: row.tipo_senal_pnid,
+          listado: Boolean(row.listado),
           equipoAsociadoId:
             row.equipo_asociado_id === null ? null : String(row.equipo_asociado_id),
           equipoAsociadoTag: row.equipo_asociado_tag,

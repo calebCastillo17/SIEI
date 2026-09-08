@@ -4,10 +4,19 @@ import type {
   InstrumentInput,
   InstrumentMutationResponse,
   InstrumentResponse,
-  InstrumentsListResponse
+  InstrumentsListResponse,
+  PendientesEquipoResponse
 } from './types';
 
 const base = (projectId: string) => `/api/projects/${projectId}/instruments`;
+
+/** GET /api/projects/:projectId/instruments/pendientes-equipo — instrumentos
+ * con equipoAsociadoTag (P&ID) pero sin equipoAsociadoId todavía. Son solo
+ * sugerencias: vincular sigue siendo un PATCH normal de equipoAsociadoId,
+ * nunca automático (ver nota en el backend). */
+export function listPendientesEquipo(projectId: string, devUserEmail: string): Promise<PendientesEquipoResponse> {
+  return apiFetch<PendientesEquipoResponse>(`${base(projectId)}/pendientes-equipo`, { devUserEmail });
+}
 
 /** GET /api/projects/:projectId/instruments
  * soloPadres=true — usado por el listado del Master: excluye los
@@ -18,9 +27,12 @@ const base = (projectId: string) => `/api/projects/${projectId}/instruments`;
 export function listInstruments(
   projectId: string,
   devUserEmail: string,
-  options: { soloPadres?: boolean } = {}
+  options: { soloPadres?: boolean; soloListados?: boolean } = {}
 ): Promise<InstrumentsListResponse> {
-  const query = options.soloPadres ? '?soloPadres=true' : '';
+  const params = new URLSearchParams();
+  if (options.soloPadres) params.set('soloPadres', 'true');
+  if (options.soloListados) params.set('soloListados', 'true');
+  const query = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<InstrumentsListResponse>(`${base(projectId)}${query}`, { devUserEmail });
 }
 

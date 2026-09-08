@@ -8,7 +8,7 @@ import { PNID_FIELD_LABELS } from './pnidLabels';
 
 type TextFieldKey = Exclude<
   keyof InstrumentInput,
-  'tagInstrumento' | 'equipoAsociadoId' | 'instrumentoAsociadoId'
+  'tagInstrumento' | 'equipoAsociadoId' | 'instrumentoAsociadoId' | 'listado'
 >;
 
 interface FieldSpec {
@@ -159,6 +159,22 @@ export function InstrumentForm({
             />
           </label>
         ))}
+
+        {/* listado (migración 044): dato de contenido, no un borrado —
+         * false significa "existe completo, pero no se imprime en el LDI
+         * ni aparece por defecto en el Master". El importador P&ID lo
+         * sincroniza igual que cualquier otro campo; acá se puede
+         * corregir a mano sin depender de un reimport. */}
+        <label className="form__field form__field--compact">
+          <span>Listado</span>
+          <input
+            type="checkbox"
+            disabled={disabled || submitting}
+            checked={value.listado ?? true}
+            onChange={(event) => setValue((prev) => ({ ...prev, listado: event.target.checked }))}
+          />
+        </label>
+
         <p className="form__field form__field--wide form__note">
           Cada selector y su "(tag libre)" correspondiente son dos campos
           independientes en la base — el import P&amp;ID los sincroniza

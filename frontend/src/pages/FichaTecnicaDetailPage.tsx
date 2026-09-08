@@ -16,11 +16,13 @@ import {
 } from '../api/fichasTecnicas';
 import { listDocumentos } from '../api/documentos';
 import { listFabricantes, listRequisitos } from '../api/catalogs';
+import { listInstruments } from '../api/instruments';
 import { useAsyncData } from '../lib/useAsyncData';
 import { COMPONENTES } from '../lib/componentSpecs';
 import { ComponenteSection } from '../components/ComponenteSection';
 import { CatalogSelect } from '../components/CatalogSelect';
 import { ErrorMessage } from '../components/ErrorMessage';
+import { Link } from 'react-router-dom';
 import type {
   FichaTecnica,
   Documento,
@@ -28,7 +30,8 @@ import type {
   RequisitoCatalogItem,
   FichaTecnicaRequisito,
   MarcaAceptable,
-  ValorRequisito
+  ValorRequisito,
+  Instrument
 } from '../api/types';
 
 const VALORES: ValorRequisito[] = ['REQUERIDO', 'NO_REQUERIDO', 'NO_APLICA'];
@@ -101,6 +104,18 @@ export function FichaTecnicaDetailPage() {
     return listMarcasDeFicha(projectId, fichaId, devUser.email).then((r) => r.marcasAceptables);
   }, [projectId, fichaId, devUser.email]);
   const { data: marcas, refresh: refreshMarcas } = useAsyncData<MarcaAceptable[]>(fetchMarcas);
+
+  // Tecnología/funcionamiento/cuerpo del instrumento/conexión a proceso NO
+  // se duplican acá — ya existen en nucleo.instrumento (origen P&ID) y se
+  // leen en vivo por cada tag que usa esta ficha, para no arriesgar
+  // desincronizarse ni perder variación real entre tags (conexión a
+  // proceso varía por tag aun compartiendo ficha técnica).
+  const fetchInstrumentos = useCallback(() => {
+    if (!projectId) return Promise.resolve<Instrument[]>([]);
+    return listInstruments(projectId, devUser.email).then((r) => r.instruments);
+  }, [projectId, devUser.email]);
+  const { data: instrumentos } = useAsyncData<Instrument[]>(fetchInstrumentos);
+  const tagsDeFicha = (instrumentos ?? []).filter((i) => i.fichaTecnicaId === fichaId);
 
   const [editing, setEditing] = useState(false);
   const [documentoId, setDocumentoId] = useState<string | null>(null);
@@ -268,6 +283,38 @@ export function FichaTecnicaDetailPage() {
 
       {!loading && ficha && (
         <>
+          <h2>Datos generales (P&amp;ID)</h2>
+          <p className="physical-hint">
+            Tecnología, funcionamiento, cuerpo del instrumento y conexión a proceso vienen del P&amp;ID
+            de cada tag (no se editan acá) — se muestran por tag porque, aunque comparten ficha
+            técnica, pueden diferir entre sí (ej. la conexión a proceso real en campo).
+          </p>
+          {tagsDeFicha.length === 0 && <p className="physical-hint">Ningún tag activo usa esta ficha técnica todavía.</p>}
+          {tagsDeFicha.length > 0 && (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>TAG</th>
+                  <th>Tecnología</th>
+                  <th>Funcionamiento</th>
+                  <th>Cuerpo del instrumento</th>
+                  <th>Conexión a proceso</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tagsDeFicha.map((i) => (
+                  <tr key={i.id}>
+                    <td><Link to={`/projects/${projectId}/instruments/${i.id}`}>{i.tagInstrumento}</Link></td>
+                    <td>{i.tecnologia ?? '—'}</td>
+                    <td>{i.funcionamiento ?? '—'}</td>
+                    <td>{i.cuerpoInstrumento ?? '—'}</td>
+                    <td>{i.conexionProceso ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
           <h2>Requisitos</h2>
           <ErrorMessage error={requisitoError} />
           {canWrite && (

@@ -222,7 +222,11 @@ async function fetchInstrumentosOrdenables(
         -- instrumento independiente, es un tag del padre (pedido explícito
         -- del usuario, mismo criterio ya aplicado al listado del Master
         -- con soloPadres) — el LDI nunca le imprime su propia fila/ITEM.
-        AND i.instrumento_asociado_id IS NULL;
+        AND i.instrumento_asociado_id IS NULL
+        -- listado=0 (migración 044): "se guarda todo, pero los no
+        -- listados no se muestran" — nunca se imprime en el documento
+        -- oficial, aunque el instrumento exista completo en la base.
+        AND i.listado = 1;
     `);
 
   return result.recordset.map((row: any) => ({
@@ -1220,6 +1224,21 @@ revisionesEntregableRouter.post(
           // ya pudo haber quedado sin transacción viva
         }
       }
+
+      // UX_revision_entregable_codigo_emitida (migración 006): mientras es
+      // BORRADOR el código se puede repetir/probar libremente, pero al
+      // emitir no puede coincidir con uno YA EMITIDO antes para el mismo
+      // entregable. Sin este catch, el error crudo de SQL Server llegaba
+      // tal cual al usuario en vez de un mensaje claro.
+      const number = sqlErrorNumber(error);
+      if (number === 2601 || number === 2627) {
+        res.status(409).json({
+          error: 'codigo_revision_ya_emitido',
+          message: 'Ya existe una revisión EMITIDA de este entregable con ese código — elegí un código distinto antes de emitir.'
+        });
+        return;
+      }
+
       next(error);
     }
   }

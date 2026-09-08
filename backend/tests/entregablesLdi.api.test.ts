@@ -176,7 +176,10 @@ async function main() {
 
   const instrumentsAfterImport = await call('GET', INSTRUMENTS);
   const totalInstrumentos = instrumentsAfterImport.json?.instruments?.length ?? 0;
-  check(`Instrumentos reales activos tras el import: ${totalInstrumentos} (se esperaban ~352)`, totalInstrumentos > 300 && totalInstrumentos < 400);
+  // Migración 044: Listado ya no excluye la creación del instrumento — el
+  // reporte real trae ~480 filas válidas en total (no solo las ~352 con
+  // Listado=True), así que ahora se crean ~480 instrumentos, no ~352.
+  check(`Instrumentos reales activos tras el import: ${totalInstrumentos} (se esperaban ~480)`, totalInstrumentos > 400 && totalInstrumentos < 520);
 
   // Asociación EXPLÍCITA entre dos instrumentos reales, para probar que la
   // relación instrumento_asociado_id pesa más que la agrupación inferida.
@@ -292,7 +295,16 @@ async function main() {
   check('POST segundo BORRADOR "A" tras descartar el primero (201)', draft2.status === 201, draft2.json);
   const revAId = draft2.json?.revision?.id;
   check('BORRADOR usa iniciales default de proyecto_documentacion', draft2.json?.revision?.inicialesPor === 'D.S.T.' && draft2.json?.revision?.inicialesRevisado === 'A.R.Q.' && draft2.json?.revision?.inicialesAprobado === 'L.L.C.');
-  check(`totalFilas del preview: ${draft2.json?.totalFilas} (=~ instrumentos activos)`, draft2.json?.totalFilas === totalInstrumentos);
+  // El LDI aplica los MISMOS dos filtros que fetchInstrumentosOrdenables
+  // (soloPadres + listado=1, migración 044) — se compara contra ese mismo
+  // conteo, no contra totalInstrumentos (que incluye hijos y no-listados).
+  const instrumentosParaLdi = await call('GET', `${INSTRUMENTS}?soloPadres=true&soloListados=true`);
+  const totalInstrumentosParaLdi = instrumentosParaLdi.json?.instruments?.length ?? 0;
+  check(
+    `totalFilas del preview: ${draft2.json?.totalFilas} (=~ instrumentos padre + listados: ${totalInstrumentosParaLdi})`,
+    draft2.json?.totalFilas === totalInstrumentosParaLdi,
+    { totalFilas: draft2.json?.totalFilas, totalInstrumentosParaLdi }
+  );
 
   const filas: any[] = draft2.json.filas;
   check('ITEM es consecutivo 1..N tras ordenar', filas.every((f, idx) => f.item === idx + 1));

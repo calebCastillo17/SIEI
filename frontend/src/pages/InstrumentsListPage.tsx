@@ -26,12 +26,19 @@ export function InstrumentsListPage() {
    * quiera ocultarlos lo hace con el botón de abajo. */
   const [mostrarHijos, setMostrarHijos] = useState(true);
 
+  /* mostrarNoListados=false (default) -> soloListados=true en el backend
+   * (migración 044): "se guarda todo, pero los no listados no se
+   * muestran" — pedido explícito del usuario. El botón de abajo permite
+   * auditarlos igual sin cambiar el dato. */
+  const [mostrarNoListados, setMostrarNoListados] = useState(false);
+
   const fetchInstruments = useCallback(() => {
     if (!projectId) return Promise.resolve<Instrument[]>([]);
-    return listInstruments(projectId, devUser.email, { soloPadres: !mostrarHijos }).then(
-      (response) => response.instruments
-    );
-  }, [projectId, devUser.email, mostrarHijos]);
+    return listInstruments(projectId, devUser.email, {
+      soloPadres: !mostrarHijos,
+      soloListados: !mostrarNoListados
+    }).then((response) => response.instruments);
+  }, [projectId, devUser.email, mostrarHijos, mostrarNoListados]);
 
   const {
     data: instruments,
@@ -280,6 +287,14 @@ export function InstrumentsListPage() {
             >
               {mostrarHijos ? 'Ocultar hijos' : 'Mostrar hijos'}
             </button>
+            <button
+              type="button"
+              className="button button--secondary"
+              onClick={() => setMostrarNoListados((valor) => !valor)}
+              title="Un instrumento no listado sigue existiendo completo — solo no se imprime en el LDI ni aparece acá por defecto"
+            >
+              {mostrarNoListados ? 'Ocultar no listados' : 'Mostrar no listados'}
+            </button>
           </div>
 
           <p className="page-subtitle">
@@ -310,6 +325,7 @@ export function InstrumentsListPage() {
                 <th>P&amp;ID</th>
                 <th>Estado P&amp;ID</th>
                 <th>Hoja de Datos</th>
+                <th>Listado</th>
                 <th aria-label="Acciones" />
               </tr>
             </thead>
@@ -356,6 +372,9 @@ export function InstrumentsListPage() {
                       ) : (
                         <span className="page-subtitle">No</span>
                       )}
+                    </td>
+                    <td>
+                      {instrument.listado ? 'Sí' : <span className="page-subtitle" title="No se imprime en el LDI ni se cuenta en el Master por defecto">No</span>}
                     </td>
                     <td className="table__row-actions">
                       {/*

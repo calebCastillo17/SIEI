@@ -49,6 +49,7 @@ function toInput(instrument: Instrument): InstrumentInput {
     planoPnid: instrument.planoPnid,
     lineaPnid: instrument.lineaPnid,
     tipoSenalPnid: instrument.tipoSenalPnid,
+    listado: instrument.listado,
     equipoAsociadoId: instrument.equipoAsociadoId,
     equipoAsociadoTag: instrument.equipoAsociadoTag,
     instrumentoAsociadoId: instrument.instrumentoAsociadoId,

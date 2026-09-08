@@ -82,6 +82,9 @@ export interface Instrument {
   planoPnid: string | null;
   lineaPnid: string | null;
   tipoSenalPnid: string | null;
+  // listado (migración 044) — dato de contenido: false significa "se
+  // guarda igual, pero no se muestra" (Master ni LDI), no un borrado.
+  listado: boolean;
   equipoAsociadoId: string | null;
   equipoAsociadoTag: string | null;
   instrumentoAsociadoId: string | null;
@@ -193,6 +196,12 @@ export interface InstrumentInput {
   planoPnid: string | null;
   lineaPnid: string | null;
   tipoSenalPnid: string | null;
+  // listado (migración 044) — dato de contenido: false significa "se
+  // guarda igual, pero no se muestra" (Master ni LDI), no un borrado.
+  // Opcional acá: el alta manual normal la omite y el backend la deja en
+  // true por defecto — solo el importador P&ID (server-side) la fija en
+  // false explícitamente.
+  listado?: boolean;
   equipoAsociadoId: string | null;
   equipoAsociadoTag: string | null;
   instrumentoAsociadoId: string | null;
@@ -226,6 +235,24 @@ export interface Equipment {
 export interface EquipmentListResponse {
   projectId: string;
   equipment: Equipment[];
+}
+
+/** Instrumento con equipoAsociadoTag (texto del P&ID) pero sin
+ * equipoAsociadoId todavía. A diferencia de tuberías, acá el P&ID nunca
+ * escribe solo — esto es una SUGERENCIA que hay que aprobar a mano
+ * (GET .../instruments/pendientes-equipo). */
+export interface PendienteEquipo {
+  instrumentId: string;
+  tagInstrumento: string;
+  equipoAsociadoTag: string;
+  equipoSugeridoId: string | null;
+  equipoSugeridoTag: string | null;
+  equipoSugeridoDescripcion: string | null;
+}
+
+export interface PendientesEquipoResponse {
+  projectId: string;
+  pendientes: PendienteEquipo[];
 }
 
 export interface EquipmentResponse {
@@ -2173,6 +2200,7 @@ export interface Tuberia {
   id: string;
   projectId: string;
   tagLinea: string | null;
+  tagAnterior: string | null;
   tamanoDiametro: string | null;
   materialTuberia: string | null;
   materialRevestimiento: string | null;
@@ -2181,6 +2209,9 @@ export interface Tuberia {
   normaBridas: string | null;
   caraBridas: string | null;
   conexionInstrumento: string | null;
+  // Solo viene poblado en GET (lista/detalle) — cuántos instrumentos
+  // activos usan esta tubería. Determina si "Eliminar" puede ofrecerse.
+  tagsAsociados?: number;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -2195,7 +2226,23 @@ export interface TuberiaResponse {
   tuberia: Tuberia;
 }
 
-export type TuberiaInput = Omit<Tuberia, 'id' | 'projectId' | 'active' | 'createdAt' | 'updatedAt'>;
+export type TuberiaInput = Omit<Tuberia, 'id' | 'projectId' | 'active' | 'createdAt' | 'updatedAt' | 'tagsAsociados'>;
+
+/** Instrumento cuya línea de P&ID no coincide con su tubería en HD (CAMBIO)
+ * o que nunca tuvo tubería vinculada (FALTANTE). Ver GET .../tuberias/pendientes. */
+export interface PendienteTuberia {
+  instrumentId: string;
+  tagInstrumento: string;
+  lineaPnid: string;
+  tuberiaId: string | null;
+  tagLineaActual: string | null;
+  tipo: 'CAMBIO' | 'FALTANTE';
+}
+
+export interface PendientesTuberiaResponse {
+  projectId: string;
+  pendientes: PendienteTuberia[];
+}
 
 export interface TagProceso {
   id: string;

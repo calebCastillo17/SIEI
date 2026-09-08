@@ -4,6 +4,7 @@ import type { FormEvent } from 'react';
 import type { SignalInput } from '../api/types';
 import type { SignalFormOptions } from './useSignalFormOptions';
 import { CatalogSelect } from './CatalogSelect';
+import { sugerirDesdeTipoSenalPnid } from '../lib/tipoSenalPnidSugerencia';
 
 type OwnerType = 'instrumento' | 'equipo';
 
@@ -134,6 +135,30 @@ export function SignalForm({
     });
   }
 
+  /*
+   * Sugerencia desde tipoSenalPnid (P&ID) — decisión del usuario. Solo
+   * aplica cuando la clase todavía está vacía (una señal nueva recién
+   * eligiendo dueño) — nunca pisa una elección ya hecha, ni al editar una
+   * señal existente (que ya trae su claseSenalId cargado).
+   */
+  function handleSelectInstrumento(next: string | null) {
+    set('instrumentoId', next);
+    if (!next || value.claseSenalId) return;
+
+    const instrumento = options.instruments.find((i) => i.id === next);
+    const sugerencia = sugerirDesdeTipoSenalPnid(instrumento?.tipoSenalPnid ?? null);
+    if (!sugerencia) return;
+
+    const claseId = options.signalClasses.find((c) => c.codigo === sugerencia.claseCodigo)?.id ?? null;
+    if (!claseId) return;
+
+    const tipoIoId = sugerencia.tipoIoCodigo
+      ? (options.ioTypes.find((t) => t.codigo === sugerencia.tipoIoCodigo)?.id ?? null)
+      : null;
+
+    setValue((prev) => ({ ...prev, claseSenalId: claseId, tipoIoId }));
+  }
+
   function setText(key: keyof SignalInput, raw: string) {
     set(key, (raw.length === 0 ? null : raw) as SignalInput[typeof key]);
   }
@@ -222,14 +247,22 @@ export function SignalForm({
         </div>
 
         {ownerType === 'instrumento' ? (
-          <CatalogSelect
-            required
-            disabled={disabled || submitting}
-            value={value.instrumentoId}
-            onChange={(next) => set('instrumentoId', next)}
-            options={instrumentOptions}
-            emptyLabel="— elegir instrumento —"
-          />
+          <>
+            <CatalogSelect
+              required
+              disabled={disabled || submitting}
+              value={value.instrumentoId}
+              onChange={handleSelectInstrumento}
+              options={instrumentOptions}
+              emptyLabel="— elegir instrumento —"
+            />
+            {!value.claseSenalId && (
+              <p className="form__note">
+                Si el instrumento trae "Tipo de señal" del P&amp;ID (120 VAC, 4 a 20 mA + HART, RESISTENCIA, COM),
+                la clase y el tipo de E/S se sugieren solos — revisalos igual antes de guardar.
+              </p>
+            )}
+          </>
         ) : (
           <CatalogSelect
             required

@@ -1,5 +1,62 @@
-import { DIFFABLE_FIELDS, type PnidField } from './headers.js';
+import { DIFFABLE_FIELDS, normalizeHeader, type PnidField } from './headers.js';
 import type { ParsedRow } from './parseExcel.js';
+
+/**
+ * "Description" (inglés, columna reconocida pero deliberadamente NO
+ * sincronizada — ver KNOWN_UNSYNCED_HEADERS en headers.ts) es, en la
+ * práctica, la única forma de distinguir una fila que representa un
+ * INSTRUMENTO real de una fila que en realidad es la representación de
+ * una SEÑAL de un instrumento que ya existe (hallazgo real: 286 filas del
+ * reporte 620 con Description="PRIMARY ACCESSIBLE DCS"/"PRIMARY
+ * INACCESSIBLE DCS", Tag tipo "S620-PI-5053", Instrumento Asociado
+ * apuntando siempre a un instrumento real ya existente).
+ *
+ * Decisión explícita del usuario: estas filas NUNCA deben crear ni
+ * actualizar un nucleo.instrumento — son señales, no instrumentos, y las
+ * procesa (hoy, manualmente; a futuro, un motor de señales aparte) otro
+ * flujo, no este. Se leen de `datosFuente` (nunca de `fields`, porque
+ * Description sigue sin ser un campo sincronizado) buscando por header
+ * normalizado, no por texto exacto — mismo criterio de robustez que el
+ * resto del importador.
+ */
+const DESCRIPTIONS_DE_SENAL = new Set(['PRIMARY ACCESSIBLE DCS', 'PRIMARY INACCESSIBLE DCS']);
+const DESCRIPTION_HEADER_NORMALIZADO = normalizeHeader('Description');
+
+function obtenerDescriptionCruda(row: ParsedRow): string | null {
+  for (const [header, value] of Object.entries(row.datosFuente)) {
+    if (normalizeHeader(header) !== DESCRIPTION_HEADER_NORMALIZADO) continue;
+    return typeof value === 'string' ? value.trim() : null;
+  }
+  return null;
+}
+
+function esFilaDeSenal(row: ParsedRow): boolean {
+  const desc = obtenerDescriptionCruda(row);
+  return desc !== null && DESCRIPTIONS_DE_SENAL.has(desc.toUpperCase());
+}
+
+/** Señal ya vinculada a un reporte P&ID por su `codigo_senal` (= PnPID de
+ * la fila ES_SENAL que la originó — ver migración 046). Un subconjunto de
+ * nucleo.senal con exactamente los campos que este motor puede llegar a
+ * leer o escribir: tagSenal/servicio (sincronizables, ver `SenalFieldDiff`
+ * más abajo) y updatedAt (mismo chequeo de concurrencia que instrumentos,
+ * vía `senalUpdatedAtPreview`). */
+export interface SenalSnapshot {
+  id: string;
+  tagSenal: string | null;
+  servicio: string | null;
+  updatedAt: string | null;
+}
+
+/** Diff de un campo DE LA SEÑAL (no del instrumento — 'tagSenal'/'servicio'
+ * no son PnidField). Solo estos dos campos se sincronizan por ahora: ver
+ * comentario de cabecera de la migración 046 sobre por qué tipo_io_id
+ * queda deliberadamente afuera. */
+export interface SenalFieldDiff {
+  campo: 'tagSenal' | 'servicio';
+  anterior: string | null;
+  nuevo: string | null;
+}
 
 /** Instrumento existente, tal como lo necesita el comparador — un
  * subconjunto de nucleo.instrumento con los campos que el import puede
@@ -24,6 +81,11 @@ export interface InstrumentSnapshot {
   planoPnid: string | null;
   lineaPnid: string | null;
   tipoSenalPnid: string | null;
+  /** Migración 044 — dato de contenido, no de matching: refleja la
+   * columna "Listado" del reporte tal cual, sin gatear si la fila se
+   * procesa o no (eso cambió respecto al diseño original — ver el
+   * comentario grande más abajo, en buildComparisonPlan). */
+  listado: boolean;
   equipoAsociadoTag: string | null;
   instrumentoAsociadoTag: string | null;
   /** Señales CONTROL/COM activas que hoy lo tienen como dueño o como
@@ -64,10 +126,14 @@ export interface ComparisonResultEntry {
   pnpid: string | null;
   tagInstrumento: string | null;
   instrumentoId: string | null;
+  /** Valor de Listado que trae ESTA fila — null cuando no hay fila fuente
+   * (NO_EXISTE_EN_PNID del barrido final): ahí no se escribe nada, el
+   * instrumento conserva el listado que ya tenía. */
+  listado: boolean | null;
   resultadoCodigo: string;
   /** Diffs estructurados para DATOS_MODIFICADOS/TAG_MODIFICADO, o un texto
    * explicativo simple para REQUIERE_REVISION/TAG_DUPLICADO. */
-  diferencias: FieldDiff[] | DetalleTexto | null;
+  diferencias: FieldDiff[] | SenalFieldDiff[] | DetalleTexto | null;
   requiereRevision: boolean;
   instrumentoUpdatedAtPreview: string | null;
   /** Solo poblado para resultadoCodigo = NO_EXISTE_EN_PNID cuando el
@@ -80,6 +146,19 @@ export interface ComparisonResultEntry {
     puntosConexion: number;
     lazos: number;
     enlacesCom: number;
+  } | null;
+  /** Solo poblado para resultadoCodigo = ES_SENAL (cuando el `codigo_senal`
+   * de una señal existente coincide con el PnPID de esta fila) o
+   * SENAL_SIN_MATCH_EN_REPORTE (barrido final, señal vinculada que ya no
+   * aparece en el reporte) — ver migración 046. `cambios` viene vacío
+   * cuando la señal vinculada no tiene ninguna diferencia con el reporte
+   * (nada que aplicar, informativo nada más). Nunca poblado para ninguna
+   * otra clasificación — ES_SENAL nunca toca nucleo.instrumento, y este
+   * motor nunca toca nucleo.instrumento tampoco. */
+  senalVinculada: {
+    senalId: string;
+    senalUpdatedAtPreview: string | null;
+    cambios: SenalFieldDiff[];
   } | null;
 }
 
@@ -95,6 +174,13 @@ export interface ComparisonPlanInput {
   /** Solo los administrados por esta fuente (fuente_pnpid = 'PLANT3D',
    * pnpid NOT NULL) — alcance de NO_EXISTE_EN_PNID (corrección C). */
   plant3dManagedByPnpid: Map<string, InstrumentSnapshot>;
+  /** Señales activas del proyecto con `codigo_senal` poblado, indexadas por
+   * ese código (= PnPID del reporte que las originó) — motor de
+   * reimportación de señales, migración 046. Vacío en proyectos que nunca
+   * corrieron la migración de datos de señales CONTROL 620; el motor
+   * simplemente no encuentra match y ES_SENAL se comporta como antes
+   * (puramente informativo). */
+  existingSenalesByCodigo: Map<string, SenalSnapshot>;
 }
 
 function compareFields(
@@ -118,19 +204,38 @@ function compareFields(
   return diffs;
 }
 
+/** Igual que compareFields, pero además compara `listado` — que no vive en
+ * `row.fields` (parseExcel.ts lo saca aparte, junto con pnpid/
+ * tagInstrumento, porque dirige matching/identidad) ni en DIFFABLE_FIELDS
+ * (mismo motivo). Un cambio de Listado solo, sin ningún otro campo
+ * distinto, alcanza para clasificar la fila como DATOS_MODIFICADOS. */
+function compareFieldsIncludingListado(
+  existing: InstrumentSnapshot,
+  row: ParsedRow,
+  presentFields: Set<PnidField>
+): FieldDiff[] {
+  const diffs = compareFields(existing, row, presentFields);
+  if (existing.listado !== row.listado) {
+    diffs.push({ campo: 'listado', anterior: String(existing.listado), nuevo: String(row.listado) });
+  }
+  return diffs;
+}
+
 function makeEntry(
   filaIndex: number | null,
   row: ParsedRow | null,
   instrumento: InstrumentSnapshot | undefined,
   resultadoCodigo: string,
-  diferencias: FieldDiff[] | DetalleTexto | null,
-  requiereRevision: boolean
+  diferencias: FieldDiff[] | SenalFieldDiff[] | DetalleTexto | null,
+  requiereRevision: boolean,
+  senalVinculada: ComparisonResultEntry['senalVinculada'] = null
 ): ComparisonResultEntry {
   return {
     filaIndex,
     pnpid: row?.pnpid ?? instrumento?.pnpid ?? null,
     tagInstrumento: row?.tagInstrumento ?? instrumento?.tagInstrumento ?? null,
     instrumentoId: instrumento?.id ?? null,
+    listado: row?.listado ?? null,
     resultadoCodigo,
     diferencias,
     requiereRevision,
@@ -140,8 +245,35 @@ function makeEntry(
       const { senalesActivas, puntosConexion, lazos, enlacesCom } = instrumento;
       if (senalesActivas === 0 && puntosConexion === 0 && lazos === 0 && enlacesCom === 0) return null;
       return { senalesActivas, puntosConexion, lazos, enlacesCom };
-    })()
+    })(),
+    senalVinculada
   };
+}
+
+/** Calcula, para una fila ES_SENAL cuyo `codigo_senal` ya coincide con una
+ * señal existente, qué cambiaría en esa señal — motor de reimportación de
+ * señales (migración 046). Solo tagSenal/servicio (ver comentario de
+ * cabecera de esa migración sobre por qué tipoIoId queda afuera).
+ * tagSenal solo se recalcula cuando el reporte trae "Type" para esta fila
+ * (columna ausente/vacía => no se puede derivar el tag nuevo, no se
+ * compara ni se propone cambio para ese campo puntual). */
+function calcularCambiosSenal(senalExistente: SenalSnapshot, row: ParsedRow, instrumentoReal: InstrumentSnapshot): SenalFieldDiff[] {
+  const cambios: SenalFieldDiff[] = [];
+
+  const tipo = row.fields.tipoInstrumento ?? null;
+  if (tipo) {
+    const tagPropuesto = `${instrumentoReal.tagInstrumento}_${tipo}`;
+    if ((senalExistente.tagSenal ?? null) !== tagPropuesto) {
+      cambios.push({ campo: 'tagSenal', anterior: senalExistente.tagSenal ?? null, nuevo: tagPropuesto });
+    }
+  }
+
+  const servicioPropuesto = row.fields.servicio ?? null;
+  if ((senalExistente.servicio ?? null) !== servicioPropuesto) {
+    cambios.push({ campo: 'servicio', anterior: senalExistente.servicio ?? null, nuevo: servicioPropuesto });
+  }
+
+  return cambios;
 }
 
 /**
@@ -150,8 +282,13 @@ function makeEntry(
  * administrados por Plant3D que desaparecieron del reporte por completo.
  */
 export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResultEntry[] {
-  const { rows, presentFields, existingByPnpid, existingByTag, plant3dManagedByPnpid } = input;
+  const { rows, presentFields, existingByPnpid, existingByTag, plant3dManagedByPnpid, existingSenalesByCodigo } = input;
   const results: ComparisonResultEntry[] = [];
+
+  /** Códigos de señales ya vinculadas (existingSenalesByCodigo) vistos en
+   * este archivo — el complemento, al final, son señales cuyo PnPID
+   * desapareció por completo (SENAL_SIN_MATCH_EN_REPORTE). */
+  const senalesVinculadasVistas = new Set<string>();
 
   const seenPnpidsInFile = new Set<string>();
   /** IDs de instrumentos ya resueltos por una fila del archivo — más
@@ -174,7 +311,15 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
 
   rows.forEach((row, idx) => {
     if (row.pnpid) seenPnpidsInFile.add(row.pnpid);
-    if (row.listado && row.tagInstrumento && row.pnpid) {
+    // Una fila de señal (ver esFilaDeSenal) nunca crea/actualiza un
+    // instrumento — no participa de la detección de TAG/PnPID duplicado
+    // de ESTE motor (el de instrumentos). Se resuelve aparte, más abajo.
+    if (esFilaDeSenal(row)) return;
+    // Migración 044: Listado ya NO gatea si la fila participa — es un
+    // dato de contenido más (ver comentario grande más abajo). Una fila
+    // con Listado=False y tag+pnpid presentes compite en la detección de
+    // TAG/PnPID duplicado exactamente igual que cualquier otra.
+    if (row.tagInstrumento && row.pnpid) {
       eligibleIndexes.push(idx);
       newTagByPnpidInFile.set(row.pnpid, row.tagInstrumento);
     }
@@ -213,10 +358,83 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
     [...tagToEligiblePnpids.entries()].filter(([, pnpids]) => pnpids.size > 1).map(([tag]) => tag)
   );
 
+  /*
+   * Decisión explícita del usuario (dos rondas de aclaración): "Listado"
+   * es un dato de CONTENIDO del instrumento (como tecnología o servicio),
+   * no un interruptor de "crear o no crear". Una fila con Listado=False
+   * pasa por EXACTAMENTE el mismo camino que cualquier otra — se crea si
+   * es nueva, se actualiza si ya existe, incluida la detección de TAG/
+   * PnPID duplicado — la única diferencia es que el instrumento resultante
+   * queda con listado=0. El Master y el LDI filtran por listado=1 para no
+   * mostrarlo/imprimirlo, pero el dato vive completo en la base ("se
+   * guarda todo, pero los no listados no se muestran").
+   *
+   * NO_EXISTE_EN_PNID conserva su significado original y ÚNICO: el
+   * instrumento (fuente PLANT3D) desapareció del archivo POR COMPLETO —
+   * ni siquiera aparece como fila con Listado=False. Ese es el único caso
+   * que se marca como candidato a revisión/eliminación; un Listado=False
+   * que SIGUE apareciendo en el archivo nunca cae ahí, solo se actualiza
+   * como una fila más.
+   */
   rows.forEach((row, idx) => {
-    if (!row.listado) {
-      const existing = row.pnpid ? existingByPnpid.get(row.pnpid) : undefined;
-      results.push(makeEntry(idx, row, existing, 'NO_LISTADO', null, false));
+    if (esFilaDeSenal(row)) {
+      // Fila de señal, no de instrumento — decisión explícita del usuario.
+      // Nunca crea ni actualiza nucleo.instrumento. Cuando el "Instrumento
+      // Asociado" resuelve a un instrumento real ya existente, se informa
+      // su tag/id como texto (útil para un futuro motor de señales) — pero
+      // SIN pasarlo como `instrumento` a makeEntry: ese instrumento real
+      // casi siempre tiene su PROPIA fila en el mismo archivo (su propio
+      // OK/DATOS_MODIFICADOS) y puede tener varias filas de señal más
+      // apuntándole (varios canales del mismo instrumento) — si esta fila
+      // también reclamara su instrumento_id, dos o más resultados del
+      // mismo import chocarían contra UX_importacion_pnid_resultado_
+      // instrumento (única por (importacion_id, instrumento_id)). Si no
+      // resuelve, se marca REQUIERE_REVISION en vez de dejarla flotando
+      // sin explicación ni, mucho menos, crear un instrumento fantasma
+      // para sostenerla.
+      const asociadoTag = row.fields.instrumentoAsociadoTag ?? null;
+      const instrumentoReal = asociadoTag ? existingByTag.get(asociadoTag) : undefined;
+      if (instrumentoReal) {
+        // Motor de reimportación de señales (migración 046): si el PnPID de
+        // ESTA fila ya coincide con el codigo_senal de una señal existente
+        // (vínculo persistente, independiente del dueño), se informan los
+        // cambios detectados en tagSenal/servicio — sin tocar nunca
+        // nucleo.instrumento, exactamente igual que antes.
+        const senalExistente = row.pnpid ? existingSenalesByCodigo.get(row.pnpid) : undefined;
+        let senalVinculada: ComparisonResultEntry['senalVinculada'] = null;
+        // Por defecto (no vinculada, o vinculada sin cambios): texto
+        // informativo nada más, no hay nada que APPLY deba escribir. Si HAY
+        // cambios, `diferencias` pasa a ser el array estructurado
+        // SenalFieldDiff[] — mismo criterio que DATOS_MODIFICADOS/
+        // TAG_MODIFICADO para instrumentos: solo un array estructurado es
+        // reconstruible en APPLY sin volver a leer el archivo.
+        let diferencias: ComparisonResultEntry['diferencias'] = {
+          detalle: `Señal del instrumento "${asociadoTag}" (id ${instrumentoReal.id}) — no crea ni actualiza ningún instrumento.`
+        };
+
+        if (senalExistente) {
+          senalesVinculadasVistas.add(row.pnpid!);
+          const cambios = calcularCambiosSenal(senalExistente, row, instrumentoReal);
+          senalVinculada = { senalId: senalExistente.id, senalUpdatedAtPreview: senalExistente.updatedAt ?? null, cambios };
+          diferencias =
+            cambios.length > 0
+              ? cambios
+              : { detalle: `Señal del instrumento "${asociadoTag}" (id ${instrumentoReal.id}), vinculada a la señal ${senalExistente.id} — sin cambios.` };
+        }
+
+        results.push(makeEntry(idx, row, undefined, 'ES_SENAL', diferencias, false, senalVinculada));
+      } else {
+        results.push(
+          makeEntry(
+            idx,
+            row,
+            undefined,
+            'REQUIERE_REVISION',
+            { detalle: `Fila de señal cuyo "Instrumento Asociado" ("${asociadoTag ?? 'vacío'}") no existe como instrumento activo — no se crea ningún instrumento para sostenerla.` },
+            true
+          )
+        );
+      }
       return;
     }
 
@@ -232,7 +450,7 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
           row,
           undefined,
           'REQUIERE_REVISION',
-          { detalle: 'PnPID vacío en una fila con Listado=True y Tag presente.' },
+          { detalle: 'PnPID vacío en una fila con Tag presente.' },
           true
         )
       );
@@ -323,7 +541,7 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
           tagOwner.fuentePnpid === 'PLANT3D' &&
           !resolvedInstrumentoIds.has(tagOwner.id)
         ) {
-          const contentDiffs = compareFields(tagOwner, row, presentFields);
+          const contentDiffs = compareFieldsIncludingListado(tagOwner, row, presentFields);
           const diffs: FieldDiff[] = [
             { campo: 'pnpid', anterior: tagOwner.pnpid, nuevo: row.pnpid },
             ...contentDiffs
@@ -440,7 +658,7 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
         // TAG_MODIFICADO normal más abajo.
       }
 
-      const diffs = compareFields(matchByPnpid, row, presentFields);
+      const diffs = compareFieldsIncludingListado(matchByPnpid, row, presentFields);
       results.push(
         makeEntry(idx, row, matchByPnpid, 'TAG_MODIFICADO', diffs.length > 0 ? diffs : null, false)
       );
@@ -448,7 +666,7 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
       return;
     }
 
-    const diffs = compareFields(matchByPnpid, row, presentFields);
+    const diffs = compareFieldsIncludingListado(matchByPnpid, row, presentFields);
     if (diffs.length > 0) {
       results.push(makeEntry(idx, row, matchByPnpid, 'DATOS_MODIFICADOS', diffs, false));
     } else {
@@ -465,6 +683,28 @@ export function buildComparisonPlan(input: ComparisonPlanInput): ComparisonResul
   for (const [pnpid, instrumento] of plant3dManagedByPnpid) {
     if (seenPnpidsInFile.has(pnpid) || resolvedInstrumentoIds.has(instrumento.id)) continue;
     results.push(makeEntry(null, null, instrumento, 'NO_EXISTE_EN_PNID', null, false));
+  }
+
+  // Señales ya vinculadas (codigo_senal) cuyo PnPID desapareció por
+  // completo de este reporte — motor de reimportación de señales
+  // (migración 046). NUNCA se borran ni desvinculan (decisión explícita
+  // del usuario), solo se informa — sin vía de eliminación asociada, a
+  // diferencia de NO_EXISTE_EN_PNID para instrumentos.
+  for (const [codigo, senal] of existingSenalesByCodigo) {
+    if (senalesVinculadasVistas.has(codigo)) continue;
+    results.push({
+      filaIndex: null,
+      pnpid: codigo,
+      tagInstrumento: null,
+      instrumentoId: null,
+      listado: null,
+      resultadoCodigo: 'SENAL_SIN_MATCH_EN_REPORTE',
+      diferencias: { detalle: `La señal ${senal.id} (tag actual "${senal.tagSenal ?? 'sin tag'}") está vinculada al PnPID "${codigo}", que ya no aparece en este reporte — no se modifica ni desvincula.` },
+      requiereRevision: false,
+      instrumentoUpdatedAtPreview: null,
+      recursosEnRiesgo: null,
+      senalVinculada: { senalId: senal.id, senalUpdatedAtPreview: senal.updatedAt ?? null, cambios: [] }
+    });
   }
 
   return results;

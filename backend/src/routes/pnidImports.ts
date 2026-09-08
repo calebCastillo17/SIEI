@@ -15,9 +15,10 @@ import { getDbPool } from '../db/sql.js';
 import {
   parsePnidExcelBuffer,
   extractFieldsFromSnapshot,
+  parseListado,
   PnidFileStructureError
 } from '../lib/pnidImport/parseExcel.js';
-import { buildComparisonPlan, type InstrumentSnapshot } from '../lib/pnidImport/compare.js';
+import { buildComparisonPlan, type InstrumentSnapshot, type SenalSnapshot } from '../lib/pnidImport/compare.js';
 import { computePresentFields, PNID_FIELD_MAX_LENGTH, type PnidField } from '../lib/pnidImport/headers.js';
 
 /*
@@ -93,7 +94,10 @@ function serializeImportacion(row: Record<string, any>) {
       pnpidActualizado: row.conteo_pnpid_actualizado,
       excluidosListado: row.conteo_excluidos_listado,
       noExisteReporte: row.conteo_no_existe_reporte,
-      requiereRevision: row.conteo_requiere_revision
+      requiereRevision: row.conteo_requiere_revision,
+      esSenal: row.conteo_es_senal,
+      senalActualizada: row.conteo_senal_actualizada,
+      senalSinMatchReporte: row.conteo_senal_sin_match_reporte
     },
     advertencias: row.advertencias ? JSON.parse(row.advertencias) : { missingKnownColumns: [], unknownColumns: [] },
     fechaCarga: row.fecha_carga,
@@ -188,7 +192,8 @@ pnidImportsRouter.get(
           SELECT id, proyecto_id, nombre_archivo, hash_archivo, fuente, estado,
                  total_filas, total_listado_true, conteo_sin_cambios, conteo_nuevos,
                  conteo_tag_modificado, conteo_datos_modificados, conteo_pnpid_actualizado,
-                 conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision, advertencias,
+                 conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision, conteo_es_senal,
+                 conteo_senal_actualizada, conteo_senal_sin_match_reporte, advertencias,
                  fecha_carga, fecha_aplicacion, created_by, applied_by, created_at, updated_at
           FROM integracion.importacion_pnid
           WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
@@ -234,7 +239,8 @@ pnidImportsRouter.get(
           SELECT id, proyecto_id, nombre_archivo, hash_archivo, fuente, estado,
                  total_filas, total_listado_true, conteo_sin_cambios, conteo_nuevos,
                  conteo_tag_modificado, conteo_datos_modificados, conteo_pnpid_actualizado,
-                 conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision, advertencias,
+                 conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision, conteo_es_senal,
+                 conteo_senal_actualizada, conteo_senal_sin_match_reporte, advertencias,
                  fecha_carga, fecha_aplicacion, created_by, applied_by, created_at, updated_at
           FROM integracion.importacion_pnid
           WHERE id = TRY_CONVERT(BIGINT, @importacion_id)
@@ -335,8 +341,8 @@ pnidImportsRouter.post(
           SELECT i.id, i.tag_instrumento, i.pnpid, i.fuente_pnpid, i.updated_at,
                  i.descripcion, i.tipo_instrumento, i.servicio, i.sistema, i.ubicacion, i.nodo,
                  i.tag_anterior, i.tecnologia, i.funcionamiento, i.cuerpo_instrumento,
-                 i.conexion_proceso, i.plano_pnid, i.linea_pnid, i.tipo_senal_pnid, i.equipo_asociado_tag,
-                 i.instrumento_asociado_tag,
+                 i.conexion_proceso, i.plano_pnid, i.linea_pnid, i.tipo_senal_pnid, i.listado,
+                 i.equipo_asociado_tag, i.instrumento_asociado_tag,
                  (
                    SELECT COUNT(*) FROM nucleo.senal s
                    WHERE s.proyecto_id = i.proyecto_id AND s.activo = 1
@@ -384,6 +390,7 @@ pnidImportsRouter.post(
           planoPnid: row.plano_pnid,
           lineaPnid: row.linea_pnid,
           tipoSenalPnid: row.tipo_senal_pnid,
+          listado: Boolean(row.listado),
           equipoAsociadoTag: row.equipo_asociado_tag,
           instrumentoAsociadoTag: row.instrumento_asociado_tag,
           senalesActivas: Number(row.senales_activas),
@@ -401,12 +408,50 @@ pnidImportsRouter.post(
         existingByTag.set(snapshot.tagInstrumento.trim(), snapshot);
       }
 
+      // --- Señales activas ya vinculadas por codigo_senal (= PnPID del
+      // reporte que las originó) — motor de reimportación de señales,
+      // migración 046.
+      //
+      // `codigo_senal` es un campo legacy de doble uso (migración 013): la
+      // gran mayoría (856/1031 en datos reales de este proyecto) viene del
+      // Excel ORIGINAL (`ID_SENAL`, formato "620-SIG-000001", cargado por
+      // un script de datos completamente ajeno a P&ID) — esas NUNCA fueron
+      // vinculadas a ningún reporte P&ID y no deben entrar acá, o el
+      // barrido final las marcaría en masa como SENAL_SIN_MATCH_EN_REPORTE
+      // (confirmado con datos reales: 856 falsos positivos antes de este
+      // filtro). Solo las 175 señales CONTROL migradas en esta sesión
+      // tienen codigo_senal = PnPID real (puramente numérico, ej.
+      // "172198") — el filtro `NOT LIKE '%[^0-9]%'` separa ambos formatos
+      // sin ambigüedad, ambos verificados con datos reales.
+      const senalesResult = await pool
+        .request()
+        .input('proyecto_id', sql.NVarChar(30), projectId)
+        .query(`
+          SELECT id, codigo_senal, tag_senal, servicio, updated_at
+          FROM nucleo.senal
+          WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND activo = 1
+            AND codigo_senal IS NOT NULL
+            AND codigo_senal NOT LIKE '%[^0-9]%';
+        `);
+
+      const existingSenalesByCodigo = new Map<string, SenalSnapshot>();
+      for (const row of senalesResult.recordset) {
+        existingSenalesByCodigo.set(row.codigo_senal, {
+          id: String(row.id),
+          tagSenal: row.tag_senal,
+          servicio: row.servicio,
+          updatedAt: row.updated_at
+        });
+      }
+
       const plan = buildComparisonPlan({
         rows: parsed.rows,
         presentFields: parsed.presentFields,
         existingByPnpid,
         existingByTag,
-        plant3dManagedByPnpid
+        plant3dManagedByPnpid,
+        existingSenalesByCodigo
       });
 
       const counts = {
@@ -417,7 +462,10 @@ pnidImportsRouter.post(
         pnpidActualizado: 0,
         excluidosListado: 0,
         noExisteReporte: 0,
-        requiereRevision: 0
+        requiereRevision: 0,
+        esSenal: 0,
+        senalActualizada: 0,
+        senalSinMatchReporte: 0
       };
 
       for (const entry of plan) {
@@ -427,8 +475,22 @@ pnidImportsRouter.post(
           case 'TAG_MODIFICADO': counts.tagModificado++; break;
           case 'DATOS_MODIFICADOS': counts.datosModificados++; break;
           case 'PNPID_ACTUALIZADO': counts.pnpidActualizado++; break;
+          // NO_LISTADO ya no lo produce compare.ts (migración 044: Listado
+          // pasó a ser un campo de contenido más, ya no excluye la fila
+          // del procesamiento) — esta rama y la columna conteo_excluidos_
+          // listado quedan solo por compatibilidad con imports históricos
+          // previos a esa migración, que sí pueden tener este código.
           case 'NO_LISTADO': counts.excluidosListado++; break;
           case 'NO_EXISTE_EN_PNID': counts.noExisteReporte++; break;
+          case 'ES_SENAL':
+            counts.esSenal++;
+            // Motor de reimportación de señales (migración 046): una
+            // ES_SENAL vinculada con cambios reales cuenta aparte, además
+            // de sumar a esSenal — informativo en PREVIEW, aplicado en
+            // APPLY (ver más abajo).
+            if (entry.senalVinculada && entry.senalVinculada.cambios.length > 0) counts.senalActualizada++;
+            break;
+          case 'SENAL_SIN_MATCH_EN_REPORTE': counts.senalSinMatchReporte++; break;
           case 'REQUIERE_REVISION':
           case 'TAG_DUPLICADO':
           case 'TAG_VACIO':
@@ -477,6 +539,9 @@ pnidImportsRouter.post(
         .input('excluidos_listado', sql.Int, counts.excluidosListado)
         .input('no_existe_reporte', sql.Int, counts.noExisteReporte)
         .input('requiere_revision', sql.Int, counts.requiereRevision)
+        .input('es_senal', sql.Int, counts.esSenal)
+        .input('senal_actualizada', sql.Int, counts.senalActualizada)
+        .input('senal_sin_match_reporte', sql.Int, counts.senalSinMatchReporte)
         .input('advertencias', sql.NVarChar(sql.MAX), JSON.stringify(advertencias))
         .input('created_by', sql.NVarChar(30), userId)
         .query(`
@@ -485,13 +550,14 @@ pnidImportsRouter.post(
             total_filas, total_listado_true,
             conteo_sin_cambios, conteo_nuevos, conteo_tag_modificado, conteo_datos_modificados,
             conteo_pnpid_actualizado, conteo_excluidos_listado, conteo_no_existe_reporte, conteo_requiere_revision,
-            advertencias, created_by
+            conteo_es_senal, conteo_senal_actualizada, conteo_senal_sin_match_reporte, advertencias, created_by
           )
           OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.nombre_archivo, INSERTED.hash_archivo,
                  INSERTED.fuente, INSERTED.estado, INSERTED.total_filas, INSERTED.total_listado_true,
                  INSERTED.conteo_sin_cambios, INSERTED.conteo_nuevos, INSERTED.conteo_tag_modificado,
                  INSERTED.conteo_datos_modificados, INSERTED.conteo_pnpid_actualizado, INSERTED.conteo_excluidos_listado,
-                 INSERTED.conteo_no_existe_reporte, INSERTED.conteo_requiere_revision,
+                 INSERTED.conteo_no_existe_reporte, INSERTED.conteo_requiere_revision, INSERTED.conteo_es_senal,
+                 INSERTED.conteo_senal_actualizada, INSERTED.conteo_senal_sin_match_reporte,
                  INSERTED.advertencias, INSERTED.fecha_carga, INSERTED.fecha_aplicacion,
                  INSERTED.created_by, INSERTED.applied_by, INSERTED.created_at, INSERTED.updated_at
           VALUES (
@@ -499,7 +565,7 @@ pnidImportsRouter.post(
             @total_filas, @total_listado_true,
             @sin_cambios, @nuevos, @tag_modificado, @datos_modificados,
             @pnpid_actualizado, @excluidos_listado, @no_existe_reporte, @requiere_revision,
-            @advertencias, TRY_CONVERT(BIGINT, @created_by)
+            @es_senal, @senal_actualizada, @senal_sin_match_reporte, @advertencias, TRY_CONVERT(BIGINT, @created_by)
           );
         `);
 
@@ -552,17 +618,20 @@ pnidImportsRouter.post(
           .input('diferencias', sql.NVarChar(sql.MAX), entry.diferencias === null ? null : JSON.stringify(entry.diferencias))
           .input('requiere_revision', sql.Bit, entry.requiereRevision)
           .input('instrumento_updated_at_preview', sql.DateTime2, entry.instrumentoUpdatedAtPreview)
+          .input('senal_id', sql.NVarChar(30), entry.senalVinculada?.senalId ?? null)
+          .input('senal_updated_at_preview', sql.DateTime2, entry.senalVinculada?.senalUpdatedAtPreview ?? null)
           .query(`
             INSERT INTO integracion.importacion_pnid_resultado (
               importacion_id, proyecto_id, fila_id, pnpid, tag_instrumento,
               instrumento_id, resultado_id, diferencias, requiere_revision,
-              instrumento_updated_at_preview
+              instrumento_updated_at_preview, senal_id, senal_updated_at_preview
             )
             VALUES (
               TRY_CONVERT(BIGINT, @importacion_id), TRY_CONVERT(BIGINT, @proyecto_id),
               TRY_CONVERT(BIGINT, @fila_id), @pnpid, @tag_instrumento,
               TRY_CONVERT(BIGINT, @instrumento_id), TRY_CONVERT(BIGINT, @resultado_id),
-              @diferencias, @requiere_revision, @instrumento_updated_at_preview
+              @diferencias, @requiere_revision, @instrumento_updated_at_preview,
+              TRY_CONVERT(BIGINT, @senal_id), @senal_updated_at_preview
             );
           `);
       }
@@ -663,6 +732,7 @@ pnidImportsRouter.post(
         .query(`
           SELECT r.id, r.fila_id, r.instrumento_id, e.codigo AS resultado_codigo,
                  r.instrumento_updated_at_preview,
+                 r.diferencias, r.senal_id, r.senal_updated_at_preview,
                  f.datos_fuente
           FROM integracion.importacion_pnid_resultado r
           LEFT JOIN integracion.importacion_pnid_fila f ON f.id = r.fila_id
@@ -716,6 +786,55 @@ pnidImportsRouter.post(
         }
       }
 
+      // --- Chequeo de concurrencia para señales (motor de reimportación,
+      // migración 046) — mismo criterio que instrumentos arriba, pero solo
+      // sobre las que de verdad tienen algo que escribir (senal_id set Y
+      // `diferencias` es un array con cambios, no el texto informativo). ---
+      const senalesConCambios = resultados.filter((r: any) => {
+        if (r.senal_id === null || !r.diferencias) return false;
+        const parsed = JSON.parse(r.diferencias);
+        return Array.isArray(parsed) && parsed.length > 0;
+      });
+
+      if (senalesConCambios.length > 0) {
+        const currentSenalResult = await pool
+          .request()
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .query(`
+            SELECT id, updated_at
+            FROM nucleo.senal
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND activo = 1;
+          `);
+
+        const currentSenalUpdatedAtById = new Map<string, string | null>(
+          currentSenalResult.recordset.map((r: any) => [String(r.id), r.updated_at])
+        );
+
+        for (const r of senalesConCambios) {
+          const senalId = String(r.senal_id);
+          const currentUpdatedAt = currentSenalUpdatedAtById.get(senalId);
+          const previewUpdatedAt = r.senal_updated_at_preview ? new Date(r.senal_updated_at_preview).toISOString() : null;
+          const currentIso = currentUpdatedAt ? new Date(currentUpdatedAt).toISOString() : null;
+
+          if (currentUpdatedAt === undefined) {
+            res.status(409).json({
+              error: 'stale_pnid_preview',
+              message: `La señal #${senalId} ya no existe o fue desactivada desde que se generó este preview. Generá un nuevo preview.`
+            });
+            return;
+          }
+
+          if (currentIso !== previewUpdatedAt) {
+            res.status(409).json({
+              error: 'stale_pnid_preview',
+              message: `La señal #${senalId} fue modificada desde que se generó este preview. Generá un nuevo preview.`
+            });
+            return;
+          }
+        }
+      }
+
       const estadoCodesResult = await pool.request().query(`SELECT id, codigo FROM cat.cat_estado_pnid;`);
       const estadoIdByCodigo = new Map<string, string>(
         estadoCodesResult.recordset.map((r: any) => [r.codigo, String(r.id)])
@@ -757,6 +876,31 @@ pnidImportsRouter.post(
 
         if (codigo === 'REQUIERE_REVISION' || codigo === 'TAG_DUPLICADO' || codigo === 'TAG_VACIO') {
           continue; // nunca se aplican
+        }
+
+        // ES_SENAL: fila de señal, no de instrumento (Description=PRIMARY
+        // ACCESSIBLE/INACCESSIBLE DCS) — decisión explícita del usuario.
+        // Nunca crea ni actualiza nucleo.instrumento, ni siquiera su
+        // estado_pnid (el instrumento real asociado ya se resuelve por su
+        // PROPIA fila, en otra parte del mismo archivo). Cuando SÍ está
+        // vinculada a una señal existente (senal_id, motor de
+        // reimportación — migración 046) y compare.ts detectó cambios
+        // reales, se aplican acá (tagSenal/servicio únicamente). Sin
+        // vínculo, o vinculada sin cambios, no hay nada que hacer.
+        if (codigo === 'ES_SENAL') {
+          const cambiosSenal = r.senal_id !== null && r.diferencias ? JSON.parse(r.diferencias) : null;
+          if (r.senal_id !== null && Array.isArray(cambiosSenal) && cambiosSenal.length > 0) {
+            await applyActualizarSenal(transaction, projectId, userId, String(r.senal_id), cambiosSenal);
+          } else {
+            continue; // nada que aplicar — no se marca `aplicado`, igual que REQUIERE_REVISION
+          }
+        }
+
+        // SENAL_SIN_MATCH_EN_REPORTE: puramente informativo — la señal
+        // vinculada por codigo_senal no aparece en este reporte, pero
+        // decisión explícita del usuario: nunca se borra ni se desvincula.
+        else if (codigo === 'SENAL_SIN_MATCH_EN_REPORTE') {
+          continue;
         }
 
         const datosFuente = r.datos_fuente ? JSON.parse(r.datos_fuente) : {};
@@ -855,7 +999,7 @@ async function applyNuevoInstrumento(
 
   const columns = [
     'proyecto_id', 'tag_instrumento', 'pnpid', 'fuente_pnpid', 'estado_pnid_id',
-    'fecha_agregado', 'fecha_ultima_revision', 'created_by'
+    'listado', 'fecha_agregado', 'fecha_ultima_revision', 'created_by'
   ];
   const values = [
     'TRY_CONVERT(BIGINT, @proyecto_id)',
@@ -863,6 +1007,7 @@ async function applyNuevoInstrumento(
     '@pnpid',
     "N'PLANT3D'",
     'TRY_CONVERT(BIGINT, @estado_pnid_id)',
+    '@listado',
     'CAST(SYSUTCDATETIME() AS DATE)',
     'CAST(SYSUTCDATETIME() AS DATE)',
     'TRY_CONVERT(BIGINT, @created_by)'
@@ -873,6 +1018,13 @@ async function applyNuevoInstrumento(
     .input('tag_instrumento', sql.NVarChar(50), getFieldRaw(datosFuente, 'Tag'))
     .input('pnpid', sql.NVarChar(50), getFieldRaw(datosFuente, 'PnPID'))
     .input('estado_pnid_id', sql.NVarChar(30), estadoIdByCodigo.get('NUEVO_EN_PNID'))
+    // listado (migración 044): dato de contenido más — una fila con
+    // Listado=False SÍ crea el instrumento igual, solo que con listado=0
+    // (decisión explícita del usuario: "se guarda todo pero los no
+    // listados no se muestran"). Se re-parsea del snapshot crudo, igual
+    // que pnpid/tag_instrumento, porque extractFieldsFromSnapshot excluye
+    // los 3 campos que dirigen el matching de `fields`.
+    .input('listado', sql.Bit, parseListado(datosFuente['Listado']))
     .input('created_by', sql.NVarChar(30), userId);
 
   for (const field of Object.keys(MAPPED_FIELD_COLUMNS) as Array<keyof typeof MAPPED_FIELD_COLUMNS>) {
@@ -946,6 +1098,7 @@ async function applyActualizarInstrumento(
   const assignments = [
     'tag_instrumento = @nuevo_tag',
     'estado_pnid_id = TRY_CONVERT(BIGINT, @estado_pnid_id)',
+    'listado = @listado',
     'fecha_ultima_revision = CAST(SYSUTCDATETIME() AS DATE)',
     "fuente_pnpid = N'PLANT3D'",
     'updated_at = SYSUTCDATETIME()',
@@ -957,6 +1110,10 @@ async function applyActualizarInstrumento(
     .input('instrumento_id', sql.NVarChar(30), instrumentoId)
     .input('nuevo_tag', sql.NVarChar(50), getFieldRaw(datosFuente, 'Tag'))
     .input('estado_pnid_id', sql.NVarChar(30), estadoIdByCodigo.get(codigo))
+    // listado (migración 044): mismo criterio que applyNuevoInstrumento —
+    // se actualiza siempre, incluso cuando el único cambio real fue el
+    // propio Listado (DATOS_MODIFICADOS).
+    .input('listado', sql.Bit, parseListado(datosFuente['Listado']))
     .input('updated_by', sql.NVarChar(30), userId);
 
   // PNPID_ACTUALIZADO es el único caso donde esta función re-ancla el
@@ -1024,6 +1181,51 @@ async function applyActualizarInstrumento(
     UPDATE nucleo.instrumento
     SET ${assignments.join(',\n        ')}
     WHERE id = TRY_CONVERT(BIGINT, @instrumento_id)
+      AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+      AND activo = 1;
+  `);
+}
+
+/** Motor de reimportación de señales (migración 046) — el equivalente de
+ * applyActualizarInstrumento pero para nucleo.senal: aplica solo los
+ * campos que compare.ts ya determinó que cambiaron (tagSenal/servicio),
+ * nunca recalcula nada de nuevo acá. Nunca toca nucleo.instrumento — el
+ * dueño de la señal (instrumento_id) es un tema aparte, resuelto (para
+ * este proyecto) por reconstruirRutasSenalesControl620Reporte2.ts, no por
+ * este motor de reimportación. */
+const SENAL_COLUMN_BY_CAMPO: Record<'tagSenal' | 'servicio', { column: string; maxLength: number }> = {
+  tagSenal: { column: 'tag_senal', maxLength: 80 },
+  servicio: { column: 'servicio', maxLength: 200 }
+};
+
+async function applyActualizarSenal(
+  transaction: sql.Transaction,
+  projectId: string,
+  userId: string,
+  senalId: string,
+  cambios: Array<{ campo: 'tagSenal' | 'servicio'; nuevo: string | null }>
+): Promise<void> {
+  const request = new sql.Request(transaction);
+  request
+    .input('proyecto_id', sql.NVarChar(30), projectId)
+    .input('senal_id', sql.NVarChar(30), senalId)
+    .input('updated_by', sql.NVarChar(30), userId);
+
+  const setClauses = cambios.map((cambio, i) => {
+    const { column, maxLength } = SENAL_COLUMN_BY_CAMPO[cambio.campo];
+    const paramName = `valor_${i}`;
+    request.input(paramName, sql.NVarChar(maxLength), cambio.nuevo);
+    return `${column} = @${paramName}`;
+  });
+
+  if (setClauses.length === 0) return; // nada que aplicar (no debería llegar acá, defensivo)
+
+  await request.query(`
+    UPDATE nucleo.senal
+    SET ${setClauses.join(', ')},
+        updated_at = SYSUTCDATETIME(),
+        updated_by = TRY_CONVERT(BIGINT, @updated_by)
+    WHERE id = TRY_CONVERT(BIGINT, @senal_id)
       AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
       AND activo = 1;
   `);

@@ -196,7 +196,7 @@ const OPTIONAL_KNOWN_HEADERS = [
 
 const TRUE_LISTADO_VALUES = new Set(['true', 'verdadero', 'si', 'sí', '1', 'x', 'yes']);
 
-function parseListado(value: unknown): boolean {
+export function parseListado(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value === 1;
   const text = String(value ?? '').trim().toLowerCase();

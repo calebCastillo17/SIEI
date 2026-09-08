@@ -277,8 +277,10 @@ async function main(): Promise<void> {
       resultadosV1
     );
     check(
-      'PREVIEW V1: fila B (Listado=False) -> NO_LISTADO',
-      findResultado(resultadosV1, tagB)?.resultado === 'NO_LISTADO'
+      // Migración 044: Listado=False ya NO excluye la fila — se crea igual
+      // (con listado=false), como cualquier fila nueva.
+      'PREVIEW V1: fila B (Listado=False) -> NUEVO_EN_PNID igual, se guarda con listado=false',
+      findResultado(resultadosV1, tagB)?.resultado === 'NUEVO_EN_PNID'
     );
     check(
       'PREVIEW V1: PnPID duplicado en archivo -> REQUIERE_REVISION en ambas filas',
@@ -313,9 +315,21 @@ async function main(): Promise<void> {
     const afterApplyInstruments = (await call('admin', 'GET', INSTRUMENTS)).json?.instruments ?? [];
     const instrA = afterApplyInstruments.find((i: any) => i.tagInstrumento === tagA);
     const instrD = afterApplyInstruments.find((i: any) => i.tagInstrumento === tagD);
+    const instrB = afterApplyInstruments.find((i: any) => i.tagInstrumento === tagB);
 
     check('Instrumento A fue creado por APPLY', Boolean(instrA), afterApplyInstruments);
     check('Instrumento D fue creado por APPLY', Boolean(instrD));
+    check(
+      // Migración 044: "se guarda todo, pero los no listados no se
+      // muestran" — B SÍ se crea, con listado=false.
+      'Instrumento B (Listado=False) SÍ fue creado por APPLY, con listado=false',
+      Boolean(instrB) && instrB?.listado === false,
+      instrB
+    );
+    check(
+      'Instrumento B no aparece cuando se pide soloListados=true (Master)',
+      !(await call('admin', 'GET', `${INSTRUMENTS}?soloListados=true`)).json?.instruments?.some((i: any) => i.id === instrB?.id)
+    );
     check(
       'Instrumento A NO existe con TAG C1/C2 (fila duplicada nunca se aplicó)',
       !afterApplyInstruments.some((i: any) => i.tagInstrumento === tagC1 || i.tagInstrumento === tagC2)
@@ -470,6 +484,59 @@ async function main(): Promise<void> {
       manualAfterV2?.pnpid === null && manualAfterV2?.fuentePnpid === null,
       manualAfterV2
     );
+
+    // ===================== LISTADO=FALSE SOBRE UN INSTRUMENTO YA EXISTENTE -> DATOS_MODIFICADOS (migración 044) =====================
+    // Decisión explícita del usuario, en dos rondas: primero "tratalo como
+    // NO_EXISTE_EN_PNID", después corregido a "listado es un campo de
+    // contenido más — se guarda todo, pero los no listados no se
+    // muestran". Un instrumento ya existente cuya fila vuelve con
+    // Listado=False se ACTUALIZA normal (DATOS_MODIFICADOS), nunca se
+    // marca para eliminar — sigue activo, con todo su contenido, solo con
+    // listado=0.
+
+    const rowsListadoFalseSobreExistente: Row[] = [
+      { ...baseRowA, Tag: tagA, Descripcion: 'Descripcion CAMBIADA A', Listado: false }
+    ];
+    const bufferListadoFalse = await buildWorkbookBuffer(HEADERS, rowsListadoFalseSobreExistente);
+    const previewListadoFalse = await uploadPreview('editor', projectId, bufferListadoFalse, 'reporte-listado-false-existente.xlsx');
+    check('Preview Listado=False sobre instrumento existente (201)', previewListadoFalse.status === 201, previewListadoFalse.json);
+    const resultadoListadoFalse = findResultado(previewListadoFalse.json?.resultados ?? [], tagA);
+    check(
+      'Fila A con Listado=False (instrumento ya existente) -> DATOS_MODIFICADOS, no NO_EXISTE_EN_PNID/NO_LISTADO',
+      resultadoListadoFalse?.resultado === 'DATOS_MODIFICADOS' && resultadoListadoFalse?.instrumentoId === instrA.id,
+      resultadoListadoFalse
+    );
+    check(
+      'La diferencia incluye el propio campo listado (true -> false)',
+      Array.isArray(resultadoListadoFalse?.diferencias) &&
+        resultadoListadoFalse.diferencias.some((d: any) => d.campo === 'listado' && d.anterior === 'true' && d.nuevo === 'false'),
+      resultadoListadoFalse?.diferencias
+    );
+
+    const importIdListadoFalse: string = previewListadoFalse.json?.import?.id;
+    const applyListadoFalse = await call('editor', 'POST', `${IMPORTS}/${importIdListadoFalse}/apply`);
+    check('Apply de Listado=False (200)', applyListadoFalse.status === 200, applyListadoFalse.json);
+
+    const instrAAfterListadoFalse = (await call('admin', 'GET', `${INSTRUMENTS}/${instrA.id}`)).json?.instrument;
+    check('Tras aplicar, listado de A quedó en false', instrAAfterListadoFalse?.listado === false, instrAAfterListadoFalse);
+    check('El instrumento sigue ACTIVO (listado=false nunca desactiva ni elimina)', instrAAfterListadoFalse?.active === true);
+    check(
+      'estado_pnid de A NO quedó en NO_EXISTE_EN_PNID (solo cambió contenido, no desapareció del archivo)',
+      instrAAfterListadoFalse?.estadoPnidId !== estadoPnidCatalog.find((c: any) => c.codigo === 'NO_EXISTE_EN_PNID')?.id
+    );
+
+    // Repone listado=true para no interferir con las fases V2b/V3/V4 de
+    // más abajo, que siguen asumiendo a A como un instrumento "normal".
+    const rowsListadoRepuesto: Row[] = [
+      { ...baseRowA, Tag: tagA, Descripcion: 'Descripcion CAMBIADA A', Listado: true }
+    ];
+    const bufferListadoRepuesto = await buildWorkbookBuffer(HEADERS, rowsListadoRepuesto);
+    const previewListadoRepuesto = await uploadPreview('editor', projectId, bufferListadoRepuesto, 'reporte-listado-repuesto.xlsx');
+    const importIdListadoRepuesto: string = previewListadoRepuesto.json?.import?.id;
+    const applyListadoRepuesto = await call('editor', 'POST', `${IMPORTS}/${importIdListadoRepuesto}/apply`);
+    check('Apply repone Listado=True en A (200)', applyListadoRepuesto.status === 200, applyListadoRepuesto.json);
+    const instrAListadoRepuesto = (await call('admin', 'GET', `${INSTRUMENTS}/${instrA.id}`)).json?.instrument;
+    check('listado de A quedó de nuevo en true', instrAListadoRepuesto?.listado === true, instrAListadoRepuesto);
 
     // ===================== V2b: COLUMNA PRESENTE PERO CELDA VACIA -> SI PARTICIPA EN EL DIFF =====================
 
@@ -769,10 +836,19 @@ async function main(): Promise<void> {
         const anyRowWithTagAnterior = firstPreview.json?.resultados?.some((r: any) => r.resultado === 'NUEVO_EN_PNID');
         check('Fase B: el preview procesó filas con la columna "Tag Anterior" sin errores', Boolean(anyRowWithTagAnterior));
 
+        // Migración 044: Listado ya no excluye filas — TODAS las filas
+        // válidas (con tag+pnpid, sin duplicados) producen NUEVO_EN_PNID
+        // en un proyecto vacío, no solo las ~listadoTrueCount con
+        // Listado=True. Se compara contra totalDataRows en vez de contra
+        // listadoTrueCount (más filas nuevas que antes, no menos).
         check(
-          `Fase B: ~${listadoTrueCount} filas Listado=True producen NUEVO_EN_PNID en un proyecto vacío`,
-          firstPreview.json?.import?.conteos?.nuevos === listadoTrueCount - (firstPreview.json?.import?.conteos?.requiereRevision ?? 0),
+          `Fase B: TODAS las filas válidas (no solo las ~${listadoTrueCount} con Listado=True) producen NUEVO_EN_PNID en un proyecto vacío`,
+          firstPreview.json?.import?.conteos?.nuevos === totalDataRows - (firstPreview.json?.import?.conteos?.requiereRevision ?? 0),
           firstPreview.json?.import?.conteos
+        );
+        check(
+          'Fase B: más instrumentos nuevos que filas con Listado=True (la corrección de la migración 044 realmente amplió el alcance)',
+          (firstPreview.json?.import?.conteos?.nuevos ?? 0) > listadoTrueCount
         );
 
         const firstApply = await call('admin', 'POST', `${REAL_IMPORTS}/${firstImportId}/apply`);

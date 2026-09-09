@@ -534,11 +534,11 @@ async function main() {
 
   // --- Señales YA CREADAS (por crearSenalesControl420DesdeReporte.ts) ---
   console.log('\n--- Señales CONTROL ya creadas (dueño real, vía P&ID) ---');
-  const existingSignalsResp = await apiFetch<{ signals: Array<{ id: string; tagSenal: string | null; codigoSenal: string | null; canalId: string | null; tipoIoId: string | null }> }>(
+  const existingSignalsResp = await apiFetch<{ signals: Array<{ id: string; tagSenal: string | null; codigoSenal: string | null; canalId: string | null; tipoIoId: string | null; servicio: string | null }> }>(
     apiBase, devUserEmail, `/api/projects/${projectId}/signals`
   );
-  const signalByTagSenal = new Map<string, { id: string; canalId: string | null; tipoIoId: string | null }>();
-  const signalByCodigoSenal = new Map<string, { id: string; canalId: string | null; tipoIoId: string | null }>();
+  const signalByTagSenal = new Map<string, { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null }>();
+  const signalByCodigoSenal = new Map<string, { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null }>();
   for (const s of existingSignalsResp.json.signals ?? []) {
     if (s.tagSenal) signalByTagSenal.set(s.tagSenal, s);
     // codigoSenal para señales CONTROL de dueño equipo = ID_SENAL de
@@ -588,7 +588,7 @@ async function main() {
   for (const row of signalRows) {
     const tagForLog = row.tagSenal ?? row.idSenal ?? '(sin tag)';
 
-    let señal: { id: string; canalId: string | null; tipoIoId: string | null } | undefined;
+    let señal: { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null } | undefined;
 
     if (row.tagInstrumento) {
       // Dueño instrumento: la señal YA fue creada por
@@ -624,7 +624,7 @@ async function main() {
       } else if (isDryRun) {
         counters.signals.CREATE++;
         console.log(`  + [equipo] ${tagForLog} -> dueño=${row.tagEquipoInst} | tagSenal=${row.tagSenal ?? '(sin tag)'}`);
-        señal = { id: '(dry-run)', canalId: null, tipoIoId: null };
+        señal = { id: '(dry-run)', canalId: null, tipoIoId: null, servicio: null };
       } else {
         const body: Record<string, unknown> = {
           equipoId,
@@ -644,6 +644,7 @@ async function main() {
           observacion: row.observacion
         };
         if (row.tagSenal) body.tagSenal = row.tagSenal;
+        if (row.destino) body.servicio = row.destino;
         let created = await apiFetch(apiBase, devUserEmail, `/api/projects/${projectId}/signals`, { method: 'POST', body });
 
         // Defecto real de la fuente (no del importador) — mismo hallazgo
@@ -661,7 +662,7 @@ async function main() {
 
         if (created.status === 201) {
           counters.signals.CREATE++;
-          señal = { id: created.json.signal.id, canalId: null, tipoIoId: null };
+          señal = { id: created.json.signal.id, canalId: null, tipoIoId: null, servicio: body.servicio as string | null ?? null };
           if (row.idSenal) signalByCodigoSenal.set(row.idSenal, señal);
           console.log(`  + [equipo] ${tagForLog} -> dueño=${row.tagEquipoInst} | señal id=${señal.id}`);
         } else {
@@ -696,6 +697,11 @@ async function main() {
     const patchBody: Record<string, unknown> = {};
     if (canalId && !señal.canalId) patchBody.canalId = canalId;
     if (tipoIoId && !señal.tipoIoId) patchBody.tipoIoId = tipoIoId;
+    // Backfill de servicio para señales de dueño equipo creadas ANTES de
+    // este fix (el body de creación no mandaba row.destino) — nunca pisa
+    // un servicio que ya viene puesto (ej. las de dueño instrumento, que
+    // ya llegan con el servicio real del reporte P&ID).
+    if (row.destino && !señal.servicio) patchBody.servicio = row.destino;
     if (Object.keys(patchBody).length > 0) {
       counters.signals.UPDATE++;
       if (!isDryRun) {

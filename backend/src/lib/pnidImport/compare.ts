@@ -49,6 +49,11 @@ export interface SenalSnapshot {
    * señal no tiene tipo_io_id asignado. Comparado contra el que el
    * reporte determina de forma inequívoca — ver TIPO_SENAL_A_TIPO_IO. */
   tipoIoCodigo: string | null;
+  /** Último texto crudo visto en la columna "Tag" de la fila de señal del
+   * reporte (ej. "S620-PI-5053") — migración 048. Puramente informativo:
+   * nunca participa en el cálculo de tagSenal ni en la identidad de la
+   * señal (eso lo sigue haciendo codigo_senal/PnPID). */
+  tagPnid: string | null;
   updatedAt: string | null;
 }
 
@@ -57,7 +62,7 @@ export interface SenalSnapshot {
  * comentario de cabecera de la migración 046 sobre por qué tipo_io_id
  * queda deliberadamente afuera. */
 export interface SenalFieldDiff {
-  campo: 'tagSenal' | 'servicio' | 'tipoIoId';
+  campo: 'tagSenal' | 'servicio' | 'tipoIoId' | 'tagPnid';
   anterior: string | null;
   nuevo: string | null;
 }
@@ -303,6 +308,18 @@ function calcularCambiosSenal(senalExistente: SenalSnapshot, row: ParsedRow, ins
   const tipoIoPropuesto = tipoIoCodigoDesdeReporte(row.fields.tipoSenalPnid);
   if (tipoIoPropuesto && tipoIoPropuesto !== (senalExistente.tipoIoCodigo ?? null)) {
     cambios.push({ campo: 'tipoIoId', anterior: senalExistente.tipoIoCodigo ?? null, nuevo: tipoIoPropuesto });
+  }
+
+  // tag_pnid (migración 048) — puramente informativo, pedido explícito del
+  // usuario: "el tag también debe aunque sea mostrar que se cambio asi
+  // como si fuera un instrumento mas". row.tagInstrumento es el texto
+  // crudo de la columna "Tag" de ESTA fila de señal (ej. "S620-PI-5053")
+  // — nunca participa en el cálculo de tagSenal (eso sigue siendo
+  // Instrumento Asociado + Type), solo se rastrea para que un cambio se
+  // vea, igual que TAG_MODIFICADO para instrumentos.
+  const tagPnidPropuesto = row.tagInstrumento ?? null;
+  if ((senalExistente.tagPnid ?? null) !== tagPnidPropuesto) {
+    cambios.push({ campo: 'tagPnid', anterior: senalExistente.tagPnid ?? null, nuevo: tagPnidPropuesto });
   }
 
   return cambios;

@@ -353,6 +353,11 @@ export interface Signal {
   prioridadAlarmaId: string | null;
   tagSenal: string | null;
   codigoSenal: string | null;
+  /** Migración 048 — último texto crudo de la columna "Tag" de la fila de
+   * señal del reporte P&ID (ej. "S620-PI-5053"). Puramente informativo,
+   * gestionado por el motor de reimportación de señales — no editable
+   * desde este formulario. */
+  tagPnid: string | null;
   /** Servicio DE LA SEÑAL (migración 028) — más granular que
    * instrumento.servicio; el único disponible cuando el dueño es un
    * equipo (nucleo.equipo no tiene columna servicio propia). Dato
@@ -429,6 +434,10 @@ export interface SignalInput {
   estadoRevisionId: string | null;
   prioridadAlarmaId: string | null;
   codigoSenal: string | null;
+  /** Migración 048 — solo lectura, ver comentario en la interfaz Signal.
+   * No forma parte de SIGNAL_FIELDS: aunque viaje en el payload, el
+   * backend lo ignora si se intenta cambiar por acá. */
+  tagPnid: string | null;
   servicio: string | null;
   causaAlarma: boolean | null;
   tipoDatoComId: string | null;

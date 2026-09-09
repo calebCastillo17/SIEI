@@ -223,6 +223,7 @@ const SIGNAL_SELECT_COLUMNS = `
   s.prioridad_alarma_id,
   s.tag_senal,
   s.codigo_senal,
+  s.tag_pnid,
   s.servicio,
   s.causa_alarma,
   s.tipo_dato_com_id,
@@ -287,6 +288,13 @@ function serializeSignal(row: Record<string, any>) {
 
     tagSenal: row.tag_senal,
     codigoSenal: row.codigo_senal,
+    // tag_pnid (migración 048) — último texto crudo visto en la columna
+    // "Tag" de la fila de señal del reporte P&ID (ej. "S620-PI-5053").
+    // Puramente informativo/histórico, gestionado EXCLUSIVAMENTE por el
+    // motor de reimportación de señales (pnidImports.ts) — igual criterio
+    // que pnpid/fuente_pnpid en instrumentos: no editable por PATCH/POST
+    // normal (no está en SIGNAL_FIELDS).
+    tagPnid: row.tag_pnid,
     // Servicio DE LA SEÑAL (migración 028) — más granular que
     // instrumento.servicio, ver CLAUDE.md; pensado sobre todo para
     // señales de equipo (sin esa columna propia), disponible para

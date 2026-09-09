@@ -427,7 +427,7 @@ pnidImportsRouter.post(
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .query(`
-          SELECT s.id, s.codigo_senal, s.tag_senal, s.servicio, s.updated_at, tio.codigo AS tipo_io_codigo
+          SELECT s.id, s.codigo_senal, s.tag_senal, s.servicio, s.tag_pnid, s.updated_at, tio.codigo AS tipo_io_codigo
           FROM nucleo.senal s
           LEFT JOIN cat.cat_tipo_io tio ON tio.id = s.tipo_io_id
           WHERE s.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
@@ -443,6 +443,7 @@ pnidImportsRouter.post(
           tagSenal: row.tag_senal,
           servicio: row.servicio,
           tipoIoCodigo: row.tipo_io_codigo,
+          tagPnid: row.tag_pnid,
           updatedAt: row.updated_at
         });
       }
@@ -1254,9 +1255,10 @@ async function applyActualizarInstrumento(
  * un import anterior queda obsoleto por definición. `cambios` puede venir
  * vacío (nada de contenido cambió, pero el aviso sí había que apagarlo) —
  * el UPDATE nunca queda sin columnas porque sin_match_pnid está siempre. */
-const SENAL_COLUMN_BY_CAMPO: Record<'tagSenal' | 'servicio', { column: string; maxLength: number }> = {
+const SENAL_COLUMN_BY_CAMPO: Record<'tagSenal' | 'servicio' | 'tagPnid', { column: string; maxLength: number }> = {
   tagSenal: { column: 'tag_senal', maxLength: 80 },
-  servicio: { column: 'servicio', maxLength: 200 }
+  servicio: { column: 'servicio', maxLength: 200 },
+  tagPnid: { column: 'tag_pnid', maxLength: 50 }
 };
 
 async function applyActualizarSenal(
@@ -1264,7 +1266,7 @@ async function applyActualizarSenal(
   projectId: string,
   userId: string,
   senalId: string,
-  cambios: Array<{ campo: 'tagSenal' | 'servicio' | 'tipoIoId'; nuevo: string | null }>,
+  cambios: Array<{ campo: 'tagSenal' | 'servicio' | 'tipoIoId' | 'tagPnid'; nuevo: string | null }>,
   ioTypeIdByCodigo: Map<string, string>
 ): Promise<void> {
   const request = new sql.Request(transaction);

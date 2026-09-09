@@ -14,6 +14,7 @@ export function emptySignalInput(): SignalInput {
     estadoRevisionId: null,
     prioridadAlarmaId: null,
     codigoSenal: null,
+    tagPnid: null,
     servicio: null,
     causaAlarma: null,
     tipoDatoComId: null,

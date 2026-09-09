@@ -24,6 +24,7 @@ function toInput(signal: Signal): SignalInput {
     estadoRevisionId: signal.estadoRevisionId,
     prioridadAlarmaId: signal.prioridadAlarmaId,
     codigoSenal: signal.codigoSenal,
+    tagPnid: signal.tagPnid,
     servicio: signal.servicio,
     causaAlarma: signal.causaAlarma,
     tipoDatoComId: signal.tipoDatoComId,

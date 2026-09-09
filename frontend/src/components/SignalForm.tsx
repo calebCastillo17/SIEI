@@ -209,13 +209,21 @@ export function SignalForm({
           />
         </label>
 
-        {value.codigoSenal !== null && (
+        {(value.codigoSenal !== null || value.tagPnid !== null) && (
           <details className="form__field form__field--wide">
             <summary>Avanzado</summary>
-            <label className="form__field">
-              <span>Código legacy (solo lectura, viene de una importación)</span>
-              <input type="text" value={value.codigoSenal} disabled readOnly />
-            </label>
+            {value.codigoSenal !== null && (
+              <label className="form__field">
+                <span>Código legacy (solo lectura, viene de una importación)</span>
+                <input type="text" value={value.codigoSenal} disabled readOnly />
+              </label>
+            )}
+            {value.tagPnid !== null && (
+              <label className="form__field">
+                <span>Tag en el reporte P&ID (solo lectura, motor de reimportación de señales)</span>
+                <input type="text" value={value.tagPnid} disabled readOnly />
+              </label>
+            )}
           </details>
         )}
       </fieldset>

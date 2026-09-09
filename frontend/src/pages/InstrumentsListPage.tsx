@@ -1,11 +1,12 @@
-import { useCallback, useMemo, useState } from 'react';
+import { Fragment, useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import { deleteInstrumentDefinitivamente, listInstruments } from '../api/instruments';
+import { listSignals } from '../api/signals';
 import { useAsyncData } from '../lib/useAsyncData';
-import type { Instrument } from '../api/types';
+import type { Instrument, Signal } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { PnidEstadoBadge } from '../components/PnidEstadoBadge';
 import { usePnidEstados } from '../components/usePnidEstados';
@@ -46,6 +47,34 @@ export function InstrumentsListPage() {
     error: loadError,
     refresh: load
   } = useAsyncData<Instrument[]>(fetchInstruments);
+
+  /* Pedido explícito del usuario: poder ver, desde el Master, qué
+   * instrumentos son dueños de al menos una señal — las señales en sí
+   * nunca aparecen acá (una fila de señal del P&ID nunca crea un
+   * instrumento, ver ES_SENAL), pero el instrumento REAL que las tiene sí
+   * es un instrumento normal y puede filtrarse/expandirse como tal. Mismo
+   * patrón que "instrumentos asociados" en EquipmentListPage.tsx: se trae
+   * la lista completa de señales del proyecto una sola vez y se agrupa en
+   * el cliente, sin un endpoint nuevo. */
+  const fetchSignals = useCallback(() => {
+    if (!projectId) return Promise.resolve<Signal[]>([]);
+    return listSignals(projectId, devUser.email).then((r) => r.signals);
+  }, [projectId, devUser.email]);
+  const { data: signals } = useAsyncData<Signal[]>(fetchSignals);
+
+  const senalesPorInstrumento = useMemo(() => {
+    const map = new Map<string, Signal[]>();
+    for (const senal of signals ?? []) {
+      if (!senal.instrumentoId) continue;
+      const lista = map.get(senal.instrumentoId) ?? [];
+      lista.push(senal);
+      map.set(senal.instrumentoId, lista);
+    }
+    return map;
+  }, [signals]);
+
+  const [soloConSenales, setSoloConSenales] = useState(false);
+  const [expandidoSenalesId, setExpandidoSenalesId] = useState<string | null>(null);
 
   const { itemsById: pnidEstadosById } = usePnidEstados(devUser.email);
 
@@ -100,6 +129,7 @@ export function InstrumentsListPage() {
       if (planoPnidFilter && instrument.planoPnid !== planoPnidFilter) return false;
       if (hojaDatosFilter === 'CON' && !instrument.fichaTecnicaId) return false;
       if (hojaDatosFilter === 'SIN' && instrument.fichaTecnicaId) return false;
+      if (soloConSenales && (senalesPorInstrumento.get(instrument.id) ?? []).length === 0) return false;
 
       if (needle.length === 0) return true;
 
@@ -127,7 +157,7 @@ export function InstrumentsListPage() {
     // orden al crear una revisión), no de esta vista. Se confía en el
     // ORDER BY tag_instrumento que ya trae el backend.
     return filtered;
-  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, hojaDatosFilter, pnidEstadosById]);
+  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, hojaDatosFilter, soloConSenales, senalesPorInstrumento, pnidEstadosById]);
 
   if (!projectId) {
     return <p>Falta el proyecto en la URL.</p>;
@@ -295,6 +325,14 @@ export function InstrumentsListPage() {
             >
               {mostrarNoListados ? 'Ocultar no listados' : 'Mostrar no listados'}
             </button>
+            <button
+              type="button"
+              className="button button--secondary"
+              onClick={() => setSoloConSenales((valor) => !valor)}
+              title="Una señal del P&ID nunca crea su propio instrumento — esto filtra los instrumentos reales que sí tienen al menos una señal"
+            >
+              {soloConSenales ? 'Mostrar todos' : 'Mostrar instrumentos con señales'}
+            </button>
           </div>
 
           <p className="page-subtitle">
@@ -326,6 +364,7 @@ export function InstrumentsListPage() {
                 <th>Estado P&amp;ID</th>
                 <th>Hoja de Datos</th>
                 <th>Listado</th>
+                <th>Señales</th>
                 <th aria-label="Acciones" />
               </tr>
             </thead>
@@ -335,9 +374,11 @@ export function InstrumentsListPage() {
                   ? (pnidEstadosById.get(instrument.estadoPnidId)?.codigo ?? null)
                   : null;
                 const puedeEliminarDefinitivamente = estadoPnidCodigo === 'NO_EXISTE_EN_PNID';
+                const senalesDelInstrumento = senalesPorInstrumento.get(instrument.id) ?? [];
 
                 return (
-                  <tr key={instrument.id}>
+                  <Fragment key={instrument.id}>
+                  <tr>
                     <td>
                       <Link to={`/projects/${projectId}/instruments/${instrument.id}`}>
                         {instrument.tagInstrumento}
@@ -376,6 +417,21 @@ export function InstrumentsListPage() {
                     <td>
                       {instrument.listado ? 'Sí' : <span className="page-subtitle" title="No se imprime en el LDI ni se cuenta en el Master por defecto">No</span>}
                     </td>
+                    <td>
+                      {senalesDelInstrumento.length === 0 ? (
+                        '0'
+                      ) : (
+                        <button
+                          type="button"
+                          className="button button--small button--secondary"
+                          onClick={() =>
+                            setExpandidoSenalesId((cur) => (cur === instrument.id ? null : instrument.id))
+                          }
+                        >
+                          {senalesDelInstrumento.length} {expandidoSenalesId === instrument.id ? '▲' : '▼'}
+                        </button>
+                      )}
+                    </td>
                     <td className="table__row-actions">
                       {/*
                         Solo aparece cuando el estado P&ID es exactamente
@@ -402,6 +458,23 @@ export function InstrumentsListPage() {
                       )}
                     </td>
                   </tr>
+                  {expandidoSenalesId === instrument.id && (
+                    <tr>
+                      <td colSpan={16}>
+                        <ul className="physical-hint" style={{ margin: 0 }}>
+                          {senalesDelInstrumento.map((s) => (
+                            <li key={s.id}>
+                              <Link to={`/projects/${projectId}/signals/${s.id}`}>
+                                {s.tagSenal ?? s.codigoSenal ?? `Señal #${s.id}`}
+                              </Link>
+                              {s.servicio && <> — {s.servicio}</>}
+                            </li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>

@@ -365,7 +365,14 @@ function FilaCanal({ fila, gabineteTag }: { fila: FilaAplanada; gabineteTag: str
           <td>
             <CableCelda cable={senal.cableCampo} />
           </td>
-          <td className="ruteo-col--ancho">{senal.tagSenal ?? senal.codigoSenal}</td>
+          <td className="ruteo-col--ancho">
+            {senal.tagSenal ?? senal.codigoSenal}{' '}
+            {senal.sinMatchPnid && (
+              <span className="ruteo-chip ruteo-chip--alerta" title="Esta señal está vinculada a un reporte P&ID, pero su PnPID ya no aparece en el último reporte importado.">
+                ⚠ ya no existe en el P&ID
+              </span>
+            )}
+          </td>
           <td className="ruteo-col--ancho">{senal.destino ?? <span className="page-subtitle">—</span>}</td>
           <td className="ruteo-col--ancho">
             {senal.duenoAusente ? <span className="ruteo-chip ruteo-chip--alerta">sin dueño</span> : (senal.duenoTag ?? '—')}

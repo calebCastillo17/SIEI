@@ -427,12 +427,13 @@ pnidImportsRouter.post(
         .request()
         .input('proyecto_id', sql.NVarChar(30), projectId)
         .query(`
-          SELECT id, codigo_senal, tag_senal, servicio, updated_at
-          FROM nucleo.senal
-          WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
-            AND activo = 1
-            AND codigo_senal IS NOT NULL
-            AND codigo_senal NOT LIKE '%[^0-9]%';
+          SELECT s.id, s.codigo_senal, s.tag_senal, s.servicio, s.updated_at, tio.codigo AS tipo_io_codigo
+          FROM nucleo.senal s
+          LEFT JOIN cat.cat_tipo_io tio ON tio.id = s.tipo_io_id
+          WHERE s.proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+            AND s.activo = 1
+            AND s.codigo_senal IS NOT NULL
+            AND s.codigo_senal NOT LIKE '%[^0-9]%';
         `);
 
       const existingSenalesByCodigo = new Map<string, SenalSnapshot>();
@@ -441,6 +442,7 @@ pnidImportsRouter.post(
           id: String(row.id),
           tagSenal: row.tag_senal,
           servicio: row.servicio,
+          tipoIoCodigo: row.tipo_io_codigo,
           updatedAt: row.updated_at
         });
       }
@@ -835,9 +837,43 @@ pnidImportsRouter.post(
         }
       }
 
+      // --- Estado ACTUAL de sin_match_pnid (migración 047) para toda señal
+      // referenciada por este import — decide, señal por señal, si hace
+      // falta escribir algo: una ES_SENAL sin cambios de contenido pero que
+      // SÍ tenía el aviso prendido igual necesita un UPDATE para apagarlo;
+      // una SENAL_SIN_MATCH_EN_REPORTE que ya estaba marcada no necesita
+      // nada. Una sola consulta, fuera de la transacción (bookkeeping puro,
+      // no forma parte del chequeo de concurrencia de contenido de arriba). ---
+      const senalIdsReferenciados = Array.from(
+        new Set(resultados.filter((r: any) => r.senal_id !== null).map((r: any) => String(r.senal_id)))
+      );
+      const sinMatchPnidActualById = new Map<string, boolean>();
+      if (senalIdsReferenciados.length > 0) {
+        const currentFlagsResult = await pool
+          .request()
+          .input('proyecto_id', sql.NVarChar(30), projectId)
+          .query(`
+            SELECT id, sin_match_pnid
+            FROM nucleo.senal
+            WHERE proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+              AND activo = 1;
+          `);
+        for (const r of currentFlagsResult.recordset) {
+          sinMatchPnidActualById.set(String(r.id), Boolean(r.sin_match_pnid));
+        }
+      }
+
       const estadoCodesResult = await pool.request().query(`SELECT id, codigo FROM cat.cat_estado_pnid;`);
       const estadoIdByCodigo = new Map<string, string>(
         estadoCodesResult.recordset.map((r: any) => [r.codigo, String(r.id)])
+      );
+
+      // Motor de reimportación de señales — resuelve el código de
+      // cat.cat_tipo_io (ej. "AI") que compare.ts propuso a su id real,
+      // para applyActualizarSenal.
+      const ioTypeCodesResult = await pool.request().query(`SELECT id, codigo FROM cat.cat_tipo_io;`);
+      const ioTypeIdByCodigo = new Map<string, string>(
+        ioTypeCodesResult.recordset.map((r: any) => [r.codigo, String(r.id)])
       );
 
       transaction = new sql.Transaction(pool);
@@ -884,23 +920,35 @@ pnidImportsRouter.post(
         // estado_pnid (el instrumento real asociado ya se resuelve por su
         // PROPIA fila, en otra parte del mismo archivo). Cuando SÍ está
         // vinculada a una señal existente (senal_id, motor de
-        // reimportación — migración 046) y compare.ts detectó cambios
-        // reales, se aplican acá (tagSenal/servicio únicamente). Sin
-        // vínculo, o vinculada sin cambios, no hay nada que hacer.
+        // reimportación — migración 046), se aplican los cambios de
+        // contenido detectados (tagSenal/servicio) Y, si el aviso
+        // sin_match_pnid (migración 047, "⚠ ya no existe en el P&ID")
+        // estaba prendido de un import anterior, se apaga solo — la señal
+        // reapareció en este reporte. Sin vínculo, o vinculada sin ningún
+        // cambio ni aviso que apagar, no hay nada que hacer.
         if (codigo === 'ES_SENAL') {
           const cambiosSenal = r.senal_id !== null && r.diferencias ? JSON.parse(r.diferencias) : null;
-          if (r.senal_id !== null && Array.isArray(cambiosSenal) && cambiosSenal.length > 0) {
-            await applyActualizarSenal(transaction, projectId, userId, String(r.senal_id), cambiosSenal);
+          const tieneCambiosContenido = r.senal_id !== null && Array.isArray(cambiosSenal) && cambiosSenal.length > 0;
+          const tieneAvisoQueApagar = r.senal_id !== null && sinMatchPnidActualById.get(String(r.senal_id)) === true;
+
+          if (tieneCambiosContenido || tieneAvisoQueApagar) {
+            await applyActualizarSenal(transaction, projectId, userId, String(r.senal_id), tieneCambiosContenido ? cambiosSenal : [], ioTypeIdByCodigo);
           } else {
             continue; // nada que aplicar — no se marca `aplicado`, igual que REQUIERE_REVISION
           }
         }
 
-        // SENAL_SIN_MATCH_EN_REPORTE: puramente informativo — la señal
-        // vinculada por codigo_senal no aparece en este reporte, pero
-        // decisión explícita del usuario: nunca se borra ni se desvincula.
+        // SENAL_SIN_MATCH_EN_REPORTE: la señal vinculada por codigo_senal no
+        // aparece en este reporte — decisión explícita del usuario: nunca se
+        // borra ni se desvincula, solo se prende el aviso sin_match_pnid
+        // (si no estaba prendido ya de un import anterior — idempotente,
+        // reimportar el mismo reporte dos veces no reescribe nada de más).
         else if (codigo === 'SENAL_SIN_MATCH_EN_REPORTE') {
-          continue;
+          const yaMarcada = r.senal_id !== null && sinMatchPnidActualById.get(String(r.senal_id)) === true;
+          if (yaMarcada || r.senal_id === null) {
+            continue;
+          }
+          await applyMarcarSenalSinMatchPnid(transaction, projectId, userId, String(r.senal_id));
         }
 
         const datosFuente = r.datos_fuente ? JSON.parse(r.datos_fuente) : {};
@@ -1188,11 +1236,24 @@ async function applyActualizarInstrumento(
 
 /** Motor de reimportación de señales (migración 046) — el equivalente de
  * applyActualizarInstrumento pero para nucleo.senal: aplica solo los
- * campos que compare.ts ya determinó que cambiaron (tagSenal/servicio),
- * nunca recalcula nada de nuevo acá. Nunca toca nucleo.instrumento — el
- * dueño de la señal (instrumento_id) es un tema aparte, resuelto (para
- * este proyecto) por reconstruirRutasSenalesControl620Reporte2.ts, no por
- * este motor de reimportación. */
+ * campos que compare.ts ya determinó que cambiaron (tagSenal/servicio/
+ * tipoIoId — este último SOLO cuando "Tipo de Senal" del reporte lo
+ * determina sin ambigüedad, ver TIPO_SENAL_A_TIPO_IO en compare.ts;
+ * decisión explícita del usuario: "no tienes que enclavar a que si tal
+ * tipo debe ser DI o DO, pero la idea es que el tipo de señal manda si es
+ * de control" — 120 VAC/COM/ALARMA/etc. nunca proponen un tipoIoId, así
+ * que nunca llegan hasta acá). Nunca recalcula nada de nuevo acá. Nunca
+ * toca nucleo.instrumento — el dueño de la señal (instrumento_id) es un
+ * tema aparte, resuelto (para este proyecto) por
+ * reconstruirRutasSenalesControl620Reporte2.ts, no por este motor de
+ * reimportación.
+ *
+ * Siempre apaga sin_match_pnid (migración 047) además de lo que venga en
+ * `cambios` — esta función solo se llama cuando la señal SÍ apareció en el
+ * reporte (ES_SENAL con match), así que cualquier aviso "ya no existe" de
+ * un import anterior queda obsoleto por definición. `cambios` puede venir
+ * vacío (nada de contenido cambió, pero el aviso sí había que apagarlo) —
+ * el UPDATE nunca queda sin columnas porque sin_match_pnid está siempre. */
 const SENAL_COLUMN_BY_CAMPO: Record<'tagSenal' | 'servicio', { column: string; maxLength: number }> = {
   tagSenal: { column: 'tag_senal', maxLength: 80 },
   servicio: { column: 'servicio', maxLength: 200 }
@@ -1203,7 +1264,8 @@ async function applyActualizarSenal(
   projectId: string,
   userId: string,
   senalId: string,
-  cambios: Array<{ campo: 'tagSenal' | 'servicio'; nuevo: string | null }>
+  cambios: Array<{ campo: 'tagSenal' | 'servicio' | 'tipoIoId'; nuevo: string | null }>,
+  ioTypeIdByCodigo: Map<string, string>
 ): Promise<void> {
   const request = new sql.Request(transaction);
   request
@@ -1211,14 +1273,23 @@ async function applyActualizarSenal(
     .input('senal_id', sql.NVarChar(30), senalId)
     .input('updated_by', sql.NVarChar(30), userId);
 
-  const setClauses = cambios.map((cambio, i) => {
-    const { column, maxLength } = SENAL_COLUMN_BY_CAMPO[cambio.campo];
+  const setClauses: string[] = [];
+  cambios.forEach((cambio, i) => {
     const paramName = `valor_${i}`;
+    if (cambio.campo === 'tipoIoId') {
+      // `cambio.nuevo` es un código de cat.cat_tipo_io (ej. "AI"), no un id
+      // — se resuelve acá, nunca se confía en un id que vino de afuera.
+      const tipoIoId = cambio.nuevo ? ioTypeIdByCodigo.get(cambio.nuevo) : undefined;
+      if (!tipoIoId) return; // código desconocido — defensivo, no debería pasar
+      request.input(paramName, sql.NVarChar(30), tipoIoId);
+      setClauses.push(`tipo_io_id = TRY_CONVERT(BIGINT, @${paramName})`);
+      return;
+    }
+    const { column, maxLength } = SENAL_COLUMN_BY_CAMPO[cambio.campo];
     request.input(paramName, sql.NVarChar(maxLength), cambio.nuevo);
-    return `${column} = @${paramName}`;
+    setClauses.push(`${column} = @${paramName}`);
   });
-
-  if (setClauses.length === 0) return; // nada que aplicar (no debería llegar acá, defensivo)
+  setClauses.push('sin_match_pnid = 0');
 
   await request.query(`
     UPDATE nucleo.senal
@@ -1229,6 +1300,28 @@ async function applyActualizarSenal(
       AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
       AND activo = 1;
   `);
+}
+
+/** Motor de reimportación de señales (migración 046/047) — prende el aviso
+ * sin_match_pnid ("⚠ ya no existe en el P&ID") de una señal cuyo
+ * codigo_senal (PnPID) desapareció por completo del reporte. Nunca toca
+ * instrumento_id/tag_senal/servicio — decisión explícita del usuario: la
+ * señal nunca se borra ni se desvincula, solo se informa. */
+async function applyMarcarSenalSinMatchPnid(transaction: sql.Transaction, projectId: string, userId: string, senalId: string): Promise<void> {
+  const request = new sql.Request(transaction);
+  await request
+    .input('proyecto_id', sql.NVarChar(30), projectId)
+    .input('senal_id', sql.NVarChar(30), senalId)
+    .input('updated_by', sql.NVarChar(30), userId)
+    .query(`
+      UPDATE nucleo.senal
+      SET sin_match_pnid = 1,
+          updated_at = SYSUTCDATETIME(),
+          updated_by = TRY_CONVERT(BIGINT, @updated_by)
+      WHERE id = TRY_CONVERT(BIGINT, @senal_id)
+        AND proyecto_id = TRY_CONVERT(BIGINT, @proyecto_id)
+        AND activo = 1;
+    `);
 }
 
 async function applySoloEstado(

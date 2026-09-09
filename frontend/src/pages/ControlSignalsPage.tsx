@@ -157,7 +157,12 @@ export function ControlSignalsPage() {
                   <td>
                     <Link to={`/projects/${projectId}/control/signals/${s.id}`}>
                       {s.tagSenal ?? <em>{s.codigoSenal ?? '—'}</em>}
-                    </Link>
+                    </Link>{' '}
+                    {s.sinMatchPnid && (
+                      <span className="badge badge--danger" title="Esta señal está vinculada a un reporte P&ID, pero su PnPID ya no aparece en el último reporte importado.">
+                        ⚠ ya no existe en el P&ID
+                      </span>
+                    )}
                   </td>
                   <td>{s.nombreCorto ?? '—'}</td>
                   <td>

@@ -76,7 +76,14 @@ function PosicionRow({
       {senal ? (
         <>
           <span className="hw-canal__estado" aria-hidden="true" />
-          <span className="hw-canal__label">{senal.tagSenal ?? senal.codigoSenal}</span>
+          <span className="hw-canal__label">
+            {senal.tagSenal ?? senal.codigoSenal}{' '}
+            {senal.sinMatchPnid && (
+              <span className="hw-canal__dueno--alerta" title="Esta señal está vinculada a un reporte P&ID, pero su PnPID ya no aparece en el último reporte importado.">
+                ⚠ ya no existe en el P&ID
+              </span>
+            )}
+          </span>
           <span className="hw-canal__dueno">
             {senal.duenoAusente ? '⚠ sin dueño' : (senal.duenoTag ?? '—')}
           </span>
@@ -300,7 +307,14 @@ export function ControlCajasHardwarePage() {
                           to={`/projects/${projectId}/control/signals/${s.id}`}
                           className="hw-canal hw-canal--ocupado"
                         >
-                          <span className="hw-canal__num">{s.tagSenal ?? s.codigoSenal}</span>
+                          <span className="hw-canal__num">
+                            {s.tagSenal ?? s.codigoSenal}{' '}
+                            {s.sinMatchPnid && (
+                              <span className="hw-canal__dueno--alerta" title="Esta señal está vinculada a un reporte P&ID, pero su PnPID ya no aparece en el último reporte importado.">
+                                ⚠ ya no existe en el P&ID
+                              </span>
+                            )}
+                          </span>
                           <span className="hw-canal__label">
                             {s.duenoAusente ? 'sin dueño' : (s.duenoTag ?? '—')}
                           </span>

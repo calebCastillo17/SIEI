@@ -48,7 +48,14 @@ export function ControlSignalDetailPage() {
     <section>
       <div className="page-header">
         <div>
-          <h1>{signal ? (signal.tagSenal ?? signal.codigoSenal ?? `Señal #${signal.id}`) : 'Señal CONTROL'}</h1>
+          <h1>
+            {signal ? (signal.tagSenal ?? signal.codigoSenal ?? `Señal #${signal.id}`) : 'Señal CONTROL'}{' '}
+            {signal?.sinMatchPnid && (
+              <span className="badge badge--danger" title="Esta señal está vinculada a un reporte P&ID, pero su PnPID ya no aparece en el último reporte importado.">
+                ⚠ ya no existe en el P&ID
+              </span>
+            )}
+          </h1>
           {project && (
             <p className="page-subtitle">
               Proyecto {project.code} — {project.name}

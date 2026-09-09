@@ -118,7 +118,14 @@ export function SignalDetailPage() {
   return (
     <section>
       <div className="page-header">
-        <h1>{signal ? (signal.tagSenal ?? `Señal #${signal.id}`) : 'Señal'}</h1>
+        <h1>
+          {signal ? (signal.tagSenal ?? `Señal #${signal.id}`) : 'Señal'}{' '}
+          {signal?.sinMatchPnid && (
+            <span className="badge badge--danger" title="Esta señal está vinculada a un reporte P&ID, pero su PnPID ya no aparece en el último reporte importado.">
+              ⚠ ya no existe en el P&ID
+            </span>
+          )}
+        </h1>
 
         {signal && !editing && (
           <div className="page-header__actions">

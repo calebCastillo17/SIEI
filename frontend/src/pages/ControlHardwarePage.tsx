@@ -99,7 +99,14 @@ function CanalRow({ numeroCanal, senal, projectId }: { numeroCanal: number; sena
            * tag de la señal ya lo implica, y el detalle completo está a
            * un click. Solo se marca la alerta real (dueño ausente), que
            * es información distinta, no una repetición. */}
-          <span className="hw-canal__label">{senal.tagSenal ?? senal.codigoSenal}</span>
+          <span className="hw-canal__label">
+            {senal.tagSenal ?? senal.codigoSenal}{' '}
+            {senal.sinMatchPnid && (
+              <span className="hw-canal__dueno--alerta" title="Esta señal está vinculada a un reporte P&ID, pero su PnPID ya no aparece en el último reporte importado.">
+                ⚠ ya no existe en el P&ID
+              </span>
+            )}
+          </span>
           <span className="hw-canal__dueno">
             {senal.duenoAusente && <span className="hw-canal__dueno--alerta">⚠ sin dueño</span>}
           </span>

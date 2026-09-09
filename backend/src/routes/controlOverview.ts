@@ -173,7 +173,7 @@ function padBornesCaja<T extends { numero: string | null; campoOcupado: boolean;
 
 const CONTROL_SIGNAL_SELECT = `
   s.id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.descripcion,
-  s.canal_id, s.dueno_ausente, s.servicio AS senal_servicio,
+  s.canal_id, s.dueno_ausente, s.sin_match_pnid, s.servicio AS senal_servicio,
 
   i.id AS instrumento_id, i.tag_instrumento, i.descripcion AS instrumento_descripcion,
   i.tipo_instrumento, i.servicio, i.sistema AS instrumento_sistema, i.ubicacion, i.nodo AS instrumento_nodo,
@@ -308,7 +308,7 @@ function serializeControlSignal(row: Record<string, any>) {
     cajaTag: row.caja_tag,
     rutaId: nullableId(row.ruta_id),
     estadoConexionado: estadoConexionado(row),
-    duenoAusente: Boolean(row.dueno_ausente)
+    duenoAusente: Boolean(row.dueno_ausente), sinMatchPnid: Boolean(row.sin_match_pnid)
   };
 }
 
@@ -589,7 +589,7 @@ controlOverviewRouter.get(
             sl.id AS slot_id, sl.numero_slot,
             m.id AS modulo_id, cmi.fabricante, cmi.modelo, tio.codigo AS tipo_io_codigo,
             c.id AS canal_id, c.numero_canal,
-            s.id AS senal_id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.dueno_ausente,
+            s.id AS senal_id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.dueno_ausente, s.sin_match_pnid,
 
             i.tag_instrumento AS dueno_tag, e.tag_equipo AS dueno_equipo_tag,
             iag.tag_instrumento AS agrupador_tag,
@@ -679,7 +679,7 @@ controlOverviewRouter.get(
                   id: String(row.senal_id), codigoSenal: row.codigo_senal, tagSenal: row.tag_senal, nombreCorto: row.nombre_corto,
                   duenoTag, duenoTipo, agrupadorTag: row.agrupador_tag ?? null, cajaTag: row.caja_tag ?? null,
                   cableTagCampo: row.cable_tag_campo ?? null,
-                  duenoAusente: Boolean(row.dueno_ausente),
+                  duenoAusente: Boolean(row.dueno_ausente), sinMatchPnid: Boolean(row.sin_match_pnid),
                   estadoConexionado: row.canal_id === null ? 'IO_PENDIENTE' : Number(row.n_rutas) === 0 ? 'RUTA_PENDIENTE' : 'RUTA_CARGADA'
                 }
               : null,
@@ -843,7 +843,7 @@ controlOverviewRouter.get(
 
             cond.codigo AS conductor_codigo, cab.tag_cable,
 
-            s.id AS senal_id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.dueno_ausente,
+            s.id AS senal_id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.dueno_ausente, s.sin_match_pnid,
             i.tag_instrumento AS dueno_tag, e.tag_equipo AS dueno_equipo_tag,
 
             -- Gabinete/RIO al que en realidad va esta señal, resuelto vía
@@ -921,7 +921,7 @@ controlOverviewRouter.get(
         const senalEntry = row.senal_id
           ? {
               id: String(row.senal_id), codigoSenal: row.codigo_senal, tagSenal: row.tag_senal, nombreCorto: row.nombre_corto,
-              duenoTag, duenoTipo, duenoAusente: Boolean(row.dueno_ausente),
+              duenoTag, duenoTipo, duenoAusente: Boolean(row.dueno_ausente), sinMatchPnid: Boolean(row.sin_match_pnid),
               conductorCodigo: row.conductor_codigo, tagCable: row.tag_cable,
               destinoGabineteTag: row.destino_gabinete_tag ?? null
             }
@@ -997,7 +997,7 @@ controlOverviewRouter.get(
         .query(`
           SELECT
             eqp.id AS panel_id, eqp.tag_equipo AS panel_tag,
-            s.id AS senal_id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.dueno_ausente,
+            s.id AS senal_id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.dueno_ausente, s.sin_match_pnid,
             i.tag_instrumento AS dueno_tag, e.tag_equipo AS dueno_equipo_tag,
             cab.tag_cable,
             g2.tag_gabinete AS destino_gabinete_tag
@@ -1038,7 +1038,7 @@ controlOverviewRouter.get(
         const duenoTipo = row.dueno_tag ? 'instrumento' : row.dueno_equipo_tag ? 'equipo' : null;
         panelesEquipo.get(pId)!.senales.push({
           id: String(row.senal_id), codigoSenal: row.codigo_senal, tagSenal: row.tag_senal, nombreCorto: row.nombre_corto,
-          duenoTag, duenoTipo, duenoAusente: Boolean(row.dueno_ausente),
+          duenoTag, duenoTipo, duenoAusente: Boolean(row.dueno_ausente), sinMatchPnid: Boolean(row.sin_match_pnid),
           tagCable: row.tag_cable ?? null,
           destinoGabineteTag: row.destino_gabinete_tag ?? null
         });
@@ -1119,7 +1119,7 @@ controlOverviewRouter.get(
             cmi.fabricante, cmi.modelo, tio.codigo AS tipo_io_codigo,
             btm.codigo AS modulo_bloque_codigo,
             c.id AS canal_id, c.numero_canal,
-            s.id AS senal_id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.dueno_ausente,
+            s.id AS senal_id, s.codigo_senal, s.tag_senal, s.nombre_corto, s.dueno_ausente, s.sin_match_pnid,
             s.servicio AS senal_servicio,
             -- DESTINO de la hoja SENALES del Excel ("la descripción corta
             -- de la señal") — vive en nucleo.senal.descripcion, la columna
@@ -1389,7 +1389,7 @@ controlOverviewRouter.get(
                   // cae al servicio general del instrumento dueño solo si
                   // la señal no tiene el suyo propio.
                   duenoServicio: row.senal_servicio ?? row.dueno_servicio ?? null,
-                  duenoAusente: Boolean(row.dueno_ausente),
+                  duenoAusente: Boolean(row.dueno_ausente), sinMatchPnid: Boolean(row.sin_match_pnid),
                   estadoConexionado: Number(row.n_rutas) === 0 ? 'RUTA_PENDIENTE' : 'RUTA_CARGADA',
                   cableRio,
                   cajaTag: conex?.cajaTag ?? null,

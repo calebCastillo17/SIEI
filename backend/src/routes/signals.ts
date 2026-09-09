@@ -242,6 +242,7 @@ const SIGNAL_SELECT_COLUMNS = `
   s.enclavamiento,
   s.observacion,
   s.dueno_ausente,
+  s.sin_match_pnid,
   s.activo,
   s.created_at,
   s.updated_at,
@@ -314,6 +315,12 @@ function serializeSignal(row: Record<string, any>) {
     observacion: row.observacion,
 
     duenoAusente: Boolean(row.dueno_ausente),
+    // sin_match_pnid (migración 047) — puro aviso informativo del motor de
+    // reimportación de señales (046): esta señal está vinculada a un
+    // reporte P&ID por codigo_senal, pero su PnPID no apareció en el
+    // último reporte importado. Nunca bloquea nada, se apaga solo si el
+    // PnPID vuelve a aparecer en un import posterior.
+    sinMatchPnid: Boolean(row.sin_match_pnid),
 
     active: Boolean(row.activo),
 

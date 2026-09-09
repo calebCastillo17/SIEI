@@ -45,6 +45,10 @@ export interface SenalSnapshot {
   id: string;
   tagSenal: string | null;
   servicio: string | null;
+  /** Código actual de cat.cat_tipo_io (ej. "AI", "DI"), o null si la
+   * señal no tiene tipo_io_id asignado. Comparado contra el que el
+   * reporte determina de forma inequívoca — ver TIPO_SENAL_A_TIPO_IO. */
+  tipoIoCodigo: string | null;
   updatedAt: string | null;
 }
 
@@ -53,9 +57,32 @@ export interface SenalSnapshot {
  * comentario de cabecera de la migración 046 sobre por qué tipo_io_id
  * queda deliberadamente afuera. */
 export interface SenalFieldDiff {
-  campo: 'tagSenal' | 'servicio';
+  campo: 'tagSenal' | 'servicio' | 'tipoIoId';
   anterior: string | null;
   nuevo: string | null;
+}
+
+/**
+ * "Tipo de Senal" (reporte) -> código de cat.cat_tipo_io — SOLO los casos
+ * donde el valor del reporte determina un tipo de E/S sin ambigüedad
+ * (mismo criterio ya usado en tipoSenalPnidSugerencia.ts para sugerir al
+ * crear una señal nueva). Decisión explícita del usuario al pedir esto
+ * para el motor de reimportación: "no tienes que enclavar [encasillar] a
+ * que si tal tipo debe ser DI o DO, pero la idea es que el tipo de señal
+ * manda si es de control" — "120 VAC"/"COM"/"ALARMA"/"NO SEÑAL"/
+ * "120 VDC" quedan deliberadamente afuera (ambiguos entre DI/DO, sin
+ * regla real confirmada), y que un mismo Type (ej. HS, ZSC) aparezca en el
+ * reporte a veces con "Tipo de Senal"=COM y a veces =120 VAC para
+ * distintas señales es esperado, no un error a resolver acá.
+ */
+const TIPO_SENAL_A_TIPO_IO: Record<string, string> = {
+  '4 a 20 ma + hart': 'AI',
+  resistencia: 'RTD'
+};
+
+function tipoIoCodigoDesdeReporte(tipoSenalPnid: string | null | undefined): string | null {
+  if (!tipoSenalPnid) return null;
+  return TIPO_SENAL_A_TIPO_IO[tipoSenalPnid.trim().toLowerCase()] ?? null;
 }
 
 /** Instrumento existente, tal como lo necesita el comparador — un
@@ -271,6 +298,11 @@ function calcularCambiosSenal(senalExistente: SenalSnapshot, row: ParsedRow, ins
   const servicioPropuesto = row.fields.servicio ?? null;
   if ((senalExistente.servicio ?? null) !== servicioPropuesto) {
     cambios.push({ campo: 'servicio', anterior: senalExistente.servicio ?? null, nuevo: servicioPropuesto });
+  }
+
+  const tipoIoPropuesto = tipoIoCodigoDesdeReporte(row.fields.tipoSenalPnid);
+  if (tipoIoPropuesto && tipoIoPropuesto !== (senalExistente.tipoIoCodigo ?? null)) {
+    cambios.push({ campo: 'tipoIoId', anterior: senalExistente.tipoIoCodigo ?? null, nuevo: tipoIoPropuesto });
   }
 
   return cambios;

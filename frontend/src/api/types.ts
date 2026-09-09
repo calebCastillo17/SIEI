@@ -378,6 +378,11 @@ export interface Signal {
   /** Migración 016 — true solo cuando el instrumento que era su dueño fue
    * eliminado definitivamente (nunca alcanzable de otra forma). */
   duenoAusente: boolean;
+  /** Migración 047 — true cuando esta señal está vinculada a un reporte
+   * P&ID (codigo_senal = PnPID) pero su PnPID no aparece en el último
+   * reporte importado. Nunca se borra ni se desvincula por esto — se
+   * apaga solo si el PnPID vuelve a aparecer en un import posterior. */
+  sinMatchPnid: boolean;
   active: boolean;
   createdAt: string;
   updatedAt: string | null;
@@ -1754,6 +1759,11 @@ export interface ControlSignal {
   /** true solo cuando el instrumento que era su dueño fue eliminado
    * definitivamente (migración 016) — la señal sigue activa, sin dueño. */
   duenoAusente: boolean;
+  /** Migración 047 — true cuando esta señal está vinculada a un reporte
+   * P&ID (codigo_senal = PnPID) pero su PnPID no aparece en el último
+   * reporte importado. Nunca se borra ni se desvincula por esto — se
+   * apaga solo si el PnPID vuelve a aparecer en un import posterior. */
+  sinMatchPnid: boolean;
 }
 
 export interface ControlRutaNodo {
@@ -1786,6 +1796,11 @@ export interface ControlCanalSenal {
    * propio documentado todavía. */
   cableTagCampo: string | null;
   duenoAusente: boolean;
+  /** Migración 047 — true cuando esta señal está vinculada a un reporte
+   * P&ID (codigo_senal = PnPID) pero su PnPID no aparece en el último
+   * reporte importado. Nunca se borra ni se desvincula por esto — se
+   * apaga solo si el PnPID vuelve a aparecer en un import posterior. */
+  sinMatchPnid: boolean;
   estadoConexionado: EstadoConexionado;
 }
 
@@ -1854,6 +1869,11 @@ export interface ControlPosicionSenal {
   duenoTag: string | null;
   duenoTipo: 'instrumento' | 'equipo' | null;
   duenoAusente: boolean;
+  /** Migración 047 — true cuando esta señal está vinculada a un reporte
+   * P&ID (codigo_senal = PnPID) pero su PnPID no aparece en el último
+   * reporte importado. Nunca se borra ni se desvincula por esto — se
+   * apaga solo si el PnPID vuelve a aparecer en un import posterior. */
+  sinMatchPnid: boolean;
   /** Código del conductor real que aterriza acá, y el cable al que
    * pertenece — null si por alguna razón la terminación no resolvió
    * conductor/cable (no debería pasar en datos reales). */
@@ -1900,6 +1920,11 @@ export interface ControlPanelSenal {
   duenoTag: string | null;
   duenoTipo: 'instrumento' | 'equipo' | null;
   duenoAusente: boolean;
+  /** Migración 047 — true cuando esta señal está vinculada a un reporte
+   * P&ID (codigo_senal = PnPID) pero su PnPID no aparece en el último
+   * reporte importado. Nunca se borra ni se desvincula por esto — se
+   * apaga solo si el PnPID vuelve a aparecer en un import posterior. */
+  sinMatchPnid: boolean;
   conductorCodigo?: string | null;
   tagCable: string | null;
   destinoGabineteTag: string | null;
@@ -1994,6 +2019,11 @@ export interface RuteoSenal {
    * columna, así que siempre es null cuando el dueño es un equipo. */
   duenoServicio: string | null;
   duenoAusente: boolean;
+  /** Migración 047 — true cuando esta señal está vinculada a un reporte
+   * P&ID (codigo_senal = PnPID) pero su PnPID no aparece en el último
+   * reporte importado. Nunca se borra ni se desvincula por esto — se
+   * apaga solo si el PnPID vuelve a aparecer en un import posterior. */
+  sinMatchPnid: boolean;
   estadoConexionado: 'RUTA_PENDIENTE' | 'RUTA_CARGADA';
   cableRio: RuteoCable | null;
   cajaTag: string | null;

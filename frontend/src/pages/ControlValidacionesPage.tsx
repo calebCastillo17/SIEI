@@ -22,6 +22,21 @@ function coincide(valor: string | null | undefined, filtro: string): boolean {
   return (valor ?? '').toLowerCase().includes(needle);
 }
 
+/** Coincide si el filtro está vacío o es EXACTAMENTE igual — para las
+ * columnas con desplegable (pedido explícito del usuario: "en los demas
+ * que sea como desplegable", solo Tag/Servicio quedan de escribir). */
+function coincideExacto(valor: string | null | undefined, filtro: string): boolean {
+  if (filtro.length === 0) return true;
+  return (valor ?? '') === filtro;
+}
+
+/** Valores distintos, no vacíos, de una columna — para poblar un
+ * desplegable de filtro sin inventar ninguna lista, solo lo que hay
+ * realmente en los datos cargados. */
+function opcionesDistintas<T>(items: T[], getValue: (item: T) => string | null | undefined): string[] {
+  return [...new Set(items.map(getValue).filter((v): v is string => Boolean(v)))].sort();
+}
+
 /** Encabezado de columna filtrable "como un Excel" — pedido explícito del
  * usuario: la etiqueta arriba, un input angosto de filtro justo debajo,
  * dentro del mismo <th>. */
@@ -44,6 +59,40 @@ function ThFiltrable({
         placeholder="Filtrar…"
         style={{ width: '100%', fontWeight: 'normal', fontSize: '0.85em', marginTop: '0.25rem' }}
       />
+    </th>
+  );
+}
+
+/** Encabezado de columna filtrable con DESPLEGABLE — pedido explícito del
+ * usuario: solo Tag/Servicio quedan de escribir libre (ThFiltrable), el
+ * resto se elige de una lista con los valores que de verdad existen en
+ * los datos cargados (opcionesDistintas), nunca una lista inventada. */
+function ThFiltrableSelect({
+  label,
+  value,
+  options,
+  onChange
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <th>
+      <div>{label}</div>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        style={{ width: '100%', fontWeight: 'normal', fontSize: '0.85em', marginTop: '0.25rem' }}
+      >
+        <option value="">Todos</option>
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
     </th>
   );
 }
@@ -192,12 +241,27 @@ export function ControlValidacionesPage() {
       senalesNoVinculadas.filter(
         (r) =>
           coincide(r.tagInstrumento, filtrosNoVinculadas.tag) &&
-          coincide(r.datosPropuestos?.planoPnid, filtrosNoVinculadas.planoPnid) &&
+          coincideExacto(r.datosPropuestos?.planoPnid, filtrosNoVinculadas.planoPnid) &&
           coincide(r.datosPropuestos?.servicio, filtrosNoVinculadas.servicio) &&
-          coincide(r.datosPropuestos?.tipoSenalPnid, filtrosNoVinculadas.tipoSenal) &&
-          coincide(r.datosPropuestos?.instrumentoAsociadoTag, filtrosNoVinculadas.asociado)
+          coincideExacto(r.datosPropuestos?.tipoSenalPnid, filtrosNoVinculadas.tipoSenal) &&
+          coincideExacto(r.datosPropuestos?.instrumentoAsociadoTag, filtrosNoVinculadas.asociado)
       ),
     [senalesNoVinculadas, filtrosNoVinculadas]
+  );
+
+  /* Opciones de los desplegables — solo valores que de verdad existen en
+   * esta lista, no un catálogo inventado. */
+  const opcionesPlanoPnidNoVinculadas = useMemo(
+    () => opcionesDistintas(senalesNoVinculadas, (r) => r.datosPropuestos?.planoPnid),
+    [senalesNoVinculadas]
+  );
+  const opcionesTipoSenalNoVinculadas = useMemo(
+    () => opcionesDistintas(senalesNoVinculadas, (r) => r.datosPropuestos?.tipoSenalPnid),
+    [senalesNoVinculadas]
+  );
+  const opcionesAsociadoNoVinculadas = useMemo(
+    () => opcionesDistintas(senalesNoVinculadas, (r) => r.datosPropuestos?.instrumentoAsociadoTag),
+    [senalesNoVinculadas]
   );
 
   const [filtrosResumenIo, setFiltrosResumenIo] = useState({
@@ -212,12 +276,21 @@ export function ControlValidacionesPage() {
         const info = instrumentoInfoPorId.get(r.instrumentoId);
         return (
           coincide(tagPorInstrumentoId.get(r.instrumentoId), filtrosResumenIo.instrumento) &&
-          coincide(info?.planoPnid, filtrosResumenIo.planoPnid) &&
+          coincideExacto(info?.planoPnid, filtrosResumenIo.planoPnid) &&
           coincide(info?.servicio, filtrosResumenIo.servicio) &&
-          coincide(String(r.total), filtrosResumenIo.total)
+          coincideExacto(String(r.total), filtrosResumenIo.total)
         );
       }),
     [resumenPorInstrumento, instrumentoInfoPorId, tagPorInstrumentoId, filtrosResumenIo]
+  );
+
+  const opcionesPlanoPnidResumen = useMemo(
+    () => opcionesDistintas(resumenPorInstrumento, (r) => instrumentoInfoPorId.get(r.instrumentoId)?.planoPnid),
+    [resumenPorInstrumento, instrumentoInfoPorId]
+  );
+  const opcionesTotalResumen = useMemo(
+    () => [...new Set(resumenPorInstrumento.map((r) => String(r.total)))].sort((a, b) => Number(a) - Number(b)),
+    [resumenPorInstrumento]
   );
 
   if (!projectId) return <p>Falta el proyecto en la URL.</p>;
@@ -345,9 +418,10 @@ export function ControlValidacionesPage() {
                           value={filtrosNoVinculadas.tag}
                           onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, tag: v }))}
                         />
-                        <ThFiltrable
+                        <ThFiltrableSelect
                           label="P&ID"
                           value={filtrosNoVinculadas.planoPnid}
+                          options={opcionesPlanoPnidNoVinculadas}
                           onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, planoPnid: v }))}
                         />
                         <ThFiltrable
@@ -355,14 +429,16 @@ export function ControlValidacionesPage() {
                           value={filtrosNoVinculadas.servicio}
                           onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, servicio: v }))}
                         />
-                        <ThFiltrable
+                        <ThFiltrableSelect
                           label="Tipo de señal"
                           value={filtrosNoVinculadas.tipoSenal}
+                          options={opcionesTipoSenalNoVinculadas}
                           onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, tipoSenal: v }))}
                         />
-                        <ThFiltrable
+                        <ThFiltrableSelect
                           label="Instrumento Asociado"
                           value={filtrosNoVinculadas.asociado}
+                          options={opcionesAsociadoNoVinculadas}
                           onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, asociado: v }))}
                         />
                       </tr>
@@ -417,9 +493,10 @@ export function ControlValidacionesPage() {
                           value={filtrosResumenIo.instrumento}
                           onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, instrumento: v }))}
                         />
-                        <ThFiltrable
+                        <ThFiltrableSelect
                           label="P&ID"
                           value={filtrosResumenIo.planoPnid}
+                          options={opcionesPlanoPnidResumen}
                           onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, planoPnid: v }))}
                         />
                         <ThFiltrable
@@ -427,9 +504,10 @@ export function ControlValidacionesPage() {
                           value={filtrosResumenIo.servicio}
                           onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, servicio: v }))}
                         />
-                        <ThFiltrable
+                        <ThFiltrableSelect
                           label="Total señales"
                           value={filtrosResumenIo.total}
+                          options={opcionesTotalResumen}
                           onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, total: v }))}
                         />
                         {/* Sin filtro acá — pedido explícito del usuario:

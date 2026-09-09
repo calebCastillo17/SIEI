@@ -94,10 +94,22 @@ export function ControlValidacionesPage() {
     [ultimoImportResultados]
   );
 
+  /* codigoSenal puramente numérico = vino de una fila de señal de un
+   * reporte P&ID (su PnPID, ver migración 046) — a diferencia del formato
+   * legacy "620-SIG-000001" del Excel original de SENALES_COM, que nunca
+   * tuvo relación con ningún reporte P&ID. Pedido explícito del usuario
+   * para esta validación: "solo los instrumentos que son asociados... los
+   * que tienen instrumentos señales asociados" — 60 de los 157
+   * instrumentos con alguna señal, verificado con datos reales, solo
+   * tenían señales COM legacy sin ninguna relación al P&ID; sin este
+   * filtro ensuciaban la tabla con instrumentos irrelevantes para esta
+   * auditoría. */
+  const esSenalDeReporte = (senal: Signal) => senal.codigoSenal !== null && /^\d+$/.test(senal.codigoSenal);
+
   const resumenPorInstrumento = useMemo(() => {
     const map = new Map<string, { instrumentoId: string; total: number; porTipo: Record<string, number> }>();
     for (const senal of signals ?? []) {
-      if (!senal.instrumentoId) continue;
+      if (!senal.instrumentoId || !esSenalDeReporte(senal)) continue;
       const entry = map.get(senal.instrumentoId) ?? {
         instrumentoId: senal.instrumentoId,
         total: 0,

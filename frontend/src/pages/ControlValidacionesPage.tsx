@@ -363,14 +363,26 @@ export function ControlValidacionesPage() {
               {senalesSinDueno.length === 0 ? (
                 <p className="page-subtitle">Ninguna — todas las señales tienen un instrumento o equipo dueño.</p>
               ) : (
-                <ul className="physical-hint">
-                  {senalesSinDueno.map((s) => (
-                    <li key={s.id}>
-                      <Link to={`/projects/${projectId}/signals/${s.id}`}>{s.tagSenal ?? `Señal #${s.id}`}</Link>
-                      {s.servicio && <> — {s.servicio}</>}
-                    </li>
-                  ))}
-                </ul>
+                <div className="table-scroll">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Tag señal</th>
+                        <th>Servicio</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {senalesSinDueno.map((s) => (
+                        <tr key={s.id}>
+                          <td>
+                            <Link to={`/projects/${projectId}/signals/${s.id}`}>{s.tagSenal ?? `Señal #${s.id}`}</Link>
+                          </td>
+                          <td>{s.servicio ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </section>
           )}

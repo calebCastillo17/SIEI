@@ -236,9 +236,16 @@ tramoConductoresRouter.post(
         .input('tramo_conexion_id', sql.NVarChar(30), tramoConexionId)
         .input('conductor_id', sql.NVarChar(30), conductorId)
         .query(`
+          -- nucleo.tramo_conductor tiene TR_tramo_conductor_desactivar_terminaciones
+          -- (migración 015): OUTPUT sin INTO es el error 334.
+          DECLARE @nuevos TABLE (id BIGINT);
+
           INSERT INTO nucleo.tramo_conductor (proyecto_id, tramo_conexion_id, conductor_id, activo, created_at, created_by)
           OUTPUT INSERTED.id
+          INTO @nuevos
           VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @tramo_conexion_id), TRY_CONVERT(BIGINT, @conductor_id), 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
+
+          SELECT * FROM @nuevos;
         `);
 
       const newId = String(insertResult.recordset[0].id);

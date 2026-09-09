@@ -237,12 +237,19 @@ conductorsRouter.post(
         .input('orden', sql.SmallInt, orden)
         .input('par_conductor_id', sql.NVarChar(30), parConductorId)
         .query(`
+          -- nucleo.conductor tiene TR_conductor_validar_desactivacion
+          -- (migración 015): OUTPUT sin INTO es el error 334.
+          DECLARE @nuevos TABLE (id BIGINT);
+
           INSERT INTO nucleo.conductor (proyecto_id, cable_id, codigo, orden, par_conductor_id, activo, created_at, created_by)
           OUTPUT INSERTED.id
+          INTO @nuevos
           VALUES (
             TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @cable_id), @codigo, @orden,
             TRY_CONVERT(BIGINT, @par_conductor_id), 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by)
           );
+
+          SELECT * FROM @nuevos;
         `);
 
       const newId = String(insertResult.recordset[0].id);

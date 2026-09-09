@@ -349,12 +349,20 @@ bloquesTerminalRouter.post(
         .input('codigo', sql.NVarChar(20), codigo.trim())
         .input('descripcion', sql.NVarChar(200), descripcion)
         .query(`
+          -- nucleo.bloque_terminal tiene TR_bloque_terminal_validar_plano_dueno
+          -- (AFTER INSERT, UPDATE, migración 025/026): OUTPUT sin INTO es el
+          -- error 334, igual patrón que el resto de las tablas de 015.
+          DECLARE @nuevos TABLE (id BIGINT);
+
           INSERT INTO nucleo.bloque_terminal (proyecto_id, caja_id, gabinete_id, equipo_id, codigo, descripcion, activo, created_at, created_by)
           OUTPUT INSERTED.id
+          INTO @nuevos
           VALUES (
             TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @caja_id), TRY_CONVERT(BIGINT, @gabinete_id),
             TRY_CONVERT(BIGINT, @equipo_id), @codigo, @descripcion, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by)
           );
+
+          SELECT * FROM @nuevos;
         `);
 
       const newId = String(insertResult.recordset[0].id);
@@ -719,10 +727,16 @@ bloquesTerminalRouter.post(
             THROW 54802, 'El terminal no existe en este proyecto/bloque o está inactivo.', 1;
           END;
 
+          -- nucleo.posicion_terminal tiene TR_posicion_terminal_validar_desactivacion
+          -- (migración 015): OUTPUT sin INTO es el error 334.
+          DECLARE @nuevas TABLE (id BIGINT, proyecto_id BIGINT, terminal_id BIGINT, codigo NVARCHAR(10), activo BIT);
+
           INSERT INTO nucleo.posicion_terminal (proyecto_id, terminal_id, codigo, activo, created_at, created_by)
-          OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.terminal_id, INSERTED.codigo, INSERTED.activo,
-                 CAST(0 AS BIT) AS in_use
+          OUTPUT INSERTED.id, INSERTED.proyecto_id, INSERTED.terminal_id, INSERTED.codigo, INSERTED.activo
+          INTO @nuevas
           VALUES (TRY_CONVERT(BIGINT, @proyecto_id), TRY_CONVERT(BIGINT, @terminal_id), @codigo, 1, SYSUTCDATETIME(), TRY_CONVERT(BIGINT, @created_by));
+
+          SELECT *, CAST(0 AS BIT) AS in_use FROM @nuevas;
         `);
 
       res.status(201).json({ posicionTerminal: serializePosicion(insertResult.recordset[0]) });

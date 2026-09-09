@@ -150,6 +150,7 @@ interface ControlRow {
   cajaEquipo: string | null;
   tagCaja: string | null;
   destino: string | null;
+  servicio: string | null;
   tagSenal: string | null;
   tagCableInst: string | null;
   tipoCableInst: string | null;
@@ -186,6 +187,7 @@ const HEADER_MAP: Record<string, keyof ControlRow> = {
   CAJA_EQUIPO: 'cajaEquipo',
   TAG_CAJA: 'tagCaja',
   DESTINO: 'destino',
+  SERVICIO: 'servicio',
   TAG_SENAL: 'tagSenal',
   TAG_CABLE_INST: 'tagCableInst',
   TIPO_CABLE_INST: 'tipoCableInst',
@@ -278,6 +280,7 @@ async function readControlSheet(filePath: string): Promise<ControlRow[]> {
       cajaEquipo: cleanText(get('cajaEquipo')),
       tagCaja: cleanText(get('tagCaja')),
       destino: cleanText(get('destino')),
+      servicio: cleanText(get('servicio')),
       tagSenal: cleanText(get('tagSenal')),
       tagCableInst: cleanText(get('tagCableInst')),
       tipoCableInst: cleanText(get('tipoCableInst')),
@@ -534,11 +537,11 @@ async function main() {
 
   // --- Señales YA CREADAS (por crearSenalesControl420DesdeReporte.ts) ---
   console.log('\n--- Señales CONTROL ya creadas (dueño real, vía P&ID) ---');
-  const existingSignalsResp = await apiFetch<{ signals: Array<{ id: string; tagSenal: string | null; codigoSenal: string | null; canalId: string | null; tipoIoId: string | null; servicio: string | null }> }>(
+  const existingSignalsResp = await apiFetch<{ signals: Array<{ id: string; tagSenal: string | null; codigoSenal: string | null; canalId: string | null; tipoIoId: string | null; servicio: string | null; descripcion: string | null }> }>(
     apiBase, devUserEmail, `/api/projects/${projectId}/signals`
   );
-  const signalByTagSenal = new Map<string, { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null }>();
-  const signalByCodigoSenal = new Map<string, { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null }>();
+  const signalByTagSenal = new Map<string, { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null; descripcion: string | null }>();
+  const signalByCodigoSenal = new Map<string, { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null; descripcion: string | null }>();
   for (const s of existingSignalsResp.json.signals ?? []) {
     if (s.tagSenal) signalByTagSenal.set(s.tagSenal, s);
     // codigoSenal para señales CONTROL de dueño equipo = ID_SENAL de
@@ -588,7 +591,11 @@ async function main() {
   for (const row of signalRows) {
     const tagForLog = row.tagSenal ?? row.idSenal ?? '(sin tag)';
 
-    let señal: { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null } | undefined;
+    let señal: { id: string; canalId: string | null; tipoIoId: string | null; servicio: string | null; descripcion: string | null } | undefined;
+    // TAG_EQUIPO_INST está poblado en TODAS las filas reales (en las de
+    // dueño instrumento repite el mismo tag que TAG_INSTRUMENTO) — no
+    // sirve para distinguir dueño, solo la rama que efectivamente se tomó.
+    let esDueñoEquipo = false;
 
     if (row.tagInstrumento) {
       // Dueño instrumento: la señal YA fue creada por
@@ -606,6 +613,7 @@ async function main() {
         continue;
       }
     } else if (row.tagEquipoInst) {
+      esDueñoEquipo = true;
       // Dueño equipo: a diferencia del instrumento, el P&ID no tiene un
       // concepto de "señal de equipo" (ES_SENAL solo resuelve por
       // Instrumento Asociado, ver compare.ts) — se crea directo desde
@@ -624,7 +632,7 @@ async function main() {
       } else if (isDryRun) {
         counters.signals.CREATE++;
         console.log(`  + [equipo] ${tagForLog} -> dueño=${row.tagEquipoInst} | tagSenal=${row.tagSenal ?? '(sin tag)'}`);
-        señal = { id: '(dry-run)', canalId: null, tipoIoId: null, servicio: null };
+        señal = { id: '(dry-run)', canalId: null, tipoIoId: null, servicio: null, descripcion: null };
       } else {
         const body: Record<string, unknown> = {
           equipoId,
@@ -644,7 +652,15 @@ async function main() {
           observacion: row.observacion
         };
         if (row.tagSenal) body.tagSenal = row.tagSenal;
-        if (row.destino) body.servicio = row.destino;
+        // DESTINO y SERVICIO son dos columnas DISTINTAS en la hoja (ej.
+        // DESTINO="MOTOR PREPARADO" / SERVICIO="BOMBA DE AGUA DE SELLO
+        // (LINEA 05) STAND BY") — DESTINO es la descripción puntual de
+        // ESTA señal, SERVICIO es el contexto del equipo/sistema al que
+        // sirve. nucleo.senal.descripcion es el campo correcto para
+        // DESTINO (nunca usado hasta ahora); servicio es SERVICIO tal
+        // cual, no DESTINO.
+        if (row.destino) body.descripcion = row.destino;
+        if (row.servicio) body.servicio = row.servicio;
         let created = await apiFetch(apiBase, devUserEmail, `/api/projects/${projectId}/signals`, { method: 'POST', body });
 
         // Defecto real de la fuente (no del importador) — mismo hallazgo
@@ -662,7 +678,7 @@ async function main() {
 
         if (created.status === 201) {
           counters.signals.CREATE++;
-          señal = { id: created.json.signal.id, canalId: null, tipoIoId: null, servicio: body.servicio as string | null ?? null };
+          señal = { id: created.json.signal.id, canalId: null, tipoIoId: null, servicio: body.servicio as string | null ?? null, descripcion: body.descripcion as string | null ?? null };
           if (row.idSenal) signalByCodigoSenal.set(row.idSenal, señal);
           console.log(`  + [equipo] ${tagForLog} -> dueño=${row.tagEquipoInst} | señal id=${señal.id}`);
         } else {
@@ -697,11 +713,17 @@ async function main() {
     const patchBody: Record<string, unknown> = {};
     if (canalId && !señal.canalId) patchBody.canalId = canalId;
     if (tipoIoId && !señal.tipoIoId) patchBody.tipoIoId = tipoIoId;
-    // Backfill de servicio para señales de dueño equipo creadas ANTES de
-    // este fix (el body de creación no mandaba row.destino) — nunca pisa
-    // un servicio que ya viene puesto (ej. las de dueño instrumento, que
-    // ya llegan con el servicio real del reporte P&ID).
-    if (row.destino && !señal.servicio) patchBody.servicio = row.destino;
+    // Backfill/corrección de descripcion+servicio, SOLO dueño equipo — las
+    // de dueño instrumento ya traen su servicio real del reporte P&ID por
+    // otro camino, nunca se tocan acá. DESTINO y SERVICIO son columnas
+    // DISTINTAS en la hoja (ver comentario en la creación más arriba);
+    // una corrida anterior de este mismo script metió DESTINO en
+    // "servicio" por error — acá se corrige (no solo se rellena si está
+    // vacío) comparando contra el valor real de la hoja.
+    if (esDueñoEquipo) {
+      if (row.destino && señal.descripcion !== row.destino) patchBody.descripcion = row.destino;
+      if ((row.servicio ?? null) !== señal.servicio) patchBody.servicio = row.servicio ?? null;
+    }
     if (Object.keys(patchBody).length > 0) {
       counters.signals.UPDATE++;
       if (!isDryRun) {

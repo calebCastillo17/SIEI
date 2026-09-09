@@ -5,8 +5,9 @@ import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import { deactivateEquipment, listEquipment } from '../api/equipment';
 import { listInstruments, listPendientesEquipo, updateInstrument } from '../api/instruments';
+import { listSignals } from '../api/signals';
 import { useAsyncData } from '../lib/useAsyncData';
-import type { Equipment, Instrument, PendienteEquipo } from '../api/types';
+import type { Equipment, Instrument, PendienteEquipo, Signal } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
 
 /*
@@ -155,6 +156,31 @@ export function EquipmentListPage() {
   }, [instrumentos]);
   const [expandidoId, setExpandidoId] = useState<string | null>(null);
 
+  /* Señales CONTROL cuyo dueño es este equipo (nucleo.senal.equipo_id) —
+   * pedido explícito del usuario: "esos equipos que usan esas señales...
+   * quiero que los listes" (mismas señales de RIO-001 creadas directo
+   * desde SENALES_CONTROL, ver importControl420.ts). Mismo patrón que
+   * instrumentosPorEquipo arriba, agrupado por equipoId en vez de
+   * equipoAsociadoId — son dos relaciones distintas: instrumentosPorEquipo
+   * es una curación manual (equipo_asociado_id), esto es el DUEÑO real de
+   * la señal. */
+  const fetchSenales = useCallback(() => {
+    if (!projectId) return Promise.resolve<Signal[]>([]);
+    return listSignals(projectId, devUser.email).then((r) => r.signals);
+  }, [projectId, devUser.email]);
+  const { data: senales } = useAsyncData<Signal[]>(fetchSenales);
+  const senalesPorEquipo = useMemo(() => {
+    const mapa = new Map<string, Signal[]>();
+    for (const s of senales ?? []) {
+      if (!s.equipoId) continue;
+      const lista = mapa.get(s.equipoId) ?? [];
+      lista.push(s);
+      mapa.set(s.equipoId, lista);
+    }
+    return mapa;
+  }, [senales]);
+  const [expandidoSenalesId, setExpandidoSenalesId] = useState<string | null>(null);
+
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<Error | null>(null);
   const [searchText, setSearchText] = useState('');
@@ -289,12 +315,14 @@ export function EquipmentListPage() {
                 <th>NODO</th>
                 <th>P&amp;ID</th>
                 <th>Instrumentos</th>
+                <th>Señales</th>
                 <th aria-label="Acciones" />
               </tr>
             </thead>
             <tbody>
               {filteredItems.map((item) => {
                 const asociados = instrumentosPorEquipo.get(item.id) ?? [];
+                const senalesDelEquipo = senalesPorEquipo.get(item.id) ?? [];
                 return (
                 <Fragment key={item.id}>
                 <tr>
@@ -317,6 +345,19 @@ export function EquipmentListPage() {
                         onClick={() => setExpandidoId((cur) => (cur === item.id ? null : item.id))}
                       >
                         {asociados.length} {expandidoId === item.id ? '▲' : '▼'}
+                      </button>
+                    )}
+                  </td>
+                  <td>
+                    {senalesDelEquipo.length === 0 ? (
+                      '0'
+                    ) : (
+                      <button
+                        type="button"
+                        className="button button--small button--secondary"
+                        onClick={() => setExpandidoSenalesId((cur) => (cur === item.id ? null : item.id))}
+                      >
+                        {senalesDelEquipo.length} {expandidoSenalesId === item.id ? '▲' : '▼'}
                       </button>
                     )}
                   </td>
@@ -344,11 +385,27 @@ export function EquipmentListPage() {
                 </tr>
                 {expandidoId === item.id && (
                   <tr>
-                    <td colSpan={9}>
+                    <td colSpan={10}>
                       <ul className="physical-hint" style={{ margin: 0 }}>
                         {asociados.map((i) => (
                           <li key={i.id}>
                             <Link to={`/projects/${projectId}/instruments/${i.id}`}>{i.tagInstrumento}</Link>
+                          </li>
+                        ))}
+                      </ul>
+                    </td>
+                  </tr>
+                )}
+                {expandidoSenalesId === item.id && (
+                  <tr>
+                    <td colSpan={10}>
+                      <ul className="physical-hint" style={{ margin: 0 }}>
+                        {senalesDelEquipo.map((s) => (
+                          <li key={s.id}>
+                            <Link to={`/projects/${projectId}/signals/${s.id}`}>
+                              {s.tagSenal ?? s.codigoSenal ?? `Señal #${s.id}`}
+                            </Link>
+                            {s.servicio && <> — {s.servicio}</>}
                           </li>
                         ))}
                       </ul>

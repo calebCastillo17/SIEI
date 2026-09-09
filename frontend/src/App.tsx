@@ -54,6 +54,7 @@ import { ControlConexionadoPage } from './pages/ControlConexionadoPage';
 import { ControlCajasConexionadoPage } from './pages/ControlCajasConexionadoPage';
 import { ControlCajasHardwarePage } from './pages/ControlCajasHardwarePage';
 import { ControlRuteoPage } from './pages/ControlRuteoPage';
+import { ControlValidacionesPage } from './pages/ControlValidacionesPage';
 import { ControlLayout } from './components/ControlLayout';
 import { ControlSignalDetailPage } from './pages/ControlSignalDetailPage';
 
@@ -110,6 +111,7 @@ function App() {
           <Route path="conexionado-cajas" element={<ControlCajasConexionadoPage />} />
           <Route path="cajas" element={<ControlCajasHardwarePage />} />
           <Route path="ruteo" element={<ControlRuteoPage />} />
+          <Route path="validaciones" element={<ControlValidacionesPage />} />
         </Route>
         <Route path="/projects/:projectId/gabinetes" element={<GabinetesListPage />} />
         <Route path="/projects/:projectId/gabinetes/:gabineteId" element={<GabineteDetailPage />} />

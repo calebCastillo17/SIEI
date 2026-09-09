@@ -64,6 +64,9 @@ export function ControlLayout() {
           <NavLink to={`${base}/planos`} className="control-nav__link control-nav__link--standalone">
             Planos
           </NavLink>
+          <NavLink to={`${base}/validaciones`} className="control-nav__link control-nav__link--standalone">
+            Validaciones
+          </NavLink>
         </div>
       </nav>
 

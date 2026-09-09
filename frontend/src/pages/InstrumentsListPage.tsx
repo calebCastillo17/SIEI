@@ -5,12 +5,15 @@ import { useDevUser } from '../auth/DevUserContext';
 import { useProjects } from '../projects/ProjectsContext';
 import { deleteInstrumentDefinitivamente, listInstruments } from '../api/instruments';
 import { listSignals } from '../api/signals';
+import { getPnidImport, listPnidImports } from '../api/pnidImports';
 import { useAsyncData } from '../lib/useAsyncData';
-import type { Instrument, Signal } from '../api/types';
+import type { Instrument, PnidDetailResultado, PnidImport, Signal } from '../api/types';
 import { ErrorMessage } from '../components/ErrorMessage';
 import { PnidEstadoBadge } from '../components/PnidEstadoBadge';
 import { usePnidEstados } from '../components/usePnidEstados';
 import { PNID_ESTADO_LABELS } from '../components/pnidLabels';
+
+const TIPOS_IO_RESUMEN = ['DI', 'DO', 'AI', 'AO', 'RTD'] as const;
 
 export function InstrumentsListPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -78,7 +81,79 @@ export function InstrumentsListPage() {
     return map;
   }, [instruments]);
 
-  const [mostrarSenales, setMostrarSenales] = useState(false);
+  const [vista, setVista] = useState<'instrumentos' | 'senales' | 'validaciones'>('instrumentos');
+
+  /*
+   * Validaciones (pedido explícito del usuario) — tres listas de auditoría
+   * más una tabla resumen, para ver "si todos los instrumentos están bien
+   * asociados y tienen sus señales completas":
+   *
+   *  1. Señales sin padre (dueno_ausente=true, migración 016) — la señal
+   *     sigue activa pero su instrumento/equipo dueño fue eliminado.
+   *  2. Señales que están en nuestro ruteo (nucleo.senal, ya vinculadas
+   *     por codigo_senal) pero YA NO aparecen en el último reporte P&ID
+   *     aplicado (sin_match_pnid=true, migración 047).
+   *  3. Señales que SÍ vienen en el último reporte P&ID (fila ES_SENAL)
+   *     pero todavía no existen en nuestro ruteo — "cuando digo vinieron
+   *     en el P&ID me refiero que actualmente no existen en el master":
+   *     resultado ES_SENAL cuyo senal_id es null (nunca se vinculó a
+   *     ninguna señal existente, ver migración 046).
+   *
+   * La 3ra necesita los resultados del último import APLICADO — no hay
+   * endpoint de "resultados sueltos", así que se trae la lista de imports
+   * y se pide el detalle del más reciente ya aplicado.
+   */
+  const fetchImports = useCallback(() => {
+    if (!projectId) return Promise.resolve<PnidImport[]>([]);
+    return listPnidImports(projectId, devUser.email).then((r) => r.imports);
+  }, [projectId, devUser.email]);
+  const { data: imports } = useAsyncData<PnidImport[]>(fetchImports);
+
+  const ultimoImportAplicadoId = useMemo(() => {
+    const aplicados = (imports ?? [])
+      .filter((imp) => imp.estado === 'APLICADO')
+      .sort((a, b) => Number(b.id) - Number(a.id));
+    return aplicados[0]?.id ?? null;
+  }, [imports]);
+
+  const fetchUltimoImportResultados = useCallback(() => {
+    if (!projectId || !ultimoImportAplicadoId) return Promise.resolve<PnidDetailResultado[]>([]);
+    return getPnidImport(projectId, ultimoImportAplicadoId, devUser.email).then((r) => r.resultados);
+  }, [projectId, ultimoImportAplicadoId, devUser.email]);
+  const { data: ultimoImportResultados } = useAsyncData<PnidDetailResultado[]>(fetchUltimoImportResultados);
+
+  const senalesSinPadre = useMemo(() => (signals ?? []).filter((s) => s.duenoAusente), [signals]);
+  const senalesSinMatchReporte = useMemo(() => (signals ?? []).filter((s) => s.sinMatchPnid), [signals]);
+  const senalesNoVinculadas = useMemo(
+    () => (ultimoImportResultados ?? []).filter((r) => r.resultado === 'ES_SENAL' && r.senalId === null),
+    [ultimoImportResultados]
+  );
+
+  /* Tabla resumen por instrumento dueño: total de señales + desglose por
+   * tipo de E/S (DI/DO/AI/AO/RTD) — para auditar visualmente si un
+   * instrumento tiene sus señales "completas" (el usuario no dio una
+   * regla de qué es "completo" por tipo de instrumento, así que esto
+   * muestra el desglose real para que lo audite a ojo, no un pass/fail
+   * automático inventado). */
+  const resumenPorInstrumento = useMemo(() => {
+    const map = new Map<string, { instrumentoId: string; total: number; porTipo: Record<string, number> }>();
+    for (const senal of signals ?? []) {
+      if (!senal.instrumentoId) continue;
+      const entry = map.get(senal.instrumentoId) ?? {
+        instrumentoId: senal.instrumentoId,
+        total: 0,
+        porTipo: Object.fromEntries(TIPOS_IO_RESUMEN.map((t) => [t, 0]))
+      };
+      entry.total += 1;
+      if (senal.tipoIoCodigo && TIPOS_IO_RESUMEN.includes(senal.tipoIoCodigo as (typeof TIPOS_IO_RESUMEN)[number])) {
+        entry.porTipo[senal.tipoIoCodigo] += 1;
+      }
+      map.set(senal.instrumentoId, entry);
+    }
+    return [...map.values()].sort((a, b) =>
+      (tagPorInstrumentoId.get(a.instrumentoId) ?? '').localeCompare(tagPorInstrumentoId.get(b.instrumentoId) ?? '')
+    );
+  }, [signals, tagPorInstrumentoId]);
 
   const { itemsById: pnidEstadosById } = usePnidEstados(devUser.email);
 
@@ -344,27 +419,35 @@ export function InstrumentsListPage() {
             </button>
             <button
               type="button"
-              className="button button--secondary"
-              onClick={() => setMostrarSenales((valor) => !valor)}
+              className={vista === 'senales' ? 'button' : 'button button--secondary'}
+              onClick={() => setVista((v) => (v === 'senales' ? 'instrumentos' : 'senales'))}
               title='Una fila de señal del P&ID (Description = "PRIMARY ACCESSIBLE/INACCESSIBLE DCS") nunca crea su propio instrumento — esto las muestra como lo que son, señales, no agrupadas bajo su dueño'
             >
-              {mostrarSenales ? 'Ver instrumentos' : 'Ver señales del P&ID'}
+              {vista === 'senales' ? 'Ver instrumentos' : 'Ver señales del P&ID'}
+            </button>
+            <button
+              type="button"
+              className={vista === 'validaciones' ? 'button' : 'button button--secondary'}
+              onClick={() => setVista((v) => (v === 'validaciones' ? 'instrumentos' : 'validaciones'))}
+              title="Auditoría: señales sin dueño, señales que desaparecieron del último reporte, señales del reporte que aún no están vinculadas, y desglose de E/S por instrumento"
+            >
+              {vista === 'validaciones' ? 'Ver instrumentos' : 'Validaciones'}
             </button>
           </div>
 
           <p className="page-subtitle">
-            {mostrarSenales
-              ? `Mostrando ${filteredSenales.length} de ${senalesDeReporte.length} señales.`
-              : `Mostrando ${filteredItems.length} de ${items.length} instrumentos.`}
+            {vista === 'senales' && `Mostrando ${filteredSenales.length} de ${senalesDeReporte.length} señales.`}
+            {vista === 'instrumentos' && `Mostrando ${filteredItems.length} de ${items.length} instrumentos.`}
+            {vista === 'validaciones' && 'Auditoría de señales e instrumentos asociados.'}
           </p>
         </>
       )}
 
-      {!mostrarSenales && !loading && items.length > 0 && filteredItems.length === 0 && (
+      {vista === 'instrumentos' && !loading && items.length > 0 && filteredItems.length === 0 && (
         <p>Ningún instrumento coincide con la búsqueda/filtro actual.</p>
       )}
 
-      {!mostrarSenales && !loading && filteredItems.length > 0 && (
+      {vista === 'instrumentos' && !loading && filteredItems.length > 0 && (
         <div className="table-scroll">
           <table className="table">
             <thead>
@@ -476,7 +559,7 @@ export function InstrumentsListPage() {
         base es codigoSenal puramente numérico (su PnPID), ver
         esSenalDeReporte más arriba.
       */}
-      {mostrarSenales && (
+      {vista === 'senales' && (
         <>
           <label className="form__field">
             <span>Buscar</span>
@@ -545,6 +628,113 @@ export function InstrumentsListPage() {
             </div>
           )}
         </>
+      )}
+
+      {/*
+        Validaciones — pedido explícito del usuario, ver comentario junto a
+        senalesSinPadre/senalesSinMatchReporte/senalesNoVinculadas más
+        arriba para el detalle de cada una de las tres listas.
+      */}
+      {vista === 'validaciones' && !loading && (
+        <div className="form form--stacked" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <section>
+            <h2>1. Señales sin dueño ({senalesSinPadre.length})</h2>
+            {senalesSinPadre.length === 0 ? (
+              <p className="page-subtitle">Ninguna — todas las señales tienen un instrumento o equipo dueño.</p>
+            ) : (
+              <ul className="physical-hint">
+                {senalesSinPadre.map((s) => (
+                  <li key={s.id}>
+                    <Link to={`/projects/${projectId}/signals/${s.id}`}>{s.tagSenal ?? `Señal #${s.id}`}</Link>
+                    {s.servicio && <> — {s.servicio}</>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h2>2. En el ruteo, ya no en el último P&amp;ID ({senalesSinMatchReporte.length})</h2>
+            <p className="page-subtitle">
+              Están vinculadas a un reporte P&amp;ID (tienen PnPID), pero ese PnPID ya no aparece en el último
+              reporte aplicado — nunca se borran ni desvinculan solas.
+            </p>
+            {senalesSinMatchReporte.length === 0 ? (
+              <p className="page-subtitle">Ninguna.</p>
+            ) : (
+              <ul className="physical-hint">
+                {senalesSinMatchReporte.map((s) => (
+                  <li key={s.id}>
+                    <Link to={`/projects/${projectId}/signals/${s.id}`}>{s.tagSenal ?? `Señal #${s.id}`}</Link>
+                    {' — PnPID '}
+                    {s.codigoSenal}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h2>3. En el último P&amp;ID, todavía no en el ruteo ({senalesNoVinculadas.length})</h2>
+            <p className="page-subtitle">
+              {ultimoImportAplicadoId
+                ? 'Filas de señal del último reporte aplicado cuyo "Instrumento Asociado" ya existe, pero que todavía no fueron vinculadas a ninguna señal del Master.'
+                : 'Todavía no hay ningún import P&ID aplicado en este proyecto.'}
+            </p>
+            {senalesNoVinculadas.length === 0 ? (
+              <p className="page-subtitle">Ninguna.</p>
+            ) : (
+              <ul className="physical-hint">
+                {senalesNoVinculadas.map((r) => (
+                  <li key={r.id}>
+                    {r.tagInstrumento} — Instrumento Asociado: {r.datosPropuestos?.instrumentoAsociadoTag ?? '—'} (PnPID{' '}
+                    {r.pnpid})
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section>
+            <h2>4. Señales por instrumento (E/S)</h2>
+            <p className="page-subtitle">
+              Total de señales y desglose por tipo de E/S de cada instrumento dueño — para auditar a ojo si está
+              bien asociado y completo.
+            </p>
+            {resumenPorInstrumento.length === 0 ? (
+              <p className="page-subtitle">Ningún instrumento tiene señales todavía.</p>
+            ) : (
+              <div className="table-scroll">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Instrumento</th>
+                      <th>Total señales</th>
+                      {TIPOS_IO_RESUMEN.map((t) => (
+                        <th key={t}>{t}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {resumenPorInstrumento.map((r) => (
+                      <tr key={r.instrumentoId}>
+                        <td>
+                          <Link to={`/projects/${projectId}/instruments/${r.instrumentoId}`}>
+                            {tagPorInstrumentoId.get(r.instrumentoId) ?? r.instrumentoId}
+                          </Link>
+                        </td>
+                        <td>{r.total}</td>
+                        {TIPOS_IO_RESUMEN.map((t) => (
+                          <td key={t}>{r.porTipo[t] || '—'}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
       )}
     </section>
   );

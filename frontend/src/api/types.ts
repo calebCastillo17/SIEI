@@ -1320,6 +1320,10 @@ export interface PnidDetailResultado {
   pnpid: string | null;
   tagInstrumento: string | null;
   instrumentoId: string | null;
+  /** Migración 046 — solo poblado para resultado = ES_SENAL cuando ya está
+   * vinculada a una señal existente (motor de reimportación). null para
+   * el resto de resultados y para una ES_SENAL todavía sin vincular. */
+  senalId: string | null;
   resultado: string;
   diferencias: PnidDiferencias;
   requiereRevision: boolean;

@@ -118,6 +118,12 @@ function serializeResultado(row: Record<string, any>) {
     pnpid: row.pnpid,
     tagInstrumento: row.tag_instrumento,
     instrumentoId: row.instrumento_id === null ? null : String(row.instrumento_id),
+    // senalId (migración 046) — solo poblado para ES_SENAL cuando el
+    // codigo_senal de esta fila ya coincide con una señal existente (motor
+    // de reimportación); null tanto para el resto de resultados como para
+    // una ES_SENAL que todavía no está vinculada a ninguna señal (usado
+    // para la validación "vino en el P&ID pero no está en el ruteo").
+    senalId: row.senal_id === null ? null : String(row.senal_id),
     resultado: row.resultado_codigo,
     diferencias: row.diferencias ? JSON.parse(row.diferencias) : null,
     requiereRevision: Boolean(row.requiere_revision),
@@ -153,7 +159,7 @@ function serializeResultado(row: Record<string, any>) {
 
 const RESULTADO_SELECT = `
   r.id, r.importacion_id, r.fila_id, f.numero_fila, r.pnpid, r.tag_instrumento,
-  r.instrumento_id, e.codigo AS resultado_codigo, r.diferencias, r.requiere_revision,
+  r.instrumento_id, r.senal_id, e.codigo AS resultado_codigo, r.diferencias, r.requiere_revision,
   r.aplicado, r.aplicado_at, f.datos_fuente,
   (
     SELECT COUNT(*) FROM nucleo.senal s

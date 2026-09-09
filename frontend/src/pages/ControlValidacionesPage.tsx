@@ -14,6 +14,40 @@ const TIPOS_IO_RESUMEN = ['DI', 'DO', 'AI', 'AO', 'RTD'] as const;
 
 type Validacion = 'sinDueno' | 'sinMatchReporte' | 'noVinculadas' | 'resumenIo';
 
+/** Coincide si el filtro está vacío, o si el texto (case-insensitive) lo
+ * contiene — mismo criterio de búsqueda usado en el resto de la app. */
+function coincide(valor: string | null | undefined, filtro: string): boolean {
+  const needle = filtro.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  return (valor ?? '').toLowerCase().includes(needle);
+}
+
+/** Encabezado de columna filtrable "como un Excel" — pedido explícito del
+ * usuario: la etiqueta arriba, un input angosto de filtro justo debajo,
+ * dentro del mismo <th>. */
+function ThFiltrable({
+  label,
+  value,
+  onChange
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <th>
+      <div>{label}</div>
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Filtrar…"
+        style={{ width: '100%', fontWeight: 'normal', fontSize: '0.85em', marginTop: '0.25rem' }}
+      />
+    </th>
+  );
+}
+
 /**
  * Sección CONTROL — pestaña "Validaciones". Pedido explícito del usuario:
  * auditar "si todos los instrumentos están bien asociados y tienen sus
@@ -93,6 +127,15 @@ export function ControlValidacionesPage() {
     return map;
   }, [instruments]);
 
+  /** P&ID (plano) y servicio DEL INSTRUMENTO dueño — pedido explícito del
+   * usuario para la validación 4 ("en el cuatro tambien quiero ver el
+   * P&ID y servicio"). Viene del instrumento real, no de la señal. */
+  const instrumentoInfoPorId = useMemo(() => {
+    const map = new Map<string, { planoPnid: string | null; servicio: string | null }>();
+    for (const i of instruments ?? []) map.set(i.id, { planoPnid: i.planoPnid, servicio: i.servicio });
+    return map;
+  }, [instruments]);
+
   const senalesSinDueno = useMemo(() => (signals ?? []).filter((s) => s.duenoAusente), [signals]);
   const senalesSinMatchReporte = useMemo(() => (signals ?? []).filter((s) => s.sinMatchPnid), [signals]);
   const senalesNoVinculadas = useMemo(
@@ -133,6 +176,49 @@ export function ControlValidacionesPage() {
   }, [signals, tagPorInstrumentoId]);
 
   const [activa, setActiva] = useState<Validacion | null>(null);
+
+  /* Filtros "como un Excel" en el encabezado — pedido explícito del
+   * usuario, aplicado a las validaciones 3 y 4 (en la 4, nunca a las
+   * columnas DI/DO/AI/AO/RTD). */
+  const [filtrosNoVinculadas, setFiltrosNoVinculadas] = useState({
+    tag: '',
+    planoPnid: '',
+    servicio: '',
+    tipoSenal: '',
+    asociado: ''
+  });
+  const senalesNoVinculadasFiltradas = useMemo(
+    () =>
+      senalesNoVinculadas.filter(
+        (r) =>
+          coincide(r.tagInstrumento, filtrosNoVinculadas.tag) &&
+          coincide(r.datosPropuestos?.planoPnid, filtrosNoVinculadas.planoPnid) &&
+          coincide(r.datosPropuestos?.servicio, filtrosNoVinculadas.servicio) &&
+          coincide(r.datosPropuestos?.tipoSenalPnid, filtrosNoVinculadas.tipoSenal) &&
+          coincide(r.datosPropuestos?.instrumentoAsociadoTag, filtrosNoVinculadas.asociado)
+      ),
+    [senalesNoVinculadas, filtrosNoVinculadas]
+  );
+
+  const [filtrosResumenIo, setFiltrosResumenIo] = useState({
+    instrumento: '',
+    planoPnid: '',
+    servicio: '',
+    total: ''
+  });
+  const resumenPorInstrumentoFiltrado = useMemo(
+    () =>
+      resumenPorInstrumento.filter((r) => {
+        const info = instrumentoInfoPorId.get(r.instrumentoId);
+        return (
+          coincide(tagPorInstrumentoId.get(r.instrumentoId), filtrosResumenIo.instrumento) &&
+          coincide(info?.planoPnid, filtrosResumenIo.planoPnid) &&
+          coincide(info?.servicio, filtrosResumenIo.servicio) &&
+          coincide(String(r.total), filtrosResumenIo.total)
+        );
+      }),
+    [resumenPorInstrumento, instrumentoInfoPorId, tagPorInstrumentoId, filtrosResumenIo]
+  );
 
   if (!projectId) return <p>Falta el proyecto en la URL.</p>;
 
@@ -254,19 +340,37 @@ export function ControlValidacionesPage() {
                   <table className="table">
                     <thead>
                       <tr>
-                        <th>Tag (reporte)</th>
-                        <th>PnPID</th>
-                        <th>P&amp;ID</th>
-                        <th>Servicio</th>
-                        <th>Tipo de señal</th>
-                        <th>Instrumento Asociado</th>
+                        <ThFiltrable
+                          label="Tag (reporte)"
+                          value={filtrosNoVinculadas.tag}
+                          onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, tag: v }))}
+                        />
+                        <ThFiltrable
+                          label="P&ID"
+                          value={filtrosNoVinculadas.planoPnid}
+                          onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, planoPnid: v }))}
+                        />
+                        <ThFiltrable
+                          label="Servicio"
+                          value={filtrosNoVinculadas.servicio}
+                          onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, servicio: v }))}
+                        />
+                        <ThFiltrable
+                          label="Tipo de señal"
+                          value={filtrosNoVinculadas.tipoSenal}
+                          onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, tipoSenal: v }))}
+                        />
+                        <ThFiltrable
+                          label="Instrumento Asociado"
+                          value={filtrosNoVinculadas.asociado}
+                          onChange={(v) => setFiltrosNoVinculadas((f) => ({ ...f, asociado: v }))}
+                        />
                       </tr>
                     </thead>
                     <tbody>
-                      {senalesNoVinculadas.map((r) => (
+                      {senalesNoVinculadasFiltradas.map((r) => (
                         <tr key={r.id}>
                           <td>{r.tagInstrumento ?? '—'}</td>
-                          <td>{r.pnpid ?? '—'}</td>
                           <td>{r.datosPropuestos?.planoPnid ?? '—'}</td>
                           <td>{r.datosPropuestos?.servicio ?? '—'}</td>
                           <td>{r.datosPropuestos?.tipoSenalPnid ?? '—'}</td>
@@ -286,6 +390,9 @@ export function ControlValidacionesPage() {
                       ))}
                     </tbody>
                   </table>
+                  {senalesNoVinculadasFiltradas.length === 0 && (
+                    <p className="page-subtitle">Ninguna coincide con los filtros actuales.</p>
+                  )}
                 </div>
               )}
             </section>
@@ -305,29 +412,57 @@ export function ControlValidacionesPage() {
                   <table className="table">
                     <thead>
                       <tr>
-                        <th>Instrumento</th>
-                        <th>Total señales</th>
+                        <ThFiltrable
+                          label="Instrumento"
+                          value={filtrosResumenIo.instrumento}
+                          onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, instrumento: v }))}
+                        />
+                        <ThFiltrable
+                          label="P&ID"
+                          value={filtrosResumenIo.planoPnid}
+                          onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, planoPnid: v }))}
+                        />
+                        <ThFiltrable
+                          label="Servicio"
+                          value={filtrosResumenIo.servicio}
+                          onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, servicio: v }))}
+                        />
+                        <ThFiltrable
+                          label="Total señales"
+                          value={filtrosResumenIo.total}
+                          onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, total: v }))}
+                        />
+                        {/* Sin filtro acá — pedido explícito del usuario:
+                            "no a la parte de DI DO AI AO RTD". */}
                         {TIPOS_IO_RESUMEN.map((t) => (
                           <th key={t}>{t}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {resumenPorInstrumento.map((r) => (
-                        <tr key={r.instrumentoId}>
-                          <td>
-                            <Link to={`/projects/${projectId}/instruments/${r.instrumentoId}`}>
-                              {tagPorInstrumentoId.get(r.instrumentoId) ?? r.instrumentoId}
-                            </Link>
-                          </td>
-                          <td>{r.total}</td>
-                          {TIPOS_IO_RESUMEN.map((t) => (
-                            <td key={t}>{r.porTipo[t] || '—'}</td>
-                          ))}
-                        </tr>
-                      ))}
+                      {resumenPorInstrumentoFiltrado.map((r) => {
+                        const info = instrumentoInfoPorId.get(r.instrumentoId);
+                        return (
+                          <tr key={r.instrumentoId}>
+                            <td>
+                              <Link to={`/projects/${projectId}/instruments/${r.instrumentoId}`}>
+                                {tagPorInstrumentoId.get(r.instrumentoId) ?? r.instrumentoId}
+                              </Link>
+                            </td>
+                            <td>{info?.planoPnid ?? '—'}</td>
+                            <td>{info?.servicio ?? '—'}</td>
+                            <td>{r.total}</td>
+                            {TIPOS_IO_RESUMEN.map((t) => (
+                              <td key={t}>{r.porTipo[t] || '—'}</td>
+                            ))}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
+                  {resumenPorInstrumentoFiltrado.length === 0 && (
+                    <p className="page-subtitle">Ninguno coincide con los filtros actuales.</p>
+                  )}
                 </div>
               )}
             </section>

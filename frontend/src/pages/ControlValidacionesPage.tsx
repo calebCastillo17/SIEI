@@ -87,6 +87,12 @@ export function ControlValidacionesPage() {
     return map;
   }, [instruments]);
 
+  const instrumentoIdPorTag = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const i of instruments ?? []) map.set(i.tagInstrumento, i.id);
+    return map;
+  }, [instruments]);
+
   const senalesSinDueno = useMemo(() => (signals ?? []).filter((s) => s.duenoAusente), [signals]);
   const senalesSinMatchReporte = useMemo(() => (signals ?? []).filter((s) => s.sinMatchPnid), [signals]);
   const senalesNoVinculadas = useMemo(
@@ -244,14 +250,43 @@ export function ControlValidacionesPage() {
               {senalesNoVinculadas.length === 0 ? (
                 <p className="page-subtitle">Ninguna.</p>
               ) : (
-                <ul className="physical-hint">
-                  {senalesNoVinculadas.map((r) => (
-                    <li key={r.id}>
-                      {r.tagInstrumento} — Instrumento Asociado: {r.datosPropuestos?.instrumentoAsociadoTag ?? '—'} (PnPID{' '}
-                      {r.pnpid})
-                    </li>
-                  ))}
-                </ul>
+                <div className="table-scroll">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Tag (reporte)</th>
+                        <th>PnPID</th>
+                        <th>P&amp;ID</th>
+                        <th>Servicio</th>
+                        <th>Tipo de señal</th>
+                        <th>Instrumento Asociado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {senalesNoVinculadas.map((r) => (
+                        <tr key={r.id}>
+                          <td>{r.tagInstrumento ?? '—'}</td>
+                          <td>{r.pnpid ?? '—'}</td>
+                          <td>{r.datosPropuestos?.planoPnid ?? '—'}</td>
+                          <td>{r.datosPropuestos?.servicio ?? '—'}</td>
+                          <td>{r.datosPropuestos?.tipoSenalPnid ?? '—'}</td>
+                          <td>
+                            {(() => {
+                              const tag = r.datosPropuestos?.instrumentoAsociadoTag;
+                              if (!tag) return '—';
+                              const instrumentoId = instrumentoIdPorTag.get(tag);
+                              return instrumentoId ? (
+                                <Link to={`/projects/${projectId}/instruments/${instrumentoId}`}>{tag}</Link>
+                              ) : (
+                                tag
+                              );
+                            })()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </section>
           )}

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import { useDevUser } from '../auth/DevUserContext';
@@ -62,19 +62,23 @@ export function InstrumentsListPage() {
   }, [projectId, devUser.email]);
   const { data: signals } = useAsyncData<Signal[]>(fetchSignals);
 
-  const senalesPorInstrumento = useMemo(() => {
-    const map = new Map<string, Signal[]>();
-    for (const senal of signals ?? []) {
-      if (!senal.instrumentoId) continue;
-      const lista = map.get(senal.instrumentoId) ?? [];
-      lista.push(senal);
-      map.set(senal.instrumentoId, lista);
-    }
-    return map;
-  }, [signals]);
+  /* codigoSenal puramente numérico = vino de una fila de señal de un
+   * reporte P&ID (su PnPID, ver migración 046/pnidImports.ts) — a
+   * diferencia del formato legacy "620-SIG-000001" del Excel original,
+   * que nunca tuvo relación con ninguna fila "PRIMARY ACCESSIBLE/
+   * INACCESSIBLE DCS". Mismo filtro que usa el backend para no confundir
+   * ambos orígenes. */
+  const esSenalDeReporte = (senal: Signal) => senal.codigoSenal !== null && /^\d+$/.test(senal.codigoSenal);
 
-  const [soloConSenales, setSoloConSenales] = useState(false);
-  const [expandidoSenalesId, setExpandidoSenalesId] = useState<string | null>(null);
+  const senalesDeReporte = useMemo(() => (signals ?? []).filter(esSenalDeReporte), [signals]);
+
+  const tagPorInstrumentoId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const i of instruments ?? []) map.set(i.id, i.tagInstrumento);
+    return map;
+  }, [instruments]);
+
+  const [mostrarSenales, setMostrarSenales] = useState(false);
 
   const { itemsById: pnidEstadosById } = usePnidEstados(devUser.email);
 
@@ -129,7 +133,6 @@ export function InstrumentsListPage() {
       if (planoPnidFilter && instrument.planoPnid !== planoPnidFilter) return false;
       if (hojaDatosFilter === 'CON' && !instrument.fichaTecnicaId) return false;
       if (hojaDatosFilter === 'SIN' && instrument.fichaTecnicaId) return false;
-      if (soloConSenales && (senalesPorInstrumento.get(instrument.id) ?? []).length === 0) return false;
 
       if (needle.length === 0) return true;
 
@@ -157,7 +160,21 @@ export function InstrumentsListPage() {
     // orden al crear una revisión), no de esta vista. Se confía en el
     // ORDER BY tag_instrumento que ya trae el backend.
     return filtered;
-  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, hojaDatosFilter, soloConSenales, senalesPorInstrumento, pnidEstadosById]);
+  }, [items, searchText, estadoFilter, sistemaFilter, nodoFilter, planoPnidFilter, hojaDatosFilter, pnidEstadosById]);
+
+  const [senalesSearchText, setSenalesSearchText] = useState('');
+  const filteredSenales = useMemo(() => {
+    const needle = senalesSearchText.trim().toLowerCase();
+    if (needle.length === 0) return senalesDeReporte;
+    return senalesDeReporte.filter((senal) => {
+      const duenoTag = senal.instrumentoId ? (tagPorInstrumentoId.get(senal.instrumentoId) ?? '') : '';
+      const haystack = [senal.tagSenal, senal.tagPnid, senal.codigoSenal, senal.servicio, duenoTag]
+        .filter((v): v is string => Boolean(v))
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [senalesDeReporte, senalesSearchText, tagPorInstrumentoId]);
 
   if (!projectId) {
     return <p>Falta el proyecto en la URL.</p>;
@@ -328,24 +345,26 @@ export function InstrumentsListPage() {
             <button
               type="button"
               className="button button--secondary"
-              onClick={() => setSoloConSenales((valor) => !valor)}
-              title="Una señal del P&ID nunca crea su propio instrumento — esto filtra los instrumentos reales que sí tienen al menos una señal"
+              onClick={() => setMostrarSenales((valor) => !valor)}
+              title='Una fila de señal del P&ID (Description = "PRIMARY ACCESSIBLE/INACCESSIBLE DCS") nunca crea su propio instrumento — esto las muestra como lo que son, señales, no agrupadas bajo su dueño'
             >
-              {soloConSenales ? 'Mostrar todos' : 'Mostrar instrumentos con señales'}
+              {mostrarSenales ? 'Ver instrumentos' : 'Ver señales del P&ID'}
             </button>
           </div>
 
           <p className="page-subtitle">
-            Mostrando {filteredItems.length} de {items.length} instrumentos.
+            {mostrarSenales
+              ? `Mostrando ${filteredSenales.length} de ${senalesDeReporte.length} señales.`
+              : `Mostrando ${filteredItems.length} de ${items.length} instrumentos.`}
           </p>
         </>
       )}
 
-      {!loading && items.length > 0 && filteredItems.length === 0 && (
+      {!mostrarSenales && !loading && items.length > 0 && filteredItems.length === 0 && (
         <p>Ningún instrumento coincide con la búsqueda/filtro actual.</p>
       )}
 
-      {!loading && filteredItems.length > 0 && (
+      {!mostrarSenales && !loading && filteredItems.length > 0 && (
         <div className="table-scroll">
           <table className="table">
             <thead>
@@ -364,7 +383,6 @@ export function InstrumentsListPage() {
                 <th>Estado P&amp;ID</th>
                 <th>Hoja de Datos</th>
                 <th>Listado</th>
-                <th>Señales</th>
                 <th aria-label="Acciones" />
               </tr>
             </thead>
@@ -374,11 +392,9 @@ export function InstrumentsListPage() {
                   ? (pnidEstadosById.get(instrument.estadoPnidId)?.codigo ?? null)
                   : null;
                 const puedeEliminarDefinitivamente = estadoPnidCodigo === 'NO_EXISTE_EN_PNID';
-                const senalesDelInstrumento = senalesPorInstrumento.get(instrument.id) ?? [];
 
                 return (
-                  <Fragment key={instrument.id}>
-                  <tr>
+                  <tr key={instrument.id}>
                     <td>
                       <Link to={`/projects/${projectId}/instruments/${instrument.id}`}>
                         {instrument.tagInstrumento}
@@ -417,21 +433,6 @@ export function InstrumentsListPage() {
                     <td>
                       {instrument.listado ? 'Sí' : <span className="page-subtitle" title="No se imprime en el LDI ni se cuenta en el Master por defecto">No</span>}
                     </td>
-                    <td>
-                      {senalesDelInstrumento.length === 0 ? (
-                        '0'
-                      ) : (
-                        <button
-                          type="button"
-                          className="button button--small button--secondary"
-                          onClick={() =>
-                            setExpandidoSenalesId((cur) => (cur === instrument.id ? null : instrument.id))
-                          }
-                        >
-                          {senalesDelInstrumento.length} {expandidoSenalesId === instrument.id ? '▲' : '▼'}
-                        </button>
-                      )}
-                    </td>
                     <td className="table__row-actions">
                       {/*
                         Solo aparece cuando el estado P&ID es exactamente
@@ -458,28 +459,92 @@ export function InstrumentsListPage() {
                       )}
                     </td>
                   </tr>
-                  {expandidoSenalesId === instrument.id && (
-                    <tr>
-                      <td colSpan={16}>
-                        <ul className="physical-hint" style={{ margin: 0 }}>
-                          {senalesDelInstrumento.map((s) => (
-                            <li key={s.id}>
-                              <Link to={`/projects/${projectId}/signals/${s.id}`}>
-                                {s.tagSenal ?? s.codigoSenal ?? `Señal #${s.id}`}
-                              </Link>
-                              {s.servicio && <> — {s.servicio}</>}
-                            </li>
-                          ))}
-                        </ul>
-                      </td>
-                    </tr>
-                  )}
-                  </Fragment>
                 );
               })}
             </tbody>
           </table>
         </div>
+      )}
+
+      {/*
+        "Ver señales del P&ID" — pedido explícito del usuario tras aclarar
+        que NO quería instrumentos agrupados por dueño, sino las señales
+        mismas como filas propias: "quiero que se muestren los
+        instrumentos que son señales... serian los que tienen description
+        PRIMARY ACCESSIBLE DCS". Esa columna Description es cruda del
+        reporte y no vive en nucleo.senal — el filtro equivalente en la
+        base es codigoSenal puramente numérico (su PnPID), ver
+        esSenalDeReporte más arriba.
+      */}
+      {mostrarSenales && (
+        <>
+          <label className="form__field">
+            <span>Buscar</span>
+            <input
+              type="text"
+              value={senalesSearchText}
+              onChange={(event) => setSenalesSearchText(event.target.value)}
+              placeholder="Tag, servicio, dueño…"
+            />
+          </label>
+
+          {!loading && senalesDeReporte.length === 0 && (
+            <p>Todavía no hay señales vinculadas a un reporte P&ID en este proyecto.</p>
+          )}
+
+          {!loading && senalesDeReporte.length > 0 && filteredSenales.length === 0 && (
+            <p>Ninguna señal coincide con la búsqueda actual.</p>
+          )}
+
+          {!loading && filteredSenales.length > 0 && (
+            <div className="table-scroll">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Tag señal</th>
+                    <th>Tag en el reporte</th>
+                    <th>Dueño</th>
+                    <th>Servicio</th>
+                    <th>Tipo E/S</th>
+                    <th>PnPID</th>
+                    <th>Ya no está en el P&amp;ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSenales.map((senal) => (
+                    <tr key={senal.id}>
+                      <td>
+                        <Link to={`/projects/${projectId}/signals/${senal.id}`}>
+                          {senal.tagSenal ?? `Señal #${senal.id}`}
+                        </Link>
+                      </td>
+                      <td>{senal.tagPnid ?? '—'}</td>
+                      <td>
+                        {senal.instrumentoId ? (
+                          <Link to={`/projects/${projectId}/instruments/${senal.instrumentoId}`}>
+                            {tagPorInstrumentoId.get(senal.instrumentoId) ?? senal.instrumentoId}
+                          </Link>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td>{senal.servicio ?? '—'}</td>
+                      <td>{senal.tipoIoCodigo ?? '—'}</td>
+                      <td>{senal.codigoSenal ?? '—'}</td>
+                      <td>
+                        {senal.sinMatchPnid ? (
+                          <span className="badge badge--danger">⚠ sí</span>
+                        ) : (
+                          <span className="page-subtitle">No</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </section>
   );

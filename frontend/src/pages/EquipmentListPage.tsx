@@ -18,18 +18,25 @@ import { ErrorMessage } from '../components/ErrorMessage';
  * cuando el texto coincide exacto con un equipo ya cargado — nunca se
  * escribe nada automáticamente.
  */
-function PendientesEquipoSection({ projectId, canWrite, onVinculado }: { projectId: string; canWrite: boolean; onVinculado: () => void }) {
+function PendientesEquipoSection({
+  projectId,
+  canWrite,
+  pendientes,
+  refresh,
+  onVinculado
+}: {
+  projectId: string;
+  canWrite: boolean;
+  pendientes: PendienteEquipo[];
+  refresh: () => void;
+  onVinculado: () => void;
+}) {
   const { devUser } = useDevUser();
-  const fetchPendientes = useCallback(
-    () => listPendientesEquipo(projectId, devUser.email).then((r) => r.pendientes),
-    [projectId, devUser.email]
-  );
-  const { data: pendientes, loading, refresh } = useAsyncData<PendienteEquipo[]>(fetchPendientes);
   const [verTodos, setVerTodos] = useState(false);
   const [vinculandoId, setVinculandoId] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
-  const lista = pendientes ?? [];
+  const lista = pendientes;
   const conSugerencia = lista.filter((p) => p.equipoSugeridoId !== null);
   const sinSugerencia = lista.filter((p) => p.equipoSugeridoId === null);
 
@@ -48,7 +55,6 @@ function PendientesEquipoSection({ projectId, canWrite, onVinculado }: { project
     }
   }
 
-  if (loading) return null;
   if (lista.length === 0) return null;
 
   return (
@@ -144,6 +150,18 @@ export function EquipmentListPage() {
     return listInstruments(projectId, devUser.email).then((r) => r.instruments);
   }, [projectId, devUser.email]);
   const { data: instrumentos, refresh: refreshInstrumentos } = useAsyncData<Instrument[]>(fetchInstrumentos);
+
+  // Pendientes de equipo asociado — pedido explícito del usuario: la
+  // primera pantalla de Equipos debe mostrar directo la lista de
+  // equipos, esto queda detrás de un botón en vez de aparecer siempre
+  // arriba de todo.
+  const fetchPendientes = useCallback(() => {
+    if (!projectId) return Promise.resolve<PendienteEquipo[]>([]);
+    return listPendientesEquipo(projectId, devUser.email).then((r) => r.pendientes);
+  }, [projectId, devUser.email]);
+  const { data: pendientes, refresh: refreshPendientes } = useAsyncData<PendienteEquipo[]>(fetchPendientes);
+  const [mostrarPendientes, setMostrarPendientes] = useState(false);
+
   const instrumentosPorEquipo = useMemo(() => {
     const mapa = new Map<string, Instrument[]>();
     for (const i of instrumentos ?? []) {
@@ -258,6 +276,14 @@ export function EquipmentListPage() {
           </button>
           <button
             type="button"
+            className="button button--secondary"
+            onClick={() => setMostrarPendientes((v) => !v)}
+          >
+            {mostrarPendientes ? 'Ocultar' : 'Ver'} pendientes de equipo asociado
+            {pendientes && pendientes.length > 0 ? ` (${pendientes.length})` : ''}
+          </button>
+          <button
+            type="button"
             className="button"
             disabled={!canWrite}
             title={canWrite ? undefined : 'Tu rol no tiene permiso de escritura en este proyecto.'}
@@ -270,7 +296,15 @@ export function EquipmentListPage() {
 
       <ErrorMessage error={error} />
 
-      {projectId && <PendientesEquipoSection projectId={projectId} canWrite={canWrite} onVinculado={refreshInstrumentos} />}
+      {projectId && mostrarPendientes && (
+        <PendientesEquipoSection
+          projectId={projectId}
+          canWrite={canWrite}
+          pendientes={pendientes ?? []}
+          refresh={refreshPendientes}
+          onVinculado={refreshInstrumentos}
+        />
+      )}
 
       {loading && <p>Cargando equipos…</p>}
 

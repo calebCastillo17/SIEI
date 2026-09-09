@@ -176,12 +176,13 @@ export function ControlValidacionesPage() {
     return map;
   }, [instruments]);
 
-  /** P&ID (plano) y servicio DEL INSTRUMENTO dueño — pedido explícito del
-   * usuario para la validación 4 ("en el cuatro tambien quiero ver el
-   * P&ID y servicio"). Viene del instrumento real, no de la señal. */
+  /** P&ID (plano) DEL INSTRUMENTO dueño — pedido explícito del usuario
+   * para la validación 4 ("en el cuatro tambien quiero ver el P&ID").
+   * Servicio se reemplazó después por la lista de señales asociadas (ver
+   * resumenPorInstrumento.senales), viene del instrumento real. */
   const instrumentoInfoPorId = useMemo(() => {
-    const map = new Map<string, { planoPnid: string | null; servicio: string | null }>();
-    for (const i of instruments ?? []) map.set(i.id, { planoPnid: i.planoPnid, servicio: i.servicio });
+    const map = new Map<string, { planoPnid: string | null }>();
+    for (const i of instruments ?? []) map.set(i.id, { planoPnid: i.planoPnid });
     return map;
   }, [instruments]);
 
@@ -205,15 +206,20 @@ export function ControlValidacionesPage() {
   const esSenalDeReporte = (senal: Signal) => senal.codigoSenal !== null && /^\d+$/.test(senal.codigoSenal);
 
   const resumenPorInstrumento = useMemo(() => {
-    const map = new Map<string, { instrumentoId: string; total: number; porTipo: Record<string, number> }>();
+    const map = new Map<
+      string,
+      { instrumentoId: string; total: number; porTipo: Record<string, number>; senales: Signal[] }
+    >();
     for (const senal of signals ?? []) {
       if (!senal.instrumentoId || !esSenalDeReporte(senal)) continue;
       const entry = map.get(senal.instrumentoId) ?? {
         instrumentoId: senal.instrumentoId,
         total: 0,
-        porTipo: Object.fromEntries(TIPOS_IO_RESUMEN.map((t) => [t, 0]))
+        porTipo: Object.fromEntries(TIPOS_IO_RESUMEN.map((t) => [t, 0])),
+        senales: []
       };
       entry.total += 1;
+      entry.senales.push(senal);
       if (senal.tipoIoCodigo && TIPOS_IO_RESUMEN.includes(senal.tipoIoCodigo as (typeof TIPOS_IO_RESUMEN)[number])) {
         entry.porTipo[senal.tipoIoCodigo] += 1;
       }
@@ -267,17 +273,18 @@ export function ControlValidacionesPage() {
   const [filtrosResumenIo, setFiltrosResumenIo] = useState({
     instrumento: '',
     planoPnid: '',
-    servicio: '',
+    senales: '',
     total: ''
   });
   const resumenPorInstrumentoFiltrado = useMemo(
     () =>
       resumenPorInstrumento.filter((r) => {
         const info = instrumentoInfoPorId.get(r.instrumentoId);
+        const senalesTexto = r.senales.map((s) => s.tagSenal ?? s.codigoSenal ?? '').join(' ');
         return (
           coincide(tagPorInstrumentoId.get(r.instrumentoId), filtrosResumenIo.instrumento) &&
           coincideExacto(info?.planoPnid, filtrosResumenIo.planoPnid) &&
-          coincide(info?.servicio, filtrosResumenIo.servicio) &&
+          coincide(senalesTexto, filtrosResumenIo.senales) &&
           coincideExacto(String(r.total), filtrosResumenIo.total)
         );
       }),
@@ -512,9 +519,9 @@ export function ControlValidacionesPage() {
                           onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, planoPnid: v }))}
                         />
                         <ThFiltrable
-                          label="Servicio"
-                          value={filtrosResumenIo.servicio}
-                          onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, servicio: v }))}
+                          label="Instrumentos-señales asociados"
+                          value={filtrosResumenIo.senales}
+                          onChange={(v) => setFiltrosResumenIo((f) => ({ ...f, senales: v }))}
                         />
                         <ThFiltrableSelect
                           label="Total señales"
@@ -540,7 +547,16 @@ export function ControlValidacionesPage() {
                               </Link>
                             </td>
                             <td>{info?.planoPnid ?? '—'}</td>
-                            <td>{info?.servicio ?? '—'}</td>
+                            <td>
+                              {r.senales.map((s, i) => (
+                                <span key={s.id}>
+                                  {i > 0 && ', '}
+                                  <Link to={`/projects/${projectId}/signals/${s.id}`}>
+                                    {s.tagSenal ?? s.codigoSenal ?? `Señal #${s.id}`}
+                                  </Link>
+                                </span>
+                              ))}
+                            </td>
                             <td>{r.total}</td>
                             {TIPOS_IO_RESUMEN.map((t) => (
                               <td key={t}>{r.porTipo[t] || '—'}</td>

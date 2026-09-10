@@ -713,16 +713,28 @@ async function main() {
     const patchBody: Record<string, unknown> = {};
     if (canalId && !señal.canalId) patchBody.canalId = canalId;
     if (tipoIoId && !señal.tipoIoId) patchBody.tipoIoId = tipoIoId;
-    // Backfill/corrección de descripcion+servicio, SOLO dueño equipo — las
-    // de dueño instrumento ya traen su servicio real del reporte P&ID por
-    // otro camino, nunca se tocan acá. DESTINO y SERVICIO son columnas
-    // DISTINTAS en la hoja (ver comentario en la creación más arriba);
-    // una corrida anterior de este mismo script metió DESTINO en
+    // Backfill/corrección de descripcion+servicio. DESTINO y SERVICIO son
+    // columnas DISTINTAS en la hoja (ver comentario en la creación más
+    // arriba); una corrida anterior de este mismo script metió DESTINO en
     // "servicio" por error — acá se corrige (no solo se rellena si está
     // vacío) comparando contra el valor real de la hoja.
+    //
+    // Dueño equipo: se corrigen descripcion Y servicio, ambos vienen de
+    // esta misma hoja (crearSenalesControl420DesdeReporte.ts no las creó).
+    //
+    // Dueño instrumento: SOLO se backfillea descripcion (DESTINO) — el
+    // reporte P&ID (crearSenalesControl420DesdeReporte.ts) no tiene
+    // concepto de DESTINO, así que esta hoja es la única fuente y
+    // quedaba vacía por un vacío entre los dos scripts, no por decisión
+    // de negocio. servicio NO se toca en esta rama: ya viene confirmado
+    // 100% idéntico al reporte P&ID (fuente autoritativa para servicio
+    // de dueño instrumento) y SENALES_CONTROL.SERVICIO podría ser legacy
+    // desactualizado — sobreescribirlo sería regresar el dato bueno.
     if (esDueñoEquipo) {
       if (row.destino && señal.descripcion !== row.destino) patchBody.descripcion = row.destino;
       if ((row.servicio ?? null) !== señal.servicio) patchBody.servicio = row.servicio ?? null;
+    } else {
+      if (row.destino && señal.descripcion !== row.destino) patchBody.descripcion = row.destino;
     }
     if (Object.keys(patchBody).length > 0) {
       counters.signals.UPDATE++;

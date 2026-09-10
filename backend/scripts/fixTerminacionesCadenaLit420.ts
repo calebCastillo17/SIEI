@@ -110,20 +110,22 @@ async function main() {
     const bornes = fila.borneJb.split(',').map((s: string) => s.trim()).filter(Boolean).slice(0, K);
     if (bornes.length < K) { console.log(`! ${tagSenalReal}: BORNE_JB="${fila.borneJb}" trae menos de ${K}.`); continue; }
 
-    // Bloque: (caja, tagCableInst)
+    // Bloque: (caja, tagCableInst) — identificado por descripcion, NUNCA
+    // por "ya tiene un terminal numerado igual al primer borne" (bug
+    // real encontrado y corregido en importTerminacionesCaja420.ts: los
+    // números de terminal se reinician EN CADA bloque, así que esa
+    // detección mezclaba dispositivos distintos por pura coincidencia
+    // de número — fue la causa real del falso "conflicto" con
+    // 420-VT-5037A_VI, no un problema del master).
     const bloqueKey = `${cajaId}|${fila.tagCableInst}`;
     let bloqueId = bloqueCache.get(bloqueKey);
     if (!bloqueId) {
       const bloquesResp = await apiFetch<{ bloquesTerminal: any[] }>(`/api/projects/${PROJECT_ID}/bloques-terminal?cajaId=${cajaId}`);
-      let found: any = null;
-      for (const b of bloquesResp.json.bloquesTerminal ?? []) {
-        const d = await apiFetch<{ bloqueTerminal: any }>(`/api/projects/${PROJECT_ID}/bloques-terminal/${b.id}`);
-        if ((d.json.bloqueTerminal.terminales ?? []).some((t: any) => t.numero === bornes[0])) { found = b; break; }
-      }
+      const found = (bloquesResp.json.bloquesTerminal ?? []).find((b: any) => b.descripcion === fila.tagCableInst);
       if (found) bloqueId = found.id;
       else {
         const codigo = `TB-${(bloquesResp.json.bloquesTerminal ?? []).length + 1}`;
-        const created = await apiFetch(`/api/projects/${PROJECT_ID}/bloques-terminal`, { method: 'POST', body: { cajaId, codigo } });
+        const created = await apiFetch(`/api/projects/${PROJECT_ID}/bloques-terminal`, { method: 'POST', body: { cajaId, codigo, descripcion: fila.tagCableInst } });
         if (created.status !== 201) { console.log(`! ${tagSenalReal}: error creando bloque:`, JSON.stringify(created.json)); continue; }
         bloqueId = created.json.bloqueTerminal.id;
       }
@@ -165,13 +167,17 @@ async function main() {
         console.log(`${tagSenalReal} terminacion A (${numero}):`, t.status === 201 ? 'OK' : JSON.stringify(t.json));
       } else if (tc1.status !== 409) console.log(`! ${tagSenalReal}: error tramo_conductor campo:`, JSON.stringify(tc1.json));
 
+      // El código del conductor interno NUNCA es `numero` (el borne de
+      // campo) — verificado contra 620 real: cuando el cable interno es
+      // compartido por varios dispositivos, cada uno toma el SIGUIENTE
+      // número disponible de ESE cable, secuencial y global, nunca
+      // reinicia en 1 (ver importTerminacionesCaja420.ts para el
+      // detalle completo de la evidencia).
       const condIntResp = await apiFetch<{ conductors: any[] }>(`/api/projects/${PROJECT_ID}/conductors?cableId=${cableInternoId}`);
-      let condInt = condIntResp.json.conductors.find((c: any) => c.codigo === numero);
-      if (!condInt) {
-        const c = await apiFetch(`/api/projects/${PROJECT_ID}/conductors`, { method: 'POST', body: { cableId: cableInternoId, codigo: numero } });
-        if (c.status !== 201) { console.log(`! ${tagSenalReal}: error conductor interno:`, JSON.stringify(c.json)); continue; }
-        condInt = c.json.conductor;
-      }
+      const nextCodigoInterno = String(condIntResp.json.conductors.length + 1);
+      const cCreate = await apiFetch(`/api/projects/${PROJECT_ID}/conductors`, { method: 'POST', body: { cableId: cableInternoId, codigo: nextCodigoInterno } });
+      if (cCreate.status !== 201) { console.log(`! ${tagSenalReal}: error conductor interno:`, JSON.stringify(cCreate.json)); continue; }
+      const condInt = cCreate.json.conductor;
       const tc2 = await apiFetch(`/api/projects/${PROJECT_ID}/tramo-conductores`, { method: 'POST', body: { tramoConexionId: tramo2.id, conductorId: condInt.id } });
       if (tc2.status === 201) {
         const t = await apiFetch(`/api/projects/${PROJECT_ID}/tramo-conductores/${tc2.json.tramoConductor.id}/terminaciones`, { method: 'POST', body: { extremo: 'ORIGEN', posicionTerminalId: posB.id } });

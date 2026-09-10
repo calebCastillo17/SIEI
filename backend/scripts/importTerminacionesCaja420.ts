@@ -279,6 +279,15 @@ async function main() {
     const bornes = row.borneJb!.split(',').map((s) => s.trim()).filter(Boolean).slice(0, K);
     if (bornes.length < K) { pendientes.push(`${row.tagSenal}: BORNE_JB="${row.borneJb}" trae menos de ${K} bornes.`); continue; }
 
+    // --- Idempotencia: ¿esta señal ya tiene su lado interno completo de
+    // una corrida previa? El código del conductor interno ya no es
+    // predecible desde `numero` (ver más abajo), así que se chequea
+    // por CANTIDAD de conductores con terminación real en tramo2, no
+    // por coincidencia de código.
+    const conexResp = await apiFetch<{ conexionado: any[] }>(apiBase, devUserEmail, `/api/projects/${projectId}/routes/${route.id}/conexionado`);
+    const tramo2Existente = conexResp.json.conexionado?.find((t: any) => t.tramoConexionId === tramo2.id);
+    const internoYaCompleto = (tramo2Existente?.conductores ?? []).filter((c: any) => c.terminaciones.length > 0).length >= bornes.length;
+
     procesadas++;
 
     // --- Bloque: (caja, tagCableInst) ---
@@ -287,16 +296,14 @@ async function main() {
     if (!bloqueId) {
       const bloques = await getBloquesDeCaja(cajaId);
       // Reutilizar un bloque ya creado en una corrida previa: se detecta
-      // por tener ya un terminal con el primer número de BORNE_JB de
-      // este grupo (no hay forma de "nombrar" el bloque por cable en el
-      // propio modelo, así que la única pista persistente es su
-      // contenido).
-      let found: any = null;
-      for (const b of bloques) {
-        const detailResp = await apiFetch<{ bloqueTerminal: any }>(apiBase, devUserEmail, `/api/projects/${projectId}/bloques-terminal/${b.id}`);
-        const terminales = detailResp.json.bloqueTerminal?.terminales ?? [];
-        if (terminales.some((t: any) => t.numero === bornes[0])) { found = b; break; }
-      }
+      // por `descripcion === tagCableInst` — NUNCA por "ya tiene un
+      // terminal numerado igual al primer borne", que fue el bug real
+      // encontrado (los números de terminal se reinician EN CADA
+      // bloque, así que dos dispositivos distintos con BORNE_JB
+      // empezando en "1" caían, por coincidencia, en el mismo bloque ya
+      // existente — mezclando sus conductores). `descripcion` es el
+      // único campo persistente y sin ambigüedad para este propósito.
+      const found = bloques.find((b: any) => b.descripcion === row.tagCableInst);
       if (found) {
         bloqueId = found.id;
       } else {
@@ -305,9 +312,9 @@ async function main() {
         if (isDryRun) {
           bloqueId = `(dry-run:${codigo})`;
           counters.bloques.CREATE++;
-          bloques.push({ id: bloqueId, codigo });
+          bloques.push({ id: bloqueId, codigo, descripcion: row.tagCableInst });
         } else {
-          const created = await apiFetch(apiBase, devUserEmail, `/api/projects/${projectId}/bloques-terminal`, { method: 'POST', body: { cajaId, codigo } });
+          const created = await apiFetch(apiBase, devUserEmail, `/api/projects/${projectId}/bloques-terminal`, { method: 'POST', body: { cajaId, codigo, descripcion: row.tagCableInst } });
           if (created.status === 201) { bloqueId = created.json.bloqueTerminal.id; counters.bloques.CREATE++; bloques.push(created.json.bloqueTerminal); }
           else { counters.bloques.ERROR++; console.log(`  ! ERROR bloque ${row.tagCaja}/${codigo}:`, JSON.stringify(created.json)); continue; }
         }
@@ -386,15 +393,27 @@ async function main() {
         } else { counters.conductores.ERROR++; console.log(`  ! ERROR tramo_conductor campo ${row.tagSenal}:`, JSON.stringify(tcResp.json)); }
 
         // --- Conductor interno (cable TAG_CABLE) -> tramo2, posición B, ORIGEN ---
+        // OJO: el código del conductor interno NUNCA es `numero` (el
+        // borne de campo, local a este bloque) — verificado contra la
+        // base real de 620 (cable "620TBC5016-T01", 18 conductores
+        // reales): cuando el cable interno es compartido por varios
+        // dispositivos, cada uno toma el SIGUIENTE número disponible
+        // de ESE cable de forma secuencial y global (1,2 el primer
+        // dispositivo; 3,4 el segundo; 5,6 el tercero...), nunca
+        // reinicia en 1 como sí hace BORNE_JB del lado de campo. Sin
+        // esto, el segundo dispositivo que comparte un cable interno
+        // pisa el conductor del primero (bug real encontrado: 202/340
+        // señales quedaban sin lado interno). Idempotencia: si
+        // `internoYaCompleto` ya se calculó true para esta señal (fuera
+        // del loop de bornes), no se toca nada de nuevo acá.
+        if (internoYaCompleto) { counters.conductores.SKIP++; counters.terminaciones.SKIP++; continue; }
         const conductoresInterno = await getConductoresDeCable(cableInternoId);
-        let condInterno = conductoresInterno.find((c: any) => c.codigo === numero);
-        if (!condInterno) {
-          const createdC2 = await apiFetch(apiBase, devUserEmail, `/api/projects/${projectId}/conductors`, { method: 'POST', body: { cableId: cableInternoId, codigo: numero } });
-          if (createdC2.status !== 201) { counters.conductores.ERROR++; console.log(`  ! ERROR conductor interno ${row.tagSenal}/${numero}:`, JSON.stringify(createdC2.json)); continue; }
-          condInterno = createdC2.json.conductor;
-          conductoresInterno.push(condInterno);
-          counters.conductores.CREATE++;
-        } else counters.conductores.SKIP++;
+        const nextCodigo = String(conductoresInterno.length + 1);
+        const createdC2 = await apiFetch(apiBase, devUserEmail, `/api/projects/${projectId}/conductors`, { method: 'POST', body: { cableId: cableInternoId, codigo: nextCodigo } });
+        if (createdC2.status !== 201) { counters.conductores.ERROR++; console.log(`  ! ERROR conductor interno ${row.tagSenal}/${nextCodigo}:`, JSON.stringify(createdC2.json)); continue; }
+        const condInterno = createdC2.json.conductor;
+        conductoresInterno.push(condInterno);
+        counters.conductores.CREATE++;
 
         const tc2Resp = await apiFetch(apiBase, devUserEmail, `/api/projects/${projectId}/tramo-conductores`, { method: 'POST', body: { tramoConexionId: tramo2.id, conductorId: condInterno.id } });
         if (tc2Resp.status === 201) {
